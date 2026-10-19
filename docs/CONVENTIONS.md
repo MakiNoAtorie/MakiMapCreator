@@ -49,6 +49,10 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
 - Search: FTS tables live in `store/src/search.rs` (rowid = entity id), kept in the same transaction as entity and page writes. The in-memory name index lives in `Project` and is updated in `write_entity_changes`.
+- Write raster tiles through core (`Project::write_tiles` path), never `store.write_tiles` directly: it updates the pyramid and the tile cache.
+- Pyramid level `l` pixel = 2x2 mean of level `l-1`; the top level (one tile) is the map's overview. Pyramid tiles have `edited = false`; `edited_tiles` is level 0 only.
+- Edits write level 0; a background worker updates upper levels. `Project::save` waits for it before the snapshot. Tests use `wait_tiles()`.
+- The screen uses `scene_cached` and redraws until `is_complete()`; export uses `scene` (level 0, blocking).
 
 ## Tests
 
