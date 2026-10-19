@@ -83,6 +83,10 @@ impl DuplicatePressFilter {
         self.last_pen = time;
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "painting (#20) filters canvas presses")
+    )]
     pub fn accept_mouse_press(&self, time: f64) -> bool {
         time - self.last_pen > self.window
     }
