@@ -1875,6 +1875,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmc-kind-world"
+version = "0.1.0"
+dependencies = [
+ "mmc-core",
+ "tempfile",
+]
+
+[[package]]
 name = "mmc-page"
 version = "0.1.0"
 dependencies = [
@@ -1889,6 +1897,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "mmc-core",
+ "mmc-kind-world",
  "png",
  "pollster",
  "tempfile",

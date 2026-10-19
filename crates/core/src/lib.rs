@@ -18,6 +18,12 @@ mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
 mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
+mod paint;
+pub use paint::PaintStroke;
+mod generation;
+pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
+mod kind;
+pub use kind::{Kinds, MapKindModule, Summary, Tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -89,6 +95,7 @@ pub enum Error {
     EntityExists(EntityId),
     InvalidField { key: String, reason: &'static str },
     CorruptEntity,
+    UnknownGenerator(String),
 }
 
 impl fmt::Display for Error {
@@ -110,6 +117,7 @@ impl fmt::Display for Error {
             Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
             Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
             Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
+            Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
         }
     }
 }

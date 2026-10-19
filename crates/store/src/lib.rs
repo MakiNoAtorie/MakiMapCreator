@@ -13,6 +13,8 @@ mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
 mod pages;
 pub use pages::PageRecord;
+mod generations;
+pub use generations::{GenerationRecord, OutlineRecord};
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -31,6 +33,7 @@ const MIGRATIONS: &[&str] = &[
     tiles::MIGRATION,
     entities::MIGRATION,
     pages::MIGRATION,
+    generations::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

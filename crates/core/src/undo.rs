@@ -24,6 +24,7 @@ pub(crate) enum Change {
     Tiles(Vec<TileChange>),
     Entities(EntityChanges),
     Page(crate::page::PageChange),
+    Generation(crate::generation::GenerationChange),
 }
 
 #[derive(Default)]
@@ -101,6 +102,7 @@ impl Project {
             }
             Change::Entities(e) => self.write_entity_changes(e, forward),
             Change::Page(p) => self.write_page_change(p, forward),
+            Change::Generation(g) => self.write_generation_change(g, forward),
         }
     }
 }

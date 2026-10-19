@@ -9,6 +9,8 @@ use mmc_core::{Layer, MapId, Project, RootPoint, TILE_SIZE};
 
 mod height;
 pub use height::HeightPass;
+mod kind;
+pub use kind::LandPass;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;

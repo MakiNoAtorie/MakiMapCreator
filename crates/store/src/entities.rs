@@ -190,6 +190,18 @@ impl Store {
         relations: &[(RelationRecord, bool)],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        write_entity_rows(&tx, entities, relations)?;
+        Ok(tx.commit()?)
+    }
+}
+
+/// Entity and relation writes inside the caller's transaction.
+pub(crate) fn write_entity_rows(
+    tx: &rusqlite::Connection,
+    entities: &[(i64, Option<EntityRecord>)],
+    relations: &[(RelationRecord, bool)],
+) -> Result<()> {
+    {
         for (id, rec) in entities {
             match rec {
                 Some(e) => tx.execute(
@@ -209,6 +221,6 @@ impl Store {
             };
             tx.execute(sql, params![r.from_id, r.to_id, r.rel_type])?;
         }
-        Ok(tx.commit()?)
+        Ok(())
     }
 }
