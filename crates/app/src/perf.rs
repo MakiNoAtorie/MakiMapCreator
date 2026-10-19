@@ -1,4 +1,4 @@
-//! Timing harness: replays pen strokes through the edit worker while a render worker runs.
+//! Timing harnesses: pen strokes through the edit worker while a render worker runs; an 8192 px export while editing.
 //! `cargo test -p mmc-app perf -- --ignored --nocapture`
 
 #[cfg(test)]
@@ -282,6 +282,134 @@ mod tests {
             rendered[rendered.len() - 1],
             frame_max.as_secs_f64() * 1000.0
         );
+        project.lock().unwrap().take().unwrap().close().unwrap();
+    }
+
+    #[test]
+    #[ignore = "timing harness"]
+    fn export_8192_while_editing() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = new_project(dir.path());
+        let (map, settings) = {
+            let g = project.lock().unwrap();
+            let m = &g.as_ref().unwrap().maps()[0];
+            (m.id, m.settings)
+        };
+        let editor = Editor::new(project.clone(), eframe::egui::Context::default());
+        let mut opts = Options::for_map(10.0);
+        opts.size = 2400.0;
+        let stroke = |x: f64| {
+            let at = |y| Sample {
+                at: RootPoint { x, y },
+                pressure: 0.8,
+            };
+            brush::plan(
+                ToolAction::Brush,
+                Layer::HEIGHT,
+                Direction::Raise,
+                &opts,
+                10.0,
+                &[at(5000.0), at(75000.0)],
+            )
+            .unwrap()
+        };
+        for (i, x) in [10000.0, 40000.0, 70000.0].into_iter().enumerate() {
+            let sent = Instant::now();
+            editor.send(Op::Part {
+                map,
+                stroke: i as u64,
+                part: 1,
+                cmd: stroke(x),
+                sent,
+            });
+            editor.send(Op::End {
+                map,
+                stroke: i as u64,
+                up: sent,
+            });
+        }
+        let mut r = Renderer::warp().unwrap();
+        let shader = mmc_kind_region::RegionKind.render_passes()[0].shader;
+        r.register(Layer::HEIGHT, Box::new(ShaderPass::new(r.device(), shader)));
+        editor.sync();
+        let path = dir.path().join("export.png");
+        let view = crate::export::full_view(map, &settings, 8192);
+        let (tx, rx) = mpsc::channel();
+        let (p2, path2) = (project.clone(), path.clone());
+        let t = Instant::now();
+        let export = std::thread::spawn(move || {
+            let r = crate::export::export(&p2, &r, view, &path2);
+            tx.send(()).unwrap();
+            r
+        });
+        // A small stroke part every frame while the export runs: time to applied.
+        let mut waits = vec![];
+        let mut k = 10;
+        while rx.try_recv().is_err() {
+            let sent = Instant::now();
+            let small = Options {
+                size: 100.0,
+                ..opts
+            };
+            let at = Sample {
+                at: RootPoint {
+                    x: 1000.0 + k as f64,
+                    y: 1000.0,
+                },
+                pressure: 0.5,
+            };
+            let cmd = brush::plan(
+                ToolAction::Brush,
+                Layer::HEIGHT,
+                Direction::Raise,
+                &small,
+                10.0,
+                &[at],
+            )
+            .unwrap();
+            editor.send(Op::Part {
+                map,
+                stroke: k,
+                part: 1,
+                cmd,
+                sent,
+            });
+            editor.send(Op::End {
+                map,
+                stroke: k,
+                up: sent,
+            });
+            loop {
+                if editor
+                    .done()
+                    .iter()
+                    .any(|d| matches!(d, Done::Ended { .. }))
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            waits.push(sent.elapsed().as_secs_f64() * 1000.0);
+            k += 1;
+            std::thread::sleep(FRAME);
+        }
+        export.join().unwrap().unwrap();
+        let secs = t.elapsed().as_secs_f64();
+        // PNG IHDR: width and height, big-endian, at bytes 16..24.
+        let head = std::fs::read(&path).unwrap();
+        let be = |i: usize| u32::from_be_bytes(head[i..i + 4].try_into().unwrap());
+        let (width, height) = (be(16), be(20));
+        waits.sort_by(f64::total_cmp);
+        println!(
+            "export {}x{} in {secs:.1} s; {} edits meanwhile, applied median {:.0} max {:.0} ms",
+            width,
+            height,
+            waits.len(),
+            waits[waits.len() / 2],
+            waits[waits.len() - 1]
+        );
+        assert_eq!((width, height), (8192, 8192));
+        drop(editor);
         project.lock().unwrap().take().unwrap().close().unwrap();
     }
 }

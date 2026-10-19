@@ -1,13 +1,14 @@
 //! File > Export PNG: a size chooser, then an offscreen render on a worker (#6).
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use eframe::egui;
 use mmc_core::{MapId, MapSettings, RootPoint};
 use mmc_render::{Renderer, View};
 
+use crate::canvas::{SharedProject, lock_project};
 use crate::i18n::{tr, tr_args};
 use crate::{App, errors};
 
@@ -15,6 +16,8 @@ use crate::{App, errors};
 const MAX_SIDE: u32 = 16384;
 /// Render target tile side; any size gives the same image.
 const TILE: u32 = 2048;
+/// Image rows rendered and written at a time; memory holds one band.
+const BAND: u32 = 512;
 
 #[derive(Default)]
 pub struct Export {
@@ -93,15 +96,9 @@ impl App {
                     r.register(p.layer, Box::new(pass));
                 }
             }
-            let view = full_view(map, &s, width);
-            // Blocking reads at full resolution, then the render without the project lock.
-            let scene = match project.lock().unwrap().as_ref() {
-                Some(p) => r.scene(p, view).and_then(|sc| sc.with_summaries(p))?,
-                None => return Err(mmc_render::Error::OutsideMap),
-            };
-            mmc_render::export_png(Arc::new(r), scene, TILE, file.clone())
-                .join()
-                .unwrap_or_else(|_| Err(mmc_render::Error::Gpu("export worker stopped".into())))?;
+            let t = Instant::now();
+            export(&project, &r, full_view(map, &s, width), &file)?;
+            log::info!("export rendered in {:.1} s", t.elapsed().as_secs_f64());
             Ok(file)
         }));
     }
@@ -119,7 +116,11 @@ impl App {
             return;
         };
         let r = job.join();
-        log::info!("export finished: ok = {}", matches!(r, Ok(Ok(_))));
+        match &r {
+            Ok(Ok(_)) => log::info!("export finished"),
+            Ok(Err(e)) => log::info!("export failed: {e}"),
+            Err(_) => log::info!("export failed: the worker panicked"),
+        }
         self.message = Some(match r {
             Ok(Ok(file)) => tr_args("export-done", &[("file", &file.display().to_string())]),
             Ok(Err(e)) => tr_args("error-export", &[("error", &errors::render_text(&e))]),
@@ -128,8 +129,39 @@ impl App {
     }
 }
 
+/// Renders `view` to a PNG at `file` in bands; the project is locked per tile read, never for the whole read.
+pub fn export(
+    project: &SharedProject,
+    r: &Renderer,
+    view: View,
+    file: &Path,
+) -> mmc_render::Result<()> {
+    let closed = || mmc_render::Error::OutsideMap;
+    let map = lock_project(project, "export")
+        .0
+        .as_ref()
+        .ok_or_else(closed)?
+        .maps()
+        .iter()
+        .find(|m| m.id == view.map)
+        .cloned()
+        .ok_or(mmc_core::Error::UnknownMap(view.map))?;
+    r.export_png_bands(view, BAND, TILE, file, |rows| {
+        let fetched = r.fetch_full(&map, rows, |layer, tx, ty| {
+            let guard = lock_project(project, "export").0;
+            let p = guard.as_ref().ok_or_else(closed)?;
+            Ok(p.layer_tile(map.id, layer, tx, ty)?.into())
+        })?;
+        let fetched = {
+            let guard = lock_project(project, "export").0;
+            fetched.with_summaries(guard.as_ref().ok_or_else(closed)?)?
+        };
+        Ok(fetched.scene())
+    })
+}
+
 /// The whole map at `width` pixels wide.
-fn full_view(map: MapId, s: &MapSettings, width: u32) -> View {
+pub fn full_view(map: MapId, s: &MapSettings, width: u32) -> View {
     View {
         map,
         min: RootPoint { x: 0.0, y: 0.0 },
