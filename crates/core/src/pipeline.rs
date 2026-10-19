@@ -22,7 +22,17 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
             .iter()
             .filter_map(|c| Layer::parse(&c.key.layer))
             .collect(),
-        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Generation(_) => vec![],
+        Change::Generation(g) => g
+            .tiles
+            .iter()
+            .filter_map(|c| Layer::parse(&c.key.layer))
+            .collect(),
+        Change::Resync(r) => r
+            .tiles()
+            .iter()
+            .filter_map(|c| Layer::parse(&c.key.layer))
+            .collect(),
+        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => vec![],
     }
 }
 
@@ -241,8 +251,8 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
             if cx.layers.contains_key(&l) {
                 continue;
             }
-            let tiles = match reader.layer_tiles(job.id, l.as_str()) {
-                Ok(t) => t,
+            let tiles = match reader.layer_tiles_until(job.id, l.as_str(), cancelled) {
+                Ok(t) => t?,
                 Err(e) => return Some(Err(e.into())),
             };
             let values = par_map(job.threads, &tiles, cancelled, |(_, r)| decode(Some(r)))?;

@@ -169,13 +169,15 @@ impl Project {
             .map(|(k, rec)| Ok((k.clone(), decode(rec.as_ref())?.into())))
             .collect::<Result<Vec<(TileKey, Tile)>>>()?;
         self.store.write_tiles(writes)?;
-        let Some((k, _)) = writes.first() else {
+        if writes.is_empty() {
             return Ok(());
-        };
-        let top = self.top_level(MapId(k.map_id))?;
+        }
         let cache = self.tiles();
         cache.put(put);
-        cache.mark_dirty(writes.iter().map(|w| w.0.clone()), top);
+        for (k, _) in writes {
+            let top = self.top_level(MapId(k.map_id))?;
+            cache.mark_dirty([k.clone()], top);
+        }
         Ok(())
     }
 

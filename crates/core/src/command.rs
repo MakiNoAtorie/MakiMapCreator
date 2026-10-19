@@ -45,6 +45,9 @@ impl Project {
     pub(crate) fn changes(&self, map: &Map, cmd: &Command) -> Result<Change> {
         match cmd {
             Command::Brush(s) => Ok(Change::Tiles(self.brush(map, s)?)),
+            Command::Entity(e @ EntityEdit::DeleteWithMap { .. }) => {
+                Ok(Change::Deletion(self.entity_deletion(e)?))
+            }
             Command::Entity(e) => Ok(Change::Entities(self.entity_changes(e)?)),
             Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),

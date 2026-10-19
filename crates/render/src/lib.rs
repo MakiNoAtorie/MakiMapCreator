@@ -12,6 +12,7 @@ mod levels;
 pub use height::HeightPass;
 mod kind;
 pub use kind::LandPass;
+mod summary;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -80,6 +81,7 @@ pub struct Scene {
     metres_per_pixel: f64,
     rasters: Vec<(Layer, Raster)>,
     complete: bool,
+    summaries: Vec<mmc_core::ChildSummary>,
 }
 
 impl Scene {
@@ -193,6 +195,7 @@ impl Renderer {
                 }
             }
         }
+        summary::tint(scene, &mut img);
         Ok(img)
     }
 

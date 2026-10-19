@@ -18,6 +18,8 @@ pub enum Layer {
     Slope,
     /// Authored: 1 is land, 0 is sea (world map).
     Land,
+    /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
+    Lock,
 }
 
 impl Layer {
@@ -26,10 +28,11 @@ impl Layer {
             Layer::Height => "height",
             Layer::Slope => "slope",
             Layer::Land => "land",
+            Layer::Lock => "lock",
         }
     }
 
-    pub(crate) const ALL: [Layer; 3] = [Layer::Height, Layer::Slope, Layer::Land];
+    pub(crate) const ALL: [Layer; 4] = [Layer::Height, Layer::Slope, Layer::Land, Layer::Lock];
 
     pub(crate) fn parse(s: &str) -> Option<Layer> {
         Layer::ALL.into_iter().find(|l| l.as_str() == s)
@@ -50,10 +53,9 @@ pub struct RootPoint {
 
 impl Map {
     /// Root space to pixel space, in pixels (pixel `i` spans `i..i+1`).
-    // ponytail: root maps only (origin 0,0); child maps add their transform here.
     pub(crate) fn to_pixels(&self, p: RootPoint) -> (f64, f64) {
         let m = self.settings.metres_per_pixel;
-        (p.x / m, p.y / m)
+        ((p.x - self.origin.x) / m, (p.y - self.origin.y) / m)
     }
 
     pub(crate) fn tile_key(&self, layer: Layer, tx: u32, ty: u32) -> TileKey {

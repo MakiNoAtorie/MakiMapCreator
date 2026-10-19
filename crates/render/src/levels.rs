@@ -105,6 +105,7 @@ impl Renderer {
             metres_per_pixel: m,
             rasters,
             complete,
+            summaries: Vec::new(),
         })
     }
 }

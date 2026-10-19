@@ -21,8 +21,14 @@ mod search;
 pub use search::{Reader, TextHit};
 mod generations;
 pub use generations::{GenerationRecord, OutlineRecord};
+mod children;
+pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
 mod save;
 pub use save::save_snapshot;
+mod delete;
+pub use delete::ChildLink;
+mod resync;
+pub use resync::ChildState;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -44,6 +50,9 @@ const MIGRATIONS: &[&str] = &[
     anchors::MIGRATION,
     search::MIGRATION,
     generations::MIGRATION,
+    children::MIGRATION,
+    delete::MIGRATION,
+    resync::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -95,6 +104,9 @@ pub struct MapRecord {
     pub width: u32,
     pub height: u32,
     pub metres_per_pixel: f64,
+    /// Root-space position of pixel (0, 0)'s top-left corner, in metres.
+    pub origin_x: f64,
+    pub origin_y: f64,
 }
 
 /// An open project: a working copy in WAL mode that `save` snapshots to the project file.
@@ -124,12 +136,16 @@ impl Store {
 
     fn init(mut conn: Connection, working_copy: &Path) -> Result<Store> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // No fsync per edit: a running save floods the disk and makes each fsync wait.
+        // WAL stays consistent after an app crash; power loss may drop the last edits.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let tx = conn.transaction()?;
         for sql in &MIGRATIONS[user_version(&tx)? as usize..] {
             tx.execute_batch(sql)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.execute_batch(delete::PURGE)?;
         tx.commit()?;
         Ok(Store {
             conn,
@@ -178,7 +194,8 @@ impl Store {
 
 pub(crate) fn maps(conn: &Connection) -> Result<Vec<MapRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, parent_id, kind, width, height, metres_per_pixel FROM maps ORDER BY id",
+        "SELECT id, parent_id, kind, width, height, metres_per_pixel, origin_x, origin_y
+         FROM maps ORDER BY id",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(MapRecord {
@@ -188,6 +205,8 @@ pub(crate) fn maps(conn: &Connection) -> Result<Vec<MapRecord>> {
             width: r.get(3)?,
             height: r.get(4)?,
             metres_per_pixel: r.get(5)?,
+            origin_x: r.get(6)?,
+            origin_y: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

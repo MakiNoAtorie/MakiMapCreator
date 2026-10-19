@@ -38,6 +38,7 @@ fn generation(kind: &str) -> Command {
                 outline: square(5000.0),
             },
         ],
+        rasters: vec![],
     })
 }
 

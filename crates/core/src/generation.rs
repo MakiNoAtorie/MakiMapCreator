@@ -1,9 +1,11 @@
 //! One-shot generation (ADR-0003): a generator's output is one command; the file records
 //! the generator, seed and app version of each run (ADR-0021).
 
-use mmc_store::{EntityRecord, GenerationRecord, OutlineRecord};
+use mmc_store::{EntityRecord, GenerationRecord, OutlineRecord, TileRecord};
 
-use crate::{EntityId, Error, Map, MapId, Project, Result, RootPoint};
+use crate::layer::{TILE_LEN, TILE_SIZE, encode};
+use crate::undo::TileChange;
+use crate::{EntityId, Error, Layer, Map, MapId, Project, Result, RootPoint};
 
 /// The version of the app that runs generators.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -15,6 +17,9 @@ pub struct Generation {
     pub seed: u64,
     /// Created in order, with consecutive new ids.
     pub entities: Vec<NewEntity>,
+    /// Whole-map values per layer, row by row (width × height). Written as unedited tiles.
+    // ponytail: holds a full raster in memory (256 MB at 8192²); stream tiles if that hurts.
+    pub rasters: Vec<(Layer, Vec<f32>)>,
 }
 
 /// An entity a generator creates, with its outline on the generated map.
@@ -37,12 +42,13 @@ pub struct GenerationInfo {
 /// The rows one generation adds.
 #[derive(Debug, Clone)]
 pub(crate) struct GenerationChange {
-    record: GenerationRecord,
+    pub(crate) record: GenerationRecord,
     entities: Vec<EntityRecord>,
     outlines: Vec<OutlineRecord>,
+    pub(crate) tiles: Vec<TileChange>,
 }
 
-fn encode_outline(points: &[RootPoint]) -> Vec<u8> {
+pub(crate) fn encode_outline(points: &[RootPoint]) -> Vec<u8> {
     points
         .iter()
         .flat_map(|p| [p.x.to_le_bytes(), p.y.to_le_bytes()])
@@ -50,7 +56,7 @@ fn encode_outline(points: &[RootPoint]) -> Vec<u8> {
         .collect()
 }
 
-fn decode_outline(bytes: &[u8]) -> Result<Vec<RootPoint>> {
+pub(crate) fn decode_outline(bytes: &[u8]) -> Result<Vec<RootPoint>> {
     let (pairs, rest) = bytes.as_chunks::<16>();
     if !rest.is_empty() {
         return Err(Error::CorruptEntity);
@@ -81,7 +87,32 @@ impl Project {
             },
             entities: vec![],
             outlines: vec![],
+            tiles: vec![],
         };
+        let s = map.settings;
+        for (layer, values) in &g.rasters {
+            assert_eq!(values.len(), (s.width * s.height) as usize, "raster size");
+            for ty in 0..s.height.div_ceil(TILE_SIZE) {
+                for tx in 0..s.width.div_ceil(TILE_SIZE) {
+                    let mut tile = vec![0.0; TILE_LEN];
+                    for y in 0..TILE_SIZE.min(s.height - ty * TILE_SIZE) {
+                        let row = ((ty * TILE_SIZE + y) * s.width + tx * TILE_SIZE) as usize;
+                        let n = TILE_SIZE.min(s.width - tx * TILE_SIZE) as usize;
+                        let at = (y * TILE_SIZE) as usize;
+                        tile[at..at + n].copy_from_slice(&values[row..row + n]);
+                    }
+                    let key = map.tile_key(*layer, tx, ty);
+                    c.tiles.push(TileChange {
+                        before: self.store.tile(&key)?,
+                        key,
+                        after: Some(TileRecord {
+                            data: encode(&tile),
+                            edited: false,
+                        }),
+                    });
+                }
+            }
+        }
         for (id, e) in (first..).zip(&g.entities) {
             if !kinds.iter().any(|k| k.id == e.kind) {
                 return Err(Error::UnknownEntityKind(e.kind.clone()));
@@ -106,6 +137,18 @@ impl Project {
         c: &GenerationChange,
         forward: bool,
     ) -> Result<()> {
+        // ponytail: tiles and records are two transactions; join them if a crash between matters.
+        let tiles: Vec<_> = c
+            .tiles
+            .iter()
+            .map(|t| {
+                (
+                    t.key.clone(),
+                    if forward { &t.after } else { &t.before }.clone(),
+                )
+            })
+            .collect();
+        self.write_tiles(&tiles)?;
         self.store
             .write_generation(&c.record, &c.entities, &c.outlines, forward)?;
         for e in &c.entities {

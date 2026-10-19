@@ -95,6 +95,7 @@ impl MapKindModule for WorldKind {
             generator: generator.into(),
             seed,
             entities,
+            rasters: vec![],
         }))
     }
 

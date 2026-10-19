@@ -32,6 +32,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Save: `VACUUM INTO` `<file>.tmp` in the same folder, then rename over the file. No other file is written next to the project file.
 - Close deletes the working copy. A leftover working copy means a crash.
 - Save runs on a worker: `Project::save` returns at once; use `poll_save`/`wait_for_save`. Tests that open the file before `close` call `wait_for_save` first. Save reads one WAL snapshot on its own connection and never takes the write lock.
+- The working copy uses `PRAGMA synchronous = NORMAL` (WAL): an app crash loses nothing; a power loss can lose the last edits.
+- Long reads in jobs check cancel per row (`TileConn::layer_tiles_until`).
 - Restore opens a leftover working copy in place; discard deletes it and its WAL files.
 
 ## Layers, commands and undo
@@ -41,6 +43,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Every edit is a `Command`. A command produces before/after records; undo writes the before records, redo the after records, each in one transaction.
 - A new raster layer adds a `Layer` variant. Command and undo types never name a layer.
 - Undo is per map, in memory, bounded by `UNDO_LIMIT`.
+- Deleting map M goes to the history of M's parent; for a root map, to the project history (`undo_project`, key `MapId(0)`). A `Change` variant that deletes maps is handled in `delete::history_key`.
+- Deleted maps are flagged, not removed, until the project is next opened. A new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`.
 - Every edit returns one `undo::Change`; `write(change, forward)` writes the after or before records.
 - Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
@@ -74,6 +78,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Gate on the median of `RUNS` runs, never one run. Budget = the ADR-0014 number; where the ADR gives none, about 10x the measured median. CI runners are noisy: raise a budget only with a reason in the commit.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
 - Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
+- App structure: `workspace.rs` holds testable logic; `panels.rs` draws and returns `Intent`s; `App::apply` applies them. The UI reads a `Snapshot` reloaded under `try_lock` when dirty, never the project directly.
+- Slow app work (generate, child creation) runs through `App::spawn` on a worker. Commands applied outside the brush call `note_command` so undo groups stay in step.
 
 ## Map kinds
 
@@ -81,6 +87,11 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Draw passes live in `mmc-render`, keyed by `Layer`; a kind lists only its `render_layers`.
 - A generator returns one `Command::Generate`; core assigns entity ids and records generator, seed and `APP_VERSION`.
 - A store write that also writes entities calls `write_entity_rows` inside its own transaction; a core path that creates entities updates `names`.
+- Each map has a root-space `origin` (root maps at 0,0) on its own pixel grid. Generators compute pixel centres from global indices: `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree.
+- Generated tiles have `edited = false`. Child-map store code lives in `store/src/children.rs`.
+- A kind's seam tests go in `crates/kind-<name>/tests/`; dev-dependencies include the parent kind.
+- Out-of-date marking runs in `Project::write`, so every tile write flags the child maps it touches.
+- Regeneration and re-sync are preview (a `RegenPlan`, no writes) then `apply_plan` (one command). A plan whose `before` records changed is refused with `StalePlan`. Edited tiles and locked pixels (`Layer::Lock` > 0.5) are never overwritten.
 
 ## Pipeline and jobs
 
