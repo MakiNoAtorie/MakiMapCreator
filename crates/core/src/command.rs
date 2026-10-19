@@ -6,12 +6,14 @@ use std::collections::btree_map::Entry;
 use mmc_store::TileRecord;
 
 use crate::layer::{Layer, RootPoint, decode, encode, tile_of};
-use crate::undo::TileChange;
-use crate::{Map, Project, Result};
+use crate::undo::{Change, TileChange};
+use crate::{EntityEdit, Map, Project, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Brush(BrushStroke),
+    /// Entities are project-level; the edit goes to the history of the map it is applied on.
+    Entity(EntityEdit),
 }
 
 /// Adds `strength * pressure * falloff` to `layer` around each point.
@@ -33,9 +35,10 @@ pub struct StrokePoint {
 }
 
 impl Project {
-    pub(crate) fn changes(&self, map: &Map, cmd: &Command) -> Result<Vec<TileChange>> {
+    pub(crate) fn changes(&self, map: &Map, cmd: &Command) -> Result<Change> {
         match cmd {
-            Command::Brush(s) => self.brush(map, s),
+            Command::Brush(s) => Ok(Change::Tiles(self.brush(map, s)?)),
+            Command::Entity(e) => Ok(Change::Entities(self.entity_changes(e)?)),
         }
     }
 
