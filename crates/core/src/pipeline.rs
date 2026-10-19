@@ -12,14 +12,14 @@ use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode, tile_of};
 use crate::undo::Change;
 use crate::{Error, MapId, Project, Result};
 
-// ponytail: entity changes feed no stage yet; map them to layers when a stage reads entities.
+// ponytail: entity and page changes feed no stage yet; map them to layers when a stage reads entities.
 fn changed_layers(change: &Change) -> Vec<Layer> {
     match change {
         Change::Tiles(t) => t
             .iter()
             .filter_map(|c| Layer::parse(&c.key.layer))
             .collect(),
-        Change::Entities(_) => vec![],
+        Change::Entities(_) | Change::Page(_) => vec![],
     }
 }
 
