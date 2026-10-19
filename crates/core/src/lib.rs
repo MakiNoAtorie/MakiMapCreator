@@ -30,6 +30,8 @@ mod generation;
 pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
 mod kind;
 pub use kind::{Kinds, MapKindModule, Summary, Tool};
+mod child;
+pub use child::{CHILD_MARGIN, CHILD_SCALE_FACTOR, ParentContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -87,6 +89,10 @@ pub struct Map {
     pub id: MapId,
     pub parent: Option<MapId>,
     pub settings: MapSettings,
+    /// Root-space position of pixel (0, 0)'s top-left corner (ADR-0008, ADR-0020).
+    pub origin: RootPoint,
+    /// The ground a child map owns, in root space (ADR-0019); `None` for a root map.
+    pub outline: Option<Vec<RootPoint>>,
 }
 
 #[derive(Debug)]
@@ -104,6 +110,8 @@ pub enum Error {
     InvalidAnchor(&'static str),
     UnknownFeature(FeatureId),
     UnknownGenerator(String),
+    InvalidChild(&'static str),
+    OutsideOutline,
 }
 
 impl fmt::Display for Error {
@@ -128,6 +136,8 @@ impl fmt::Display for Error {
             Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
             Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
             Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
+            Error::InvalidChild(why) => write!(f, "child map: {why}"),
+            Error::OutsideOutline => write!(f, "the edit is outside the area this map owns"),
         }
     }
 }
@@ -169,6 +179,8 @@ impl Project {
                 id: MapId(id),
                 parent: None,
                 settings: root,
+                origin: RootPoint { x: 0.0, y: 0.0 },
+                outline: None,
             }],
             history: Default::default(),
             names: Default::default(),
@@ -193,6 +205,11 @@ impl Project {
                         height: r.height,
                         metres_per_pixel: r.metres_per_pixel,
                     },
+                    origin: RootPoint {
+                        x: r.origin_x,
+                        y: r.origin_y,
+                    },
+                    outline: None,
                 })
             })
             .collect::<Result<_>>()?;
@@ -205,6 +222,7 @@ impl Project {
             anchors: Default::default(),
         };
         p.names = p.build_name_index()?;
+        p.load_child_outlines()?;
         Ok(p)
     }
 
@@ -222,6 +240,8 @@ impl Project {
             id,
             parent: None,
             settings,
+            origin: RootPoint { x: 0.0, y: 0.0 },
+            outline: None,
         });
         Ok(id)
     }

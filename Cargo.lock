@@ -1937,6 +1937,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmc-kind-region"
+version = "0.1.0"
+dependencies = [
+ "mmc-core",
+ "mmc-kind-world",
+ "tempfile",
+]
+
+[[package]]
 name = "mmc-kind-world"
 version = "0.1.0"
 dependencies = [

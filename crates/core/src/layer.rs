@@ -50,10 +50,9 @@ pub struct RootPoint {
 
 impl Map {
     /// Root space to pixel space, in pixels (pixel `i` spans `i..i+1`).
-    // ponytail: root maps only (origin 0,0); child maps add their transform here.
     pub(crate) fn to_pixels(&self, p: RootPoint) -> (f64, f64) {
         let m = self.settings.metres_per_pixel;
-        (p.x / m, p.y / m)
+        ((p.x - self.origin.x) / m, (p.y - self.origin.y) / m)
     }
 
     pub(crate) fn tile_key(&self, layer: Layer, tx: u32, ty: u32) -> TileKey {

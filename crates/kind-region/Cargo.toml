@@ -1,0 +1,11 @@
+[package]
+name = "mmc-kind-region"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mmc-core = { version = "0.1.0", path = "../core" }
+
+[dev-dependencies]
+mmc-kind-world = { version = "0.1.0", path = "../kind-world" }
+tempfile = "3.27.0"

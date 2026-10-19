@@ -38,6 +38,7 @@ impl Project {
     /// Applies `cmd` to `map` in the working copy and records it in the map's history.
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
         let changes = self.changes(self.map(map)?, &cmd)?;
+        let changes = self.clip_to_outline(map, changes)?;
         Self::refuse_derived(&changes)?;
         self.write(&changes, true)?;
         self.after_write(map, &changes);

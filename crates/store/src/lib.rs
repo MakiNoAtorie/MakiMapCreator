@@ -19,6 +19,8 @@ mod search;
 pub use search::{Reader, TextHit};
 mod generations;
 pub use generations::{GenerationRecord, OutlineRecord};
+mod children;
+pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -40,6 +42,7 @@ const MIGRATIONS: &[&str] = &[
     anchors::MIGRATION,
     search::MIGRATION,
     generations::MIGRATION,
+    children::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -91,6 +94,9 @@ pub struct MapRecord {
     pub width: u32,
     pub height: u32,
     pub metres_per_pixel: f64,
+    /// Root-space position of pixel (0, 0)'s top-left corner, in metres.
+    pub origin_x: f64,
+    pub origin_y: f64,
 }
 
 /// An open project: a working copy in WAL mode that `save` snapshots to the project file.
@@ -183,7 +189,8 @@ impl Store {
     /// All maps, ordered by id.
     pub fn maps(&self) -> Result<Vec<MapRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, parent_id, kind, width, height, metres_per_pixel FROM maps ORDER BY id",
+            "SELECT id, parent_id, kind, width, height, metres_per_pixel, origin_x, origin_y
+             FROM maps ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(MapRecord {
@@ -193,6 +200,8 @@ impl Store {
                 width: r.get(3)?,
                 height: r.get(4)?,
                 metres_per_pixel: r.get(5)?,
+                origin_x: r.get(6)?,
+                origin_y: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
