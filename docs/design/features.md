@@ -1,0 +1,87 @@
+# Features and Phase 0 seams (draft)
+
+Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0012`, `doc-research/SYNTHESIS.md` §6.
+
+## 1. Roadmap
+
+Phase 0 (core, plus a crude world map to prove nesting) → v1 region map → v2 world map → v3 settlement map → dungeon map. See ADR-0006.
+
+## 2. Features per map kind
+
+Each kind has a generate mode and an edit mode, can be a root map, and defines what it reads from its parent context and the summary it gives back.
+
+### Region map (v1)
+- Generate (from parent context or from a template): height, sea and lakes, rivers, climate, biomes. Major rivers from the parent are path constraints.
+- Edit: height brushes with pen pressure, water level, draw rivers, paint biomes, masked regeneration.
+- Edges: bounded refinement of the parent coastline, root-space noise, ghost overlay of neighbour edges (ADR-0008).
+- Entities: natural features found by generation (rivers, lakes, ranges, forests) get names and pages; settlement and landmark points.
+- Children: select a settlement point to create a settlement map.
+- Summary to parent: dominant biome, refined coastline (display only).
+
+### World map (v2)
+- Generate: coarse geography (land and sea, elevation, climate zone, biome class, major rivers), then regions and nations over it (cost-based expansion).
+- Edit: paint land and sea, move, merge or split region borders, rename, recolour.
+- Shows: political fills, borders, labels, flavour symbols drawn from the coarse data and editable by hand, child summaries as tints.
+- Children: select a region to create a region map.
+- Parent context it gives: coarse layers inside the area plus a margin, major river paths, region outline.
+
+### Settlement map (v3)
+- Generate from parent context: terrain slope, rivers, coast, roads that enter, size class from the settlement's population field.
+- Generates: walls, wards, streets, buildings (TownGeneratorOS ideas, clean-room code).
+- Edit: move streets and buildings, re-zone wards, masked regeneration.
+- Children: a building or point to create a dungeon map.
+
+### Dungeon map (later)
+- Rooms and corridors on a grid or room graph. Root map or child of any map.
+
+## 3. Places and pages (all kinds, from v1)
+
+- Entities: political places and natural features; kinds are data (ADR-0009).
+- Fields: built-in plus user fields per project, including entity references; field sets as template files (ADR-0010).
+- Relations: typed links between entities ("part of", "capital of").
+- Pages (ADR-0012):
+  - Markdown source with live preview; sections from the kind's page template; add, remove and reorder sections.
+  - Entity links stored by id, completed by name, survive renames; backlinks panel.
+  - Infobox from fields; images (map snapshots, user files) stored in the project.
+  - Open a page by clicking a place on a map; "show on map" from a page; entities with no map still have pages.
+- Browser: list, search and filter entities by kind, field and tag.
+
+## 4. Export
+
+- Images (PNG and others) and PDF per map.
+- Wiki export: a folder of Markdown pages, one per entity, with `[[links]]`, infoboxes and map images. Opens in Obsidian as-is. Uses the same renderer as the page preview. Offline HTML later.
+- No cloud (ADR-0005).
+
+## 5. Phase 0 seams
+
+Build only what is expensive to add later. Each seam gets one real use in the proof slice.
+
+| Seam | Why now |
+|---|---|
+| Project tree: maps, parent link, area on parent | Every kind and the file format depend on it |
+| Root space: per-map transform; noise sampled in root space | Neighbour seams and parent context depend on it (ADR-0008) |
+| Generic layers: tiled raster, map objects with stable ids | Each kind stores different data; retrofitting storage touches everything |
+| Map kind interface: generators, tools, layers, render passes, child creation, summary | Kinds are built independently behind it |
+| Parent context: sample parent layers in an area plus margin, snapshot, out-of-date flag | Hard to add once kinds exist |
+| Entities, relations, field definitions, pages (schema and core API) | Generators create entities; the schema must exist before the first save |
+| Stage pipeline: stages declare read and write layers, dirty flags | v1 full rebuild still runs through it, so incremental work later does not change callers |
+| Commands and undo: every edit is a command; tile deltas for rasters | Undo can not be added after tools exist |
+| Jobs: background generation, latest request wins, double-buffered results | UI must not block; threading is hard to add later |
+| Hash RNG keyed by (seed, stage, entity id or root-space position) | Determinism under parallel work and masked regeneration |
+| Project file: SQLite working copy, save by `VACUUM INTO`, migrations (ADR-0011) | Format v1 must be readable forever |
+| Workspace shell: panel and tool registry per kind and mode, pen and mouse input | Kinds plug UI in without touching the shell |
+| Renderer: wgpu, layer draw passes from attribute buffers | Kinds add passes without touching each other |
+
+Not in Phase 0: real generators, rivers, biomes, political algorithms, styling, export, the page editor UI.
+
+### Proof slice
+1. Root world map: paint land and sea, generate crude regions as entities.
+2. Select a region, create a child region map from parent context (upsample plus root-space noise).
+3. Paint height on the child with pen pressure. Undo and redo.
+4. World map shows the child's summary as a tint.
+5. Give the region a page with one link to another entity; rename the target; the link still resolves.
+6. Save, close, reload; the tree, layers, entities and pages match what was saved.
+7. Edit the world inside the region's area; the child shows as out of date.
+
+## 6. Open questions
+- UI toolkit: egui is the default for Rust and wgpu; confirm, including its Markdown preview and text editing for pages.
