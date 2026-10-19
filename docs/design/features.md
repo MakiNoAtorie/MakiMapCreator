@@ -15,7 +15,7 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 - Edit: height brushes with pen pressure, water level, draw rivers, paint biomes, masked regeneration.
 - Edges: bounded refinement of the parent coastline, root-space noise, ghost overlay of neighbour edges (ADR-0008).
 - Layers: authored (height, water level, biome paint, hand-drawn rivers, lock mask) and derived, recomputed after each edit (drainage rivers, climate, automatic biomes) (ADR-0018).
-- Entities: natural features found by generation (rivers, lakes, ranges, forests) get names and pages; settlement and landmark points.
+- Entities: rivers and lakes attach to derived drainage by anchor; ranges, forests and deserts are authored areas the generator proposes once (ADR-0023). Settlement and landmark points.
 - Labels: placed automatically for entities (collision avoidance, along river paths, spaced range names); a dragged offset is saved on the map object.
 - Children: select a settlement point to create a settlement map.
 - Summary to parent: dominant biome, refined coastline (display only).
@@ -35,6 +35,19 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 
 ### Dungeon map (later)
 - Rooms and corridors on a grid or room graph. Root map or child of any map.
+
+### All map kinds
+- Default map sizes, changeable at creation; a child's scale defaults to its parent's scale times a set factor:
+
+  | Map kind | Size | Scale | Covers |
+  |---|---|---|---|
+  | World | 4096² px | 1 km/px | about 4 000 km |
+  | Region | 8192² px | 10 m/px | about 82 km |
+  | Settlement | 4096² px | 0.5 m/px | about 2 km |
+- One project per app window; maps and pages open as tabs. A second project opens a second window (process); copy between projects goes through the clipboard.
+- Deletion, all undoable:
+  - Delete a map: its entities and pages stay; its map objects go; its child maps become root maps.
+  - Delete an entity that has a map: the app asks whether to delete the map or keep it as a root map. Links to the entity show as missing; the link text stays.
 
 ## 3. Places and pages (all kinds, from v1)
 

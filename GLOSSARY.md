@@ -115,6 +115,14 @@ _Avoid_: Landmark (a landmark is a built or notable place)
 The geometry (point, polygon or path) of an entity, or of an unnamed shape, on one map.
 _Avoid_: Marker, pin
 
+**Anchor**:
+The root-space points that tie a named river or lake to the derived feature that currently matches it.
+_Avoid_: Pin, handle
+
+**Unplaced entity**:
+An entity whose anchor matches no derived feature after a rebuild. It keeps its page and waits for the user to re-attach it.
+_Avoid_: Orphan, lost entity
+
 **Relation**:
 A typed link from one entity to another, for example "part of" or "capital of".
 
