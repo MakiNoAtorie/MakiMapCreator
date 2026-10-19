@@ -163,6 +163,7 @@ impl App {
         self.pending.clear();
         self.pending_save = None;
         self.saving = false;
+        self.editor.sync();
         if let Some(mut p) = self.project.lock().unwrap().take()
             && let Err(e) = p.wait_for_save().and_then(|()| p.close())
         {

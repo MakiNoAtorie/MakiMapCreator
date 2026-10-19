@@ -140,6 +140,11 @@ impl Project {
         Ok(None)
     }
 
+    /// True while levels above level 0 of `map` do not yet show the last edit.
+    pub fn pyramid_pending(&self, map: MapId) -> bool {
+        self.cache.get().is_some_and(|c| c.pyramid_pending(map.0))
+    }
+
     /// Blocks until all queued tile loads and pyramid updates after edits are done.
     pub fn wait_tiles(&self) {
         self.tiles().wait_idle();

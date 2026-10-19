@@ -381,10 +381,14 @@ impl Project {
 
     /// Marks stages downstream of the written layers dirty and starts a rebuild.
     pub(crate) fn after_write(&mut self, map: MapId, change: &Change) {
+        self.layers_written(map, &changed_layers(change));
+    }
+
+    pub(crate) fn layers_written(&mut self, map: MapId, layers: &[Layer]) {
         let Ok(kind) = self.kind_of(map) else {
             return;
         };
-        let dirty = dirty(&decls(kind.stages()), &changed_layers(change));
+        let dirty = dirty(&decls(kind.stages()), layers);
         self.request(map, dirty);
     }
 

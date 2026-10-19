@@ -126,6 +126,12 @@ impl TileCache {
         s.tiles.retain(|k, _| !matches(k));
     }
 
+    /// Pyramid levels of `map_id` wait for an update after an edit.
+    pub(crate) fn pyramid_pending(&self, map_id: i64) -> bool {
+        let s = self.shared.lock();
+        s.building || s.dirty.keys().any(|k| k.map_id == map_id)
+    }
+
     pub(crate) fn wait_idle(&self) {
         let mut s = self.shared.lock();
         while !s.idle() {

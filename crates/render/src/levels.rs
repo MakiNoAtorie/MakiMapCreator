@@ -2,19 +2,42 @@
 
 use std::sync::Arc;
 
-use mmc_core::{Layer, Map, Overview, Project, TILE_SIZE, TileId};
+use mmc_core::{ChildSummary, Layer, Map, Overview, Project, TILE_SIZE, TileId};
 
 use crate::{Error, Raster, Renderer, Result, Scene, View};
 
 /// A tile of the asked level, or a coarser one with its level.
-type Fetched = Option<(u32, Arc<[f32]>)>;
+type Tile = Option<(u32, Arc<[f32]>)>;
+/// One layer's tiles by (tx, ty).
+type LayerTiles = (Layer, Vec<((u32, u32), Tile)>);
+
+/// The tiles a scene reads. Taking them is quick, so a worker can do it under the project lock
+/// and copy them into rasters (`scene`) after it lets go.
+pub struct Fetched {
+    view: View,
+    level: u32,
+    metres_per_pixel: f64,
+    /// Level pixels `x0..x1`, `y0..y1`.
+    range: (u32, u32, u32, u32),
+    layers: Vec<LayerTiles>,
+    summaries: Vec<ChildSummary>,
+    /// False while upper levels lag an edit.
+    settled: bool,
+}
 
 impl Renderer {
     /// Never blocks: tiles not loaded yet show a coarser level and the scene is not complete.
     pub fn scene_cached(&self, project: &Project, view: View) -> Result<Scene> {
+        Ok(self.fetch_cached(project, view)?.scene())
+    }
+
+    /// The tiles `scene_cached` reads, without the copy into rasters.
+    pub fn fetch_cached(&self, project: &Project, view: View) -> Result<Fetched> {
         let map = find_map(project, view)?;
         let level = fit_level(map, view, project.top_level(map.id)?);
-        self.assemble(map, view, level, |layer, tx, ty| {
+        // Upper levels lag an edit until the pyramid worker has rebuilt them.
+        let settled = level == 0 || !project.pyramid_pending(map.id);
+        let mut f = self.fetch(map, view, level, |layer, tx, ty| {
             Ok(project.cached_tile(TileId {
                 map: map.id,
                 layer,
@@ -22,7 +45,9 @@ impl Renderer {
                 tx,
                 ty,
             })?)
-        })
+        })?;
+        f.settled = settled;
+        Ok(f)
     }
 
     /// The first frame of a map, drawn from its overview before the project is open.
@@ -33,19 +58,20 @@ impl Renderer {
         }
         let level = fit_level(map, view, overview.level);
         let values = overview.values.clone();
-        self.assemble(map, view, level, |_, _, _| {
+        let f = self.fetch(map, view, level, |_, _, _| {
             Ok(Some((overview.level, values.clone())))
-        })
+        })?;
+        Ok(f.scene())
     }
 
-    /// Reads `level` of the layers that registered passes draw, for the area of `view`.
-    pub(crate) fn assemble(
+    /// The tiles of `level` of the layers that registered passes draw, for the area of `view`.
+    pub(crate) fn fetch(
         &self,
         map: &Map,
         view: View,
         level: u32,
-        mut fetch: impl FnMut(Layer, u32, u32) -> Result<Fetched>,
-    ) -> Result<Scene> {
+        mut fetch: impl FnMut(Layer, u32, u32) -> Result<Tile>,
+    ) -> Result<Fetched> {
         let s = map.settings;
         let m = s.metres_per_pixel * (1u64 << level) as f64;
         // One pixel of margin for neighbour reads (hillshade).
@@ -63,27 +89,58 @@ impl Renderer {
         let mut layers: Vec<Layer> = self.passes.iter().map(|p| p.0).collect();
         layers.sort();
         layers.dedup();
-        let mut complete = true;
-        let mut rasters = Vec::new();
         let t = TILE_SIZE;
+        let mut out = Vec::new();
         for layer in layers {
-            let (w, h) = (x1 - x0, y1 - y0);
-            let mut values = vec![0.0; (w * h) as usize];
+            let mut tiles = Vec::new();
             for ty in y0 / t..=(y1 - 1) / t {
                 for tx in x0 / t..=(x1 - 1) / t {
-                    let Some((l, tile)) = fetch(layer, tx, ty)? else {
-                        complete = false;
-                        continue;
-                    };
-                    complete &= l == level;
-                    let d = l - level;
-                    let (ax, bx) = ((tx * t).max(x0), ((tx + 1) * t).min(x1));
-                    for y in (ty * t).max(y0)..((ty + 1) * t).min(y1) {
-                        let dst = ((y - y0) * w + ax - x0) as usize;
-                        let row = ((y >> d) % t * t) as usize;
-                        for (i, x) in (ax..bx).enumerate() {
-                            values[dst + i] = tile[row + ((x >> d) % t) as usize];
-                        }
+                    tiles.push(((tx, ty), fetch(layer, tx, ty)?));
+                }
+            }
+            out.push((layer, tiles));
+        }
+        Ok(Fetched {
+            view,
+            level,
+            metres_per_pixel: m,
+            range: (x0, x1, y0, y1),
+            layers: out,
+            summaries: Vec::new(),
+            settled: true,
+        })
+    }
+}
+
+impl Fetched {
+    /// Adds the summaries of the view map's child maps, as `Scene::with_summaries`.
+    pub fn with_summaries(mut self, project: &Project) -> Result<Fetched> {
+        self.summaries = crate::summary::summaries(project, self.view.map)?;
+        Ok(self)
+    }
+
+    /// Copies the tiles into the rasters the passes draw.
+    pub fn scene(self) -> Scene {
+        let (x0, x1, y0, y1) = self.range;
+        let (level, t) = (self.level, TILE_SIZE);
+        let (w, h) = (x1 - x0, y1 - y0);
+        let mut complete = self.settled;
+        let mut rasters = Vec::new();
+        for (layer, tiles) in self.layers {
+            let mut values = vec![0.0; (w * h) as usize];
+            for ((tx, ty), tile) in tiles {
+                let Some((l, tile)) = tile else {
+                    complete = false;
+                    continue;
+                };
+                complete &= l == level;
+                let d = l - level;
+                let (ax, bx) = ((tx * t).max(x0), ((tx + 1) * t).min(x1));
+                for y in (ty * t).max(y0)..((ty + 1) * t).min(y1) {
+                    let dst = ((y - y0) * w + ax - x0) as usize;
+                    let row = ((y >> d) % t * t) as usize;
+                    for (i, x) in (ax..bx).enumerate() {
+                        values[dst + i] = tile[row + ((x >> d) % t) as usize];
                     }
                 }
             }
@@ -98,13 +155,13 @@ impl Renderer {
                 },
             ));
         }
-        Ok(Scene {
-            view,
-            metres_per_pixel: m,
+        Scene {
+            view: self.view,
+            metres_per_pixel: self.metres_per_pixel,
             rasters,
             complete,
-            summaries: Vec::new(),
-        })
+            summaries: self.summaries,
+        }
     }
 }
 

@@ -98,9 +98,15 @@ impl App {
         let theme = Theme::new(self.dark);
         let mut canvas = self.canvas.take();
         if let Some(c) = &mut canvas {
-            let project = self.project.clone();
-            if let Some(m) = self.painter(map).flush(&project, map, c, ui.ctx(), now) {
-                self.message = Some(m);
+            for d in self.editor.done() {
+                let target = d.map().unwrap_or(map);
+                if let Some(m) = self.painter(target).done(d, c) {
+                    self.message = Some(m);
+                }
+            }
+            let editor = &self.editor;
+            if let Some(p) = self.painters.get_mut(&map) {
+                p.flush(editor, c);
             }
             c.show(ui, rect, map, layers, &view);
             if let Some(e) = &c.error {

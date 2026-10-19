@@ -5,9 +5,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 
-use mmc_core::{Layer, MapId, Project, RootPoint};
+use mmc_core::{Layer, Map, MapId, Project, RootPoint};
 
 mod levels;
+pub use levels::Fetched;
+
+/// Image rows each side of an export band that its scene also reads, for neighbour reads.
+const BAND_MARGIN: f64 = 4.0;
 mod pass;
 pub use pass::ShaderPass;
 mod kind;
@@ -172,36 +176,97 @@ impl Renderer {
     /// Reads full-resolution tiles for `view`; blocks on disk, so only export uses it.
     pub fn scene(&self, project: &Project, view: View) -> Result<Scene> {
         let map = levels::find_map(project, view)?;
-        self.assemble(map, view, 0, |layer, tx, ty| {
-            Ok(Some((0, project.layer_tile(map.id, layer, tx, ty)?.into())))
+        Ok(self
+            .fetch_full(map, view, |layer, tx, ty| {
+                Ok(project.layer_tile(map.id, layer, tx, ty)?.into())
+            })?
+            .scene())
+    }
+
+    /// The full-resolution tiles of `map` that `view` needs, each read by `tile`, so a caller can lock per tile.
+    pub fn fetch_full(
+        &self,
+        map: &Map,
+        view: View,
+        mut tile: impl FnMut(Layer, u32, u32) -> Result<Arc<[f32]>>,
+    ) -> Result<Fetched> {
+        self.fetch(map, view, 0, |layer, tx, ty| {
+            Ok(Some((0, tile(layer, tx, ty)?)))
         })
     }
 
     /// Renders `scene` in targets of at most `tile` x `tile` pixels; any tile size gives the same image.
     pub fn render(&self, scene: &Scene, tile: u32) -> Result<Image> {
+        self.render_rows(scene, 0, scene.view.height, tile)
+    }
+
+    /// Image rows `r0..r1` of `scene`'s view; its rasters need only cover those rows.
+    fn render_rows(&self, scene: &Scene, r0: u32, r1: u32, tile: u32) -> Result<Image> {
         let v = scene.view;
         let tile = tile
             .min(self.device.limits().max_texture_dimension_2d)
             .max(1);
         let mut img = Image {
             width: v.width,
-            height: v.height,
-            rgba: vec![0; (v.width * v.height * 4) as usize],
+            height: r1 - r0,
+            rgba: vec![0; (v.width * (r1 - r0) * 4) as usize],
         };
-        for gy in (0..v.height).step_by(tile as usize) {
+        for gy in (r0..r1).step_by(tile as usize) {
             for gx in (0..v.width).step_by(tile as usize) {
-                let (w, h) = (tile.min(v.width - gx), tile.min(v.height - gy));
+                let (w, h) = (tile.min(v.width - gx), tile.min(r1 - gy));
                 let pixels = self.render_tile(scene, gx, gy, w, h)?;
                 for row in 0..h {
-                    let dst = (((gy + row) * v.width + gx) * 4) as usize;
+                    let dst = (((gy - r0 + row) * v.width + gx) * 4) as usize;
                     let src = (row * w * 4) as usize;
                     img.rgba[dst..dst + (w * 4) as usize]
                         .copy_from_slice(&pixels[src..src + (w * 4) as usize]);
                 }
             }
         }
-        summary::tint(scene, &mut img);
+        summary::tint(scene, &mut img, r0);
         Ok(img)
+    }
+
+    /// Renders `view` in bands of `band` rows and streams it to `path` as an RGBA PNG, so memory
+    /// holds one band. `band_scene` reads the scene of a view of the band's rows and a margin.
+    pub fn export_png_bands(
+        &self,
+        view: View,
+        band: u32,
+        tile: u32,
+        path: &std::path::Path,
+        mut band_scene: impl FnMut(View) -> Result<Scene>,
+    ) -> Result<()> {
+        let file = std::fs::File::create(path).map_err(Error::Io)?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), view.width, view.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut out = encoder
+            .write_header()
+            .and_then(|w| w.into_stream_writer())
+            .map_err(Error::Png)?;
+        let (band, step) = (band.max(1), (view.max.y - view.min.y) / view.height as f64);
+        for r0 in (0..view.height).step_by(band as usize) {
+            let r1 = (r0 + band).min(view.height);
+            let rows = View {
+                min: RootPoint {
+                    x: view.min.x,
+                    y: view.min.y + (r0 as f64 - BAND_MARGIN) * step,
+                },
+                max: RootPoint {
+                    x: view.max.x,
+                    y: view.min.y + (r1 as f64 + BAND_MARGIN) * step,
+                },
+                height: r1 - r0,
+                ..view
+            };
+            let mut scene = band_scene(rows)?;
+            // Uniforms of the whole view, so the bands join exactly.
+            scene.view = view;
+            let img = self.render_rows(&scene, r0, r1, tile)?;
+            std::io::Write::write_all(&mut out, &img.rgba).map_err(Error::Io)?;
+        }
+        out.finish().map_err(Error::Png)
     }
 
     fn render_tile(&self, scene: &Scene, gx: u32, gy: u32, w: u32, h: u32) -> Result<Vec<u8>> {

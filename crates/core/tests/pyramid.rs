@@ -96,6 +96,7 @@ fn edits_undo_and_redo_update_every_level_above() {
     assert!(full(&p, id(map, 2, 0, 0)).iter().all(|&v| v == 0.0));
     p.redo(map).unwrap();
     assert_pyramid_consistent(&p, map, Layer::HEIGHT);
+    assert!(!p.pyramid_pending(map));
 }
 
 #[test]

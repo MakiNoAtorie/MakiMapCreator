@@ -9,7 +9,7 @@ use crate::workspace::Tab;
 use crate::{App, errors};
 
 impl App {
-    pub(crate) fn apply(&mut self, intents: Vec<Intent>, now: f64) {
+    pub(crate) fn apply(&mut self, intents: Vec<Intent>) {
         let Some(map) = self.doc.as_ref().map(|d| d.map) else {
             return;
         };
@@ -42,7 +42,7 @@ impl App {
                         .unwrap_or(Ok(()));
                     drop(g);
                     match r {
-                        Ok(()) => self.note_command(map, now, false),
+                        Ok(()) => self.note_command(map, false),
                         Err(e) => {
                             self.message =
                                 Some(tr_args("error-edit", &[("error", &errors::text(&e))]))

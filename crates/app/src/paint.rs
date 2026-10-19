@@ -1,26 +1,19 @@
-//! Painting UI and state; one stroke is one command at pen up, shown by an overlay until drawn.
+//! Painting UI and state: a stroke goes to the edit worker in parts while the pen moves; each part shows as an overlay until drawn.
 
-use std::collections::VecDeque;
+use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
-use mmc_core::{Command, MapId, RootPoint, Tool, ToolAction};
+use mmc_core::{MapId, RootPoint, Tool, ToolAction};
 
 use crate::brush::{self, Direction, Edit, MAX_STRENGTH, Options, Sample};
-use crate::canvas::{Canvas, SharedProject};
+use crate::canvas::Canvas;
+use crate::edit::{Done, Editor, Op};
 use crate::i18n::{tr, tr_args};
 use crate::input::Phase;
 use crate::theme::Theme;
 use crate::view::MapView;
 
-/// Seconds the app waits for derived layers after an edit.
-const JOBS_WAIT: f64 = 30.0;
 const TOOL_BUTTON: f32 = 32.0;
-
-enum Op {
-    Commit(Command),
-    Undo,
-    Redo,
-}
 
 /// A pen or mouse sample on the canvas, in egui points.
 pub struct Input {
@@ -29,38 +22,60 @@ pub struct Input {
     pub phase: Phase,
 }
 
+/// The stroke the pen is drawing.
+struct Live {
+    id: u64,
+    path: Vec<Sample>,
+    /// Stamps already sent.
+    sent: usize,
+    parts: u32,
+}
+
+/// Stamps of one sent part, shown until a render requested after the part was applied arrives.
+struct Pending {
+    stroke: u64,
+    part: u32,
+    discs: Vec<(RootPoint, f64)>,
+    raise: bool,
+    /// The canvas epoch requested once the part was applied.
+    epoch: Option<u64>,
+}
+
 pub struct Painter {
+    map: MapId,
     /// The map kind's edit tools; `tool` indexes them.
     tools: &'static [Tool],
     pub tool: usize,
     pub dir: Direction,
     pub options: Options,
     mpp: f64,
-    stroke: Vec<Sample>,
-    ops: VecDeque<Op>,
-    /// Stroke stamps shown until the renderer catches up: (centre, radius m, raise).
-    overlay: Vec<(RootPoint, f64, bool)>,
-    await_epoch: Option<u64>,
-    jobs_until: Option<f64>,
+    live: Option<Live>,
+    next_stroke: u64,
+    /// Ops for the edit worker, sent at the next `flush`.
+    outbox: Vec<Op>,
+    overlay: Vec<Pending>,
+    /// Ended strokes whose overlay is still shown, with their pen-up time, for the log.
+    drawing: Vec<(u64, Instant)>,
     /// Last known cursor and pressure, for the brush rings.
     cursor: Option<(Pos2, f32)>,
-    /// Bumped when an edit, undo or redo changed the project; the app reloads what it shows.
+    /// Bumped when an undo or redo changed the project; the app reloads what it shows.
     pub version: u64,
 }
 
 impl Painter {
-    pub fn new(mpp: f64, tools: &'static [Tool]) -> Painter {
+    pub fn new(map: MapId, mpp: f64, tools: &'static [Tool]) -> Painter {
         Painter {
+            map,
             tools,
             tool: 0,
             dir: Direction::Raise,
             options: Options::for_map(mpp),
             mpp,
-            stroke: vec![],
-            ops: VecDeque::new(),
+            live: None,
+            next_stroke: 0,
+            outbox: vec![],
             overlay: vec![],
-            await_epoch: None,
-            jobs_until: None,
+            drawing: vec![],
             cursor: None,
             version: 0,
         }
@@ -71,27 +86,19 @@ impl Painter {
     }
 
     /// Notes a change made outside the painter (entity edit, generator) so the canvas redraws.
-    pub fn changed(&mut self, canvas: &mut Canvas, now: f64, derived: bool) {
+    pub fn changed(&mut self, canvas: &mut Canvas) {
         self.version += 1;
-        self.await_epoch = Some(canvas.invalidate());
-        if derived {
-            self.jobs_until = Some(now + JOBS_WAIT);
-        }
+        canvas.invalidate();
     }
 
     pub fn edit(&mut self, e: Edit) {
         match e {
-            Edit::Undo => self.ops.push_back(Op::Undo),
-            Edit::Redo => self.ops.push_back(Op::Redo),
+            Edit::Undo => self.outbox.push(Op::Undo(self.map)),
+            Edit::Redo => self.outbox.push(Op::Redo(self.map)),
             Edit::SizeDown => self.options.step_size(-1, self.mpp),
             Edit::SizeUp => self.options.step_size(1, self.mpp),
             Edit::Direction(d) => self.dir = d,
         }
-    }
-
-    fn plan(&self, path: &[Sample]) -> Option<Command> {
-        let t = self.current()?;
-        brush::plan(t.action, t.layer, self.dir, &self.options, self.mpp, path)
     }
 
     /// Feeds one sample from the canvas; `view` and `rect` map points to root space.
@@ -103,112 +110,153 @@ impl Painter {
         };
         match i.phase {
             Phase::Hover => {}
-            Phase::Down => self.stroke = vec![sample],
+            Phase::Down => {
+                self.end();
+                self.next_stroke += 1;
+                self.live = Some(Live {
+                    id: self.next_stroke,
+                    path: vec![sample],
+                    sent: 0,
+                    parts: 0,
+                });
+            }
             Phase::Move => {
-                if !self.stroke.is_empty() {
-                    self.stroke.push(sample);
+                if let Some(l) = &mut self.live {
+                    l.path.push(sample);
                 }
             }
             Phase::Up => {
-                if self.stroke.is_empty() {
-                    return;
+                if let Some(l) = &mut self.live {
+                    l.path.push(sample);
                 }
-                self.stroke.push(sample);
-                let path = std::mem::take(&mut self.stroke);
-                let (lo, hi) = path.iter().fold((f32::MAX, f32::MIN), |(lo, hi), s| {
-                    (lo.min(s.pressure), hi.max(s.pressure))
-                });
-                log::info!("stroke: {} samples, pressure {lo:.3}..{hi:.3}", path.len());
-                if let Some(cmd) = self.plan(&path) {
-                    let raise = self.dir == Direction::Raise;
-                    let discs = brush::stamp_discs(&cmd);
-                    self.overlay
-                        .extend(discs.into_iter().map(|(at, r)| (at, r, raise)));
-                    self.ops.push_back(Op::Commit(cmd));
-                }
+                self.end();
             }
         }
     }
 
-    /// Applies queued edits, polls derived layers and drops the overlay once drawn; gives an error text.
-    pub fn flush(
-        &mut self,
-        project: &SharedProject,
-        map: MapId,
-        canvas: &mut Canvas,
-        ctx: &egui::Context,
-        now: f64,
-    ) -> Option<String> {
-        if let Some(e) = self.await_epoch
-            && canvas.fresh(e)
-        {
-            self.await_epoch = None;
-            self.overlay.clear();
-        }
-        if self.ops.is_empty() && self.jobs_until.is_none() {
-            return None;
-        }
-        // The renderer or a save may hold the project; try again next frame.
-        let Ok(mut guard) = project.try_lock() else {
-            ctx.request_repaint();
-            return None;
+    /// Sends the stamps of the live stroke not sent yet as one part.
+    fn send_part(&mut self) {
+        let Some(t) = self.current() else { return };
+        let Some(l) = &mut self.live else { return };
+        let Some(cmd) = brush::plan(
+            t.action,
+            t.layer,
+            self.dir,
+            &self.options,
+            self.mpp,
+            &l.path,
+        )
+        .and_then(|c| brush::tail(c, l.sent)) else {
+            return;
         };
-        let p = guard.as_mut()?;
-        let mut error = None;
-        let mut changed = false;
-        while let Some(op) = self.ops.pop_front() {
-            let name = match op {
-                Op::Commit(_) => "apply",
-                Op::Undo => "undo",
-                Op::Redo => "redo",
-            };
-            let r = match op {
-                Op::Commit(cmd) => p.apply(map, cmd).map(|()| true),
-                Op::Undo => p.undo(map),
-                Op::Redo => p.redo(map),
-            };
-            log::info!("{name} on map {map:?}: {r:?}");
-            match r {
-                Ok(c) => changed |= c,
-                Err(e) => {
-                    error = Some(tr_args(
-                        "error-paint",
-                        &[("error", &crate::errors::text(&e))],
-                    ))
+        let discs = brush::stamp_discs(&cmd);
+        l.sent += discs.len();
+        l.parts += 1;
+        self.overlay.push(Pending {
+            stroke: l.id,
+            part: l.parts,
+            discs,
+            raise: self.dir == Direction::Raise,
+            epoch: None,
+        });
+        self.outbox.push(Op::Part {
+            map: self.map,
+            stroke: l.id,
+            part: l.parts,
+            cmd,
+            sent: Instant::now(),
+        });
+    }
+
+    /// Pen up: sends the rest of the live stroke and ends it.
+    fn end(&mut self) {
+        self.send_part();
+        let Some(l) = self.live.take() else { return };
+        let up = Instant::now();
+        log::info!("stroke {}: {} samples", l.id, l.path.len());
+        self.drawing.push((l.id, up));
+        self.outbox.push(Op::End {
+            map: self.map,
+            stroke: l.id,
+            up,
+        });
+    }
+
+    /// Sends this frame's parts and ops to the edit worker; drops overlay parts the canvas now shows.
+    pub fn flush(&mut self, editor: &Editor, canvas: &Canvas) {
+        self.send_part();
+        for op in self.outbox.drain(..) {
+            editor.send(op);
+        }
+        self.overlay
+            .retain(|p| p.epoch.is_none_or(|e| !canvas.fresh(e)));
+        let overlay = &self.overlay;
+        self.drawing.retain(|&(id, up)| {
+            let shown = !overlay.iter().any(|p| p.stroke == id);
+            if shown {
+                log::info!(
+                    "stroke {id}: drawn {:.0} ms after pen up",
+                    up.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            !shown
+        });
+    }
+
+    /// Takes one result of the edit worker for this map; gives an error text.
+    pub fn done(&mut self, d: Done, canvas: &mut Canvas) -> Option<String> {
+        let error = |e: &mmc_core::Error| {
+            Some(tr_args(
+                "error-paint",
+                &[("error", &crate::errors::text(e))],
+            ))
+        };
+        match d {
+            Done::Applied {
+                stroke,
+                parts,
+                result,
+                ..
+            } => {
+                let mine = |p: &Pending| p.stroke == stroke && parts.contains(&p.part);
+                match result {
+                    Ok(()) => {
+                        let epoch = canvas.invalidate();
+                        for p in self.overlay.iter_mut().filter(|p| mine(p)) {
+                            p.epoch = Some(epoch);
+                        }
+                        None
+                    }
+                    Err(e) => {
+                        log::info!("stroke {stroke} parts {parts:?}: {e}");
+                        self.overlay.retain(|p| !mine(p));
+                        error(&e)
+                    }
                 }
             }
-        }
-        if changed {
-            self.version += 1;
-            self.await_epoch = Some(canvas.invalidate());
-            self.jobs_until = Some(now + JOBS_WAIT);
-        }
-        if let Some(until) = self.jobs_until {
-            match p.poll_jobs() {
-                Ok(true) => {
-                    canvas.invalidate();
-                    self.jobs_until = None;
+            Done::Ended { .. } => None,
+            Done::Stepped { result, .. } => match result {
+                Ok(changed) => {
+                    if changed {
+                        self.version += 1;
+                        canvas.invalidate();
+                    }
+                    None
                 }
-                Ok(false) if now < until => ctx.request_repaint_after_secs(0.1),
-                Ok(false) => self.jobs_until = None,
-                Err(e) => {
-                    self.jobs_until = None;
-                    error = Some(tr_args(
-                        "error-paint",
-                        &[("error", &crate::errors::text(&e))],
-                    ));
-                }
+                Err(e) => error(&e),
+            },
+            Done::Rebuilt(r) => {
+                canvas.invalidate();
+                r.err().and_then(|e| error(&e))
             }
         }
-        ctx.request_repaint();
-        error
     }
 
     pub fn hide_cursor(&mut self) {
         self.cursor = None;
     }
 
-    /// Draws the live stroke, the pending overlay and the brush rings over the canvas.
+    /// Draws the strokes not yet on the canvas and the brush rings.
     pub fn draw(&self, ui: &egui::Ui, rect: Rect, view: &MapView, t: &Theme) {
         let painter = ui.painter_at(rect);
         let to_pt = |m: f64| (m / view.metres_per_point) as f32;
@@ -219,15 +267,9 @@ impl Painter {
                 Color32::from_rgba_unmultiplied(20, 16, 12, 28)
             }
         };
-        for &(at, r, raise) in &self.overlay {
-            painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(raise));
-        }
-        if !self.stroke.is_empty()
-            && let Some(live) = self.plan(&self.stroke)
-        {
-            let raise = self.dir == Direction::Raise;
-            for (at, r) in brush::stamp_discs(&live) {
-                painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(raise));
+        for p in &self.overlay {
+            for &(at, r) in &p.discs {
+                painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(p.raise));
             }
         }
         if let Some((pos, pressure)) = self.cursor.filter(|(p, _)| rect.contains(*p)) {

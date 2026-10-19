@@ -1,5 +1,6 @@
 mod brush;
 mod canvas;
+mod edit;
 mod errors;
 mod export;
 mod files;
@@ -14,6 +15,8 @@ mod panels;
 mod pen;
 #[cfg(windows)]
 mod pen_win;
+#[cfg(test)]
+mod perf;
 mod shell;
 mod snapshot;
 mod status;
@@ -39,6 +42,8 @@ use workspace::{AppCommand, Mode, Tabs};
 
 /// Seconds after a pen event during which a mouse press counts as the pen's duplicate.
 const DUPLICATE_PRESS_WINDOW: f64 = 1.0;
+/// A frame, or a gap between frames while drawing, longer than this is logged.
+const SLOW_FRAME: std::time::Duration = std::time::Duration::from_millis(50);
 
 const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
@@ -119,12 +124,15 @@ struct App {
     pen_status: String,
     pen_filter: DuplicatePressFilter,
     painters: HashMap<MapId, Painter>,
+    editor: edit::Editor,
     painter_seen: Option<u64>,
     /// Pen events of this frame, taken by the canvas.
     pen_events: Vec<PenEvent>,
     /// A pen stroke is running (it began on the canvas).
     pen_down: bool,
     mouse_down: bool,
+    /// Start of the last frame.
+    frame_start: std::time::Instant,
 }
 
 impl App {
@@ -137,6 +145,7 @@ impl App {
             Box::new(mmc_kind_world::WorldKind),
             Box::new(mmc_kind_region::RegionKind),
         ]));
+        let editor = edit::Editor::new(project.clone(), cc.egui_ctx.clone());
         let canvas = cc
             .wgpu_render_state
             .as_ref()
@@ -180,10 +189,12 @@ impl App {
             pen_status: pen::start(cc, setting),
             pen_filter: DuplicatePressFilter::new(DUPLICATE_PRESS_WINDOW),
             painters: HashMap::new(),
+            editor,
             painter_seen: None,
             pen_events: Vec::new(),
             pen_down: false,
             mouse_down: false,
+            frame_start: std::time::Instant::now(),
         }
     }
 
@@ -202,14 +213,17 @@ impl App {
             .map_or(&[][..], |k| k.tools());
         self.painters
             .entry(map)
-            .or_insert_with(|| Painter::new(mpp, tools))
+            .or_insert_with(|| Painter::new(map, mpp, tools))
     }
 
     /// Notes a command applied outside the painter so the canvas and panels catch up.
-    fn note_command(&mut self, map: MapId, now: f64, derived: bool) {
+    fn note_command(&mut self, map: MapId, derived: bool) {
+        if derived {
+            self.editor.send(edit::Op::Watch);
+        }
         let mut canvas = self.canvas.take();
         if let Some(c) = &mut canvas {
-            self.painter(map).changed(c, now, derived);
+            self.painter(map).changed(c);
         }
         self.canvas = canvas;
         self.dirty = true;
@@ -218,6 +232,14 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let start = std::time::Instant::now();
+        let gap = start - std::mem::replace(&mut self.frame_start, start);
+        if (self.pen_down || self.mouse_down) && gap > SLOW_FRAME {
+            log::warn!(
+                "{:.0} ms between frames while drawing",
+                gap.as_secs_f64() * 1000.0
+            );
+        }
         if self.message != self.logged_message {
             if let Some(m) = &self.message {
                 log::warn!("message: {m}");
@@ -232,7 +254,7 @@ impl eframe::App for App {
             self.pen_filter.pen_seen(now);
             pen_hover = (e.phase != Phase::Up).then(|| egui::pos2(e.pos[0], e.pos[1]) / ppp);
         }
-        self.finish_job(now);
+        self.finish_job();
         self.finish_export();
         self.sync();
         if self.saving || self.pending_save.is_some() || self.job.is_some() || self.export.busy() {
@@ -289,7 +311,13 @@ impl eframe::App for App {
         if let Some(a) = action {
             self.run(a);
         }
-        self.apply(intents, now);
+        self.apply(intents);
+        if start.elapsed() > SLOW_FRAME {
+            log::warn!(
+                "frame took {:.0} ms",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
     }
 
     fn on_exit(&mut self) {

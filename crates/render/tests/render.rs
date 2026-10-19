@@ -147,6 +147,34 @@ fn exports_a_png_larger_than_the_screen_on_a_worker() {
     assert_eq!(info.color_type, png::ColorType::Rgba);
 }
 
+#[test]
+fn a_banded_export_equals_a_single_render() {
+    let dir = tempfile::tempdir().unwrap();
+    let (p, map) = fixture(dir.path());
+    let r = renderer();
+    let path = dir.path().join("bands.png");
+    let m = &p.maps()[0];
+    for v in [view(map, 451, 307), view(map, 1333, 901)] {
+        r.export_png_bands(v, 37, 97, &path, |rows| {
+            let tile = |l, tx, ty| Ok(p.layer_tile(map, l, tx, ty)?.into());
+            Ok(r.fetch_full(m, rows, tile)?.scene())
+        })
+        .unwrap();
+        let decoder =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut bands = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut bands).unwrap();
+        let single = r.render(&r.scene(&p, v).unwrap(), u32::MAX).unwrap();
+        assert!(
+            single.rgba == bands,
+            "bands differ at {}x{}",
+            v.width,
+            v.height
+        );
+    }
+}
+
 fn reopen(dir: &std::path::Path) -> (Project, MapId) {
     let (mut p, map) = fixture(dir);
     let file = dir.join("p.mmc");

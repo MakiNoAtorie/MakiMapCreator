@@ -152,6 +152,59 @@ fn undo_on_one_map_never_changes_another() {
 }
 
 #[test]
+fn a_stroke_applied_in_parts_equals_it_whole_and_undoes_in_one_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let (a, b) = (p.maps()[0].id, p.add_root_map(settings()).unwrap());
+    p.apply(b, stroke(5005.0, 105.0, 3.0)).unwrap();
+    let xs = [105.0, 2555.0, 2605.0, 4005.0];
+    for &x in &xs {
+        p.apply_part(a, stroke(x, 2555.0, 10.0)).unwrap();
+    }
+    p.end_stroke(a);
+    let points = xs
+        .iter()
+        .flat_map(|&x| match stroke(x, 2555.0, 10.0) {
+            Command::Brush(s) => s.points,
+            _ => unreachable!(),
+        })
+        .collect();
+    let whole = Command::Brush(BrushStroke {
+        layer: Layer::HEIGHT,
+        points,
+        strength: 10.0,
+        falloff: 1.0,
+    });
+    p.apply(b, whole).unwrap();
+    for &x in &xs {
+        assert_eq!(height(&p, a, x, 2555.0), height(&p, b, x, 2555.0));
+    }
+    assert!(p.undo(a).unwrap());
+    assert!(xs.iter().all(|&x| height(&p, a, x, 2555.0) == 0.0));
+    assert!(p.edited_tiles(a, Layer::HEIGHT).unwrap().is_empty());
+    assert!(!p.undo(a).unwrap());
+    assert!(p.redo(a).unwrap());
+    assert_eq!(height(&p, a, 2555.0, 2555.0), height(&p, b, 2555.0, 2555.0));
+}
+
+#[test]
+fn parts_after_an_undo_or_end_start_a_new_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let map = p.maps()[0].id;
+    p.apply_part(map, stroke(105.0, 105.0, 10.0)).unwrap();
+    p.end_stroke(map);
+    p.apply_part(map, stroke(3005.0, 105.0, 10.0)).unwrap();
+    assert!(p.undo(map).unwrap());
+    // The open stroke was undone; its next part must not join the first stroke.
+    p.apply_part(map, stroke(5005.0, 105.0, 10.0)).unwrap();
+    p.end_stroke(map);
+    assert!(p.undo(map).unwrap());
+    assert!(height(&p, map, 105.0, 105.0) > 9.0);
+    assert_eq!(height(&p, map, 5005.0, 105.0), 0.0);
+}
+
+#[test]
 fn undo_history_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();

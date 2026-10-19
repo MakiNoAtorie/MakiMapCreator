@@ -30,14 +30,16 @@ impl App {
         }
         log::info!("job started ({error})");
         let project = self.project.clone();
-        let job = std::thread::spawn(move || match project.lock().unwrap().as_mut() {
-            Some(p) => work(p),
-            None => Ok(Done::Closed),
+        let job = std::thread::spawn(move || {
+            match crate::canvas::lock_project(&project, error).0.as_mut() {
+                Some(p) => work(p),
+                None => Ok(Done::Closed),
+            }
         });
         self.job = Some((job, error));
     }
 
-    pub(crate) fn finish_job(&mut self, now: f64) {
+    pub(crate) fn finish_job(&mut self) {
         if !self.job.as_ref().is_some_and(|j| j.0.is_finished()) {
             return;
         }
@@ -48,7 +50,7 @@ impl App {
         log::info!("job finished ({error}): ok = {}", matches!(r, Ok(Ok(_))));
         match r {
             Ok(Ok(Done::Closed)) => {}
-            Ok(Ok(Done::Generated(m))) => self.note_command(m, now, true),
+            Ok(Ok(Done::Generated(m))) => self.note_command(m, true),
             Ok(Ok(Done::Child(c))) => {
                 self.dirty = true;
                 self.open_after = Some(c);

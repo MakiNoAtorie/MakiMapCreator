@@ -45,6 +45,8 @@ pub(crate) enum Change {
 pub(crate) struct History {
     done: VecDeque<Change>,
     undone: Vec<Change>,
+    /// The last `done` entry is a stroke that `apply_part` still extends.
+    open_stroke: bool,
 }
 
 impl Project {
@@ -61,13 +63,49 @@ impl Project {
         let key = crate::delete::history_key(map, &changes);
         self.write(&changes, true)?;
         self.after_write(map, &changes);
+        self.push(key, changes);
+        Ok(())
+    }
+
+    fn push(&mut self, key: MapId, changes: Change) {
         let h = self.history.entry(key).or_default();
         h.undone.clear();
+        h.open_stroke = false;
         if h.done.len() == UNDO_LIMIT {
             h.done.pop_front();
         }
         h.done.push_back(changes);
+    }
+
+    /// Applies one part of a stroke drawn while the pen moves; parts until `end_stroke` are one undo step.
+    pub fn apply_part(&mut self, map: MapId, cmd: Command) -> Result<()> {
+        let changes = self.changes(self.map(map)?, &cmd)?;
+        let changes = self.clip_to_outline(map, changes)?;
+        self.refuse_derived(map, &changes)?;
+        let key = crate::delete::history_key(map, &changes);
+        self.write(&changes, true)?;
+        let h = self.history.entry(key).or_default();
+        match (h.open_stroke, h.done.back_mut(), changes) {
+            (true, Some(Change::Tiles(done)), Change::Tiles(part)) => merge_tiles(done, part),
+            (_, _, changes) => self.push(key, changes),
+        }
+        self.history.entry(key).or_default().open_stroke = true;
         Ok(())
+    }
+
+    /// Ends the stroke `apply_part` began on `map` and starts the rebuild of its derived layers.
+    pub fn end_stroke(&mut self, map: MapId) {
+        let Some(h) = self.history.get_mut(&map) else {
+            return;
+        };
+        if !std::mem::take(&mut h.open_stroke) {
+            return;
+        }
+        let layers: Vec<_> = match h.done.back() {
+            Some(Change::Tiles(t)) => t.iter().map(|c| c.key.layer).collect(),
+            _ => vec![],
+        };
+        self.layers_written(map, &layers);
     }
 
     /// Undoes the last command on `map`; `false` if there is none.
@@ -85,6 +123,7 @@ impl Project {
     /// Redoes (`forward`) or undoes one change of the history `key`.
     pub(crate) fn step(&mut self, key: MapId, forward: bool) -> Result<bool> {
         let h = self.history.entry(key).or_default();
+        h.open_stroke = false;
         let Some(changes) = (if forward {
             h.undone.pop()
         } else {
@@ -122,5 +161,15 @@ impl Project {
         };
         res?;
         self.mark_out_of_date(changes)
+    }
+}
+
+/// Adds a stroke part's tile changes to the stroke's: the first before and the last after of each tile.
+fn merge_tiles(done: &mut Vec<TileChange>, part: Vec<TileChange>) {
+    for c in part {
+        match done.iter_mut().find(|d| d.key == c.key) {
+            Some(d) => d.after = c.after,
+            None => done.push(c),
+        }
     }
 }

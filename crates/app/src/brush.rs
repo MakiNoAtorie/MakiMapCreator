@@ -145,6 +145,23 @@ pub fn stamp_discs(cmd: &Command) -> Vec<(RootPoint, f64)> {
     }
 }
 
+/// The command with its stamps from `from` on; `None` when there are none.
+/// Stamps of a path never change as samples are added, so parts sent this way add up to the whole stroke.
+pub fn tail(cmd: Command, from: usize) -> Option<Command> {
+    let cmd = match cmd {
+        Command::Brush(mut b) => {
+            b.points.drain(..from.min(b.points.len()));
+            Command::Brush(b)
+        }
+        Command::Paint(mut p) => {
+            p.points.drain(..from.min(p.points.len()));
+            Command::Paint(p)
+        }
+        other => return Some(other),
+    };
+    (!stamp_discs(&cmd).is_empty()).then_some(cmd)
+}
+
 fn stamps(o: &Options, mpp: f64, path: &[Sample]) -> Vec<Sample> {
     let Some(first) = path.first() else {
         return vec![];
@@ -259,6 +276,33 @@ mod tests {
         assert!(raise.strength > 0.0);
         assert_eq!(raise.falloff, o.falloff);
         assert!(brush(Direction::Lower, &o, &path).strength < 0.0);
+    }
+
+    #[test]
+    fn parts_sent_while_drawing_add_up_to_the_whole_stroke() {
+        let mut o = Options::for_map(1.0);
+        o.size = 40.0;
+        o.pressure_size = true;
+        let path: Vec<Sample> = (0..40)
+            .map(|i| p((i * i) as f64 * 0.7, (i % 7) as f32 / 7.0))
+            .collect();
+        let whole = brush(Direction::Raise, &o, &path).points;
+        let (mut sent, mut joined) = (0, vec![]);
+        for n in [1, 2, 9, 10, 25, 40] {
+            let cmd = plan(
+                ToolAction::Brush,
+                Layer::HEIGHT,
+                Direction::Raise,
+                &o,
+                1.0,
+                &path[..n],
+            );
+            if let Some(Command::Brush(b)) = cmd.and_then(|c| tail(c, sent)) {
+                sent += b.points.len();
+                joined.extend(b.points);
+            }
+        }
+        assert_eq!(joined, whole);
     }
 
     #[test]

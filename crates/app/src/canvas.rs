@@ -1,8 +1,8 @@
 //! Map canvas: the renderer draws the visible view on a worker; the UI shows the last result.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions};
 use mmc_core::{Kinds, Layer, MapId, Project};
@@ -16,6 +16,30 @@ const RENDER_TILE: u32 = 2048;
 const STAND_IN_RETRY: Duration = Duration::from_millis(16);
 
 pub type SharedProject = Arc<Mutex<Option<Project>>>;
+
+/// A lock wait longer than this is logged with the holder.
+const SLOW_LOCK: Duration = Duration::from_millis(50);
+/// The worker that last took the project lock, for the stall log.
+static HOLDER: Mutex<&str> = Mutex::new("none");
+
+/// Locks the project on a worker, never the UI thread; gives the guard and the wait.
+pub fn lock_project<'a>(
+    project: &'a SharedProject,
+    who: &'static str,
+) -> (MutexGuard<'a, Option<Project>>, Duration) {
+    let t = Instant::now();
+    let before = *HOLDER.lock().unwrap();
+    let guard = project.lock().unwrap_or_else(|e| e.into_inner());
+    let wait = t.elapsed();
+    *HOLDER.lock().unwrap() = who;
+    if wait > SLOW_LOCK {
+        log::warn!(
+            "{who} waited {:.0} ms for the project lock (held by {before})",
+            wait.as_secs_f64() * 1000.0
+        );
+    }
+    (guard, wait)
+}
 
 /// What the worker draws: a view and the layers shown, bottom first.
 #[derive(Clone, PartialEq)]
@@ -92,12 +116,14 @@ impl Canvas {
                 };
                 let renderer = &renderers[at].1;
                 // Never blocks on disk: tiles not loaded yet show a coarser level.
-                let scene = match project.lock().unwrap().as_ref() {
+                // The lock covers taking the tiles; the copy into rasters runs without it.
+                let fetched = match lock_project(&project, "render").0.as_ref() {
                     Some(p) => renderer
-                        .scene_cached(p, req.view)
-                        .and_then(|s| s.with_summaries(p)),
+                        .fetch_cached(p, req.view)
+                        .and_then(|f| f.with_summaries(p)),
                     None => continue,
                 };
+                let scene = fetched.map(|f| f.scene());
                 let complete = scene.as_ref().is_ok_and(|s| s.is_complete());
                 let result = scene.and_then(|s| renderer.render(&s, RENDER_TILE));
                 if !complete && result.is_ok() {
