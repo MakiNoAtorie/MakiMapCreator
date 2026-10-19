@@ -18,16 +18,12 @@ pub use command::{BrushStroke, Command, StrokePoint};
 pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;
-mod entity;
-pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
-mod anchor;
-pub use anchor::{
-    AnchorEdit, Anchors, DEFAULT_ANCHOR_TOLERANCE, DerivedFeature, FeatureId, FeatureKind,
+mod entities;
+pub use entities::{
+    AnchorEdit, Anchors, DEFAULT_ANCHOR_TOLERANCE, DerivedFeature, Document, Entity, EntityEdit,
+    EntityId, EntityKind, FeatureId, FeatureKind, FieldDef, FieldType, Link, NameHit, PageEdit,
+    Relation, TextHit, TextSearch, link_markup,
 };
-mod page;
-pub use page::{Document, Link, PageEdit, link_markup};
-mod search;
-pub use search::{NameHit, TextHit, TextSearch};
 mod paint;
 pub use paint::PaintStroke;
 mod object;
@@ -190,9 +186,9 @@ pub struct Project {
     kinds: std::sync::Arc<Kinds>,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
-    names: search::NameIndex,
+    names: entities::NameIndex,
     pipeline: pipeline::Pipeline,
-    anchors: anchor::State,
+    anchors: entities::AnchorState,
     saves: save::Saves,
     cache: std::sync::OnceLock<cache::TileCache>,
     resync: resync::State,

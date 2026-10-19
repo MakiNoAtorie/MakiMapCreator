@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use crate::persist::{TileKey, TileRecord, Write};
 
-use crate::entity::EntityChanges;
+use crate::entities::EntityChanges;
 use crate::{Command, MapId, Project, Result};
 
 /// Commands kept per map; the oldest drops first.
@@ -31,8 +31,8 @@ impl TileChange {
 pub(crate) enum Change {
     Tiles(Vec<TileChange>),
     Entities(EntityChanges),
-    Page(crate::page::PageChange),
-    Anchor(crate::anchor::AnchorChange),
+    Page(crate::entities::PageChange),
+    Anchor(crate::entities::AnchorChange),
     Generation(crate::generation::GenerationChange),
     Deletion(crate::delete::DeletionChange),
     Resync(crate::resync::ResyncChange),

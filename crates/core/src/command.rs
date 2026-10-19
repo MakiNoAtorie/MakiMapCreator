@@ -50,7 +50,14 @@ impl Project {
             Command::Entity(e @ EntityEdit::DeleteWithMap { .. }) => {
                 Ok(Change::Deletion(self.entity_deletion(e)?))
             }
-            Command::Entity(e) => Ok(Change::Entities(self.entity_changes(e)?)),
+            Command::Entity(e) => {
+                if let EntityEdit::Delete(id) = e
+                    && !self.own_maps(*id)?.is_empty()
+                {
+                    return Err(crate::Error::OwnMapChoice(*id));
+                }
+                Ok(Change::Entities(self.entity_changes(e)?))
+            }
             Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
             Command::Paint(s) => Ok(Change::Tiles(self.paint(map, s)?)),

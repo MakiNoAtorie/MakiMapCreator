@@ -20,6 +20,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `mmc-core` defines the persistence port (`mmc_core::persist`: `Storage`, `TileStore`, `TextIndex`, `ProjectReader` and the records). `mmc-store` implements it and depends on core; core never names the store. App, tests and bench pass a `Box<dyn Storage>` in (tests: `mmc_fixtures::create`/`open`/`restore`).
 - One edit is one `Storage::write` batch of `persist::Write` rows: one transaction.
 - Core has no UI, no SQL and no global state.
+- Entities, relations, fields, pages, search and anchors live in `core/src/entities/`. That module uses only core types and the persistence port, never maps; map rules (such as the own-map check on delete) stay outside it.
 - File paths that the app owns (working copy in local app data) are parameters, never looked up inside core or store, so tests use temp dirs.
 
 ## Project file

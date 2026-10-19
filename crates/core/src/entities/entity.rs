@@ -340,9 +340,6 @@ impl Project {
             }
             EntityEdit::Delete(id) | EntityEdit::DeleteWithMap { id, .. } => {
                 let before = self.existing(*id)?;
-                if matches!(edit, EntityEdit::Delete(_)) && !self.own_maps(*id)?.is_empty() {
-                    return Err(Error::OwnMapChoice(*id));
-                }
                 for r in self.store.relations()? {
                     if r.from_id == id.0 || r.to_id == id.0 {
                         c.relations.push((r, true, false));

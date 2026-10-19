@@ -7,7 +7,7 @@
 
 use crate::persist::{ChildLink, Write};
 
-use crate::entity::EntityChanges;
+use crate::entities::EntityChanges;
 use crate::undo::Change;
 use crate::{EntityEdit, EntityId, Error, Map, MapId, Project, Result};
 
