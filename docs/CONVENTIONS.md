@@ -28,7 +28,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Store feature code goes in its own module (`crates/store/src/<feature>.rs`) as `impl Store` blocks; its migration is a `pub(crate) const MIGRATION` appended to `MIGRATIONS`.
 - Content hashes are BLAKE3, stored as 32-byte BLOBs. Asset blobs are deduplicated by hash.
 - Open refuses a file with another `application_id` or a newer `user_version`.
-- Open only reads the project file (read-only connection, `VACUUM INTO` the working copy). The working copy uses WAL.
+- Open copies the project file to the working copy as a plain byte copy under a read lock (no `VACUUM INTO`, no fsync on open). The working copy uses WAL.
 - Save: `VACUUM INTO` `<file>.tmp` in the same folder, then rename over the file. No other file is written next to the project file.
 - Close deletes the working copy. A leftover working copy means a crash.
 - Save runs on a worker: `Project::save` returns at once; use `poll_save`/`wait_for_save`. Tests that open the file before `close` call `wait_for_save` first. Save reads one WAL snapshot on its own connection and never takes the write lock.
