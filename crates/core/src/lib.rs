@@ -1,0 +1,168 @@
+//! Headless core: the project model and its public API (seam 1). No UI, no SQL.
+
+use std::fmt;
+use std::path::Path;
+
+use mmc_store::Store;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapKind {
+    World,
+    Region,
+    Settlement,
+}
+
+impl MapKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            MapKind::World => "world",
+            MapKind::Region => "region",
+            MapKind::Settlement => "settlement",
+        }
+    }
+
+    fn parse(s: &str) -> Option<MapKind> {
+        [MapKind::World, MapKind::Region, MapKind::Settlement]
+            .into_iter()
+            .find(|k| k.as_str() == s)
+    }
+}
+
+/// Size in pixels and scale of a map (ADR-0020).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapSettings {
+    pub kind: MapKind,
+    pub width: u32,
+    pub height: u32,
+    pub metres_per_pixel: f64,
+}
+
+impl MapSettings {
+    pub fn default_for(kind: MapKind) -> MapSettings {
+        let (size, metres_per_pixel) = match kind {
+            MapKind::World => (4096, 1000.0),
+            MapKind::Region => (8192, 10.0),
+            MapKind::Settlement => (4096, 0.5),
+        };
+        MapSettings {
+            kind,
+            width: size,
+            height: size,
+            metres_per_pixel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MapId(i64);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Map {
+    pub id: MapId,
+    pub parent: Option<MapId>,
+    pub settings: MapSettings,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    Store(mmc_store::Error),
+    UnknownMapKind(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Store(e) => e.fmt(f),
+            Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<mmc_store::Error> for Error {
+    fn from(e: mmc_store::Error) -> Self {
+        Error::Store(e)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// An open project. Edits go to a working copy; `save` writes the project file.
+pub struct Project {
+    store: Store,
+    maps: Vec<Map>,
+}
+
+impl Project {
+    /// Creates a project with one root map. `working_copy` is a file path in local app data.
+    pub fn create(working_copy: &Path, root: MapSettings) -> Result<Project> {
+        let store = Store::create(working_copy)?;
+        let id = store.insert_map(
+            None,
+            root.kind.as_str(),
+            root.width,
+            root.height,
+            root.metres_per_pixel,
+        )?;
+        Ok(Project {
+            store,
+            maps: vec![Map {
+                id: MapId(id),
+                parent: None,
+                settings: root,
+            }],
+        })
+    }
+
+    /// Opens the project `file` into a new working copy at `working_copy`.
+    pub fn open(file: &Path, working_copy: &Path) -> Result<Project> {
+        let store = Store::open(file, working_copy)?;
+        let maps = store
+            .maps()?
+            .into_iter()
+            .map(|r| {
+                Ok(Map {
+                    id: MapId(r.id),
+                    parent: r.parent_id.map(MapId),
+                    settings: MapSettings {
+                        kind: MapKind::parse(&r.kind).ok_or(Error::UnknownMapKind(r.kind))?,
+                        width: r.width,
+                        height: r.height,
+                        metres_per_pixel: r.metres_per_pixel,
+                    },
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Project { store, maps })
+    }
+
+    pub fn save(&self, file: &Path) -> Result<()> {
+        Ok(self.store.save(file)?)
+    }
+
+    /// Closes the project and deletes its working copy.
+    pub fn close(self) -> Result<()> {
+        Ok(self.store.close()?)
+    }
+
+    /// All maps in the tree, ordered by id.
+    pub fn maps(&self) -> &[Map] {
+        &self.maps
+    }
+}
+
+impl Project {
+    /// Embeds a copy of an asset; identical content is stored once (ADR-0015).
+    pub fn add_asset(&self, pack_id: &str, asset_id: &str, data: &[u8]) -> Result<()> {
+        Ok(self.store.add_asset(pack_id, asset_id, data)?)
+    }
+
+    pub fn asset(&self, pack_id: &str, asset_id: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.store.asset(pack_id, asset_id)?)
+    }
+
+    pub fn asset_blob_count(&self) -> Result<i64> {
+        Ok(self.store.asset_blob_count()?)
+    }
+}
