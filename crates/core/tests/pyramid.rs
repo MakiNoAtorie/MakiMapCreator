@@ -34,9 +34,13 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
 }
 
 fn id(map: MapId, level: u32, tx: u32, ty: u32) -> TileId {
+    lid(map, Layer::Height, level, tx, ty)
+}
+
+fn lid(map: MapId, layer: Layer, level: u32, tx: u32, ty: u32) -> TileId {
     TileId {
         map,
-        layer: Layer::Height,
+        layer,
         level,
         tx,
         ty,
@@ -57,15 +61,15 @@ fn full(p: &Project, id: TileId) -> Arc<[f32]> {
 }
 
 /// Each pixel of a level is the mean of the 2x2 pixels below it.
-fn assert_pyramid_consistent(p: &Project, map: MapId) {
+fn assert_pyramid_consistent(p: &Project, map: MapId, layer: Layer) {
     let top = p.top_level(map).unwrap();
     for level in 1..=top {
         let n = 1024 / (T << level) as u32;
         for ty in 0..n.max(1) {
             for tx in 0..n.max(1) {
-                let parent = full(p, id(map, level, tx, ty));
+                let parent = full(p, lid(map, layer, level, tx, ty));
                 for (qy, qx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                    let child = full(p, id(map, level - 1, tx * 2 + qx, ty * 2 + qy));
+                    let child = full(p, lid(map, layer, level - 1, tx * 2 + qx, ty * 2 + qy));
                     for y in 0..T / 2 {
                         for x in 0..T / 2 {
                             let c = |dx, dy| child[(2 * y + dy) * T + 2 * x + dx];
@@ -86,13 +90,13 @@ fn edits_undo_and_redo_update_every_level_above() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, map) = project(dir.path());
     assert_eq!(p.top_level(map).unwrap(), 2);
-    assert_pyramid_consistent(&p, map);
+    assert_pyramid_consistent(&p, map, Layer::Height);
     assert!(full(&p, id(map, 2, 0, 0)).iter().any(|&v| v > 0.0));
 
     p.undo(map).unwrap();
     assert!(full(&p, id(map, 2, 0, 0)).iter().all(|&v| v == 0.0));
     p.redo(map).unwrap();
-    assert_pyramid_consistent(&p, map);
+    assert_pyramid_consistent(&p, map, Layer::Height);
 }
 
 #[test]
@@ -144,4 +148,31 @@ fn the_saved_file_has_an_overview_per_map_readable_without_opening() {
     let wc = dir.path().join("wc.sqlite");
     p.close().unwrap();
     assert!(!wc.exists());
+}
+
+#[test]
+fn derived_layers_get_pyramids_and_rebuilds_replace_cached_tiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, map) = project(dir.path());
+    p.wait_for_jobs().unwrap();
+    assert_pyramid_consistent(&p, map, Layer::Slope);
+    let before = full(&p, lid(map, Layer::Slope, 2, 0, 0));
+    assert!(before.iter().any(|&v| v > 0.0));
+
+    p.apply(
+        map,
+        Command::Brush(BrushStroke {
+            layer: Layer::Height,
+            points: vec![StrokePoint {
+                at: RootPoint { x: 800.0, y: 800.0 },
+                pressure: 1.0,
+            }],
+            radius: 60.0,
+            strength: 80.0,
+        }),
+    )
+    .unwrap();
+    p.wait_for_jobs().unwrap();
+    assert_ne!(full(&p, lid(map, Layer::Slope, 2, 0, 0)), before);
+    assert_pyramid_consistent(&p, map, Layer::Slope);
 }

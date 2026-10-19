@@ -23,6 +23,8 @@ pub(crate) struct TileChange {
 pub(crate) enum Change {
     Tiles(Vec<TileChange>),
     Entities(EntityChanges),
+    Page(crate::page::PageChange),
+    Anchor(crate::anchor::AnchorChange),
 }
 
 #[derive(Default)]
@@ -35,7 +37,9 @@ impl Project {
     /// Applies `cmd` to `map` in the working copy and records it in the map's history.
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
         let changes = self.changes(self.map(map)?, &cmd)?;
+        Self::refuse_derived(&changes)?;
         self.write(&changes, true)?;
+        self.after_write(map, &changes);
         let h = self.history.entry(map).or_default();
         h.undone.clear();
         if h.done.len() == UNDO_LIMIT {
@@ -52,6 +56,9 @@ impl Project {
             return Ok(false);
         };
         let res = self.write(&changes, false);
+        if res.is_ok() {
+            self.after_write(map, &changes);
+        }
         let h = self.history.get_mut(&map).unwrap();
         match res {
             Ok(()) => h.undone.push(changes),
@@ -67,6 +74,9 @@ impl Project {
             return Ok(false);
         };
         let res = self.write(&changes, true);
+        if res.is_ok() {
+            self.after_write(map, &changes);
+        }
         let h = self.history.get_mut(&map).unwrap();
         match res {
             Ok(()) => h.done.push_back(changes),
@@ -76,7 +86,7 @@ impl Project {
     }
 
     /// Writes the after records, or the before records when `forward` is false.
-    fn write(&self, changes: &Change, forward: bool) -> Result<()> {
+    fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
         match changes {
             Change::Tiles(tiles) => {
                 let writes: Vec<_> = tiles
@@ -91,6 +101,8 @@ impl Project {
                 self.write_tiles(&writes)
             }
             Change::Entities(e) => self.write_entity_changes(e, forward),
+            Change::Page(p) => self.write_page_change(p, forward),
+            Change::Anchor(a) => self.write_anchor_change(a, forward),
         }
     }
 }

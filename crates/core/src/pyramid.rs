@@ -1,15 +1,15 @@
 //! Tile pyramid: level `l` halves level `l - 1`; each pixel is the mean of 2x2 pixels below.
 //! The top level is one tile over the whole map and serves as the map's overview.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use mmc_store::{Reader, TileKey, TileRecord};
+use mmc_store::{FileReader, TileKey, TileRecord};
 
 use crate::cache::{Tile, TileCache};
-use crate::layer::{Layer, TILE_SIZE, decode, encode};
+use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode};
 use crate::{Map, MapId, MapSettings, Project, Result};
 
 /// One tile of one pyramid level of a layer.
@@ -32,6 +32,38 @@ pub struct Overview {
     pub values: Arc<[f32]>,
 }
 
+/// Writes the 2x2 means of `child` (tile `tx`, `ty`) into its quadrant of `parent`.
+fn downsample(parent: &mut [f32], child: &[f32], tx: u32, ty: u32) {
+    let (t, half) = (TILE_SIZE as usize, TILE_SIZE as usize / 2);
+    let (ox, oy) = ((tx % 2) as usize * half, (ty % 2) as usize * half);
+    for y in 0..half {
+        for x in 0..half {
+            let c = |dx: usize, dy: usize| child[(2 * y + dy) * t + 2 * x + dx];
+            parent[(oy + y) * t + ox + x] = (c(0, 0) + c(1, 0) + c(0, 1) + c(1, 1)) * 0.25;
+        }
+    }
+}
+
+/// Decoded tiles of one level of a layer by (tx, ty); a missing tile is all zeros.
+pub(crate) type Level = BTreeMap<(u32, u32), Vec<f32>>;
+
+/// Levels 1..=`top` of a whole layer from its level 0, for derived layers rebuilt at once.
+pub(crate) fn levels_above(level0: &Level, top: u32) -> Vec<Level> {
+    let mut out: Vec<Level> = Vec::new();
+    for _ in 0..top {
+        let below = out.last().unwrap_or(level0);
+        let mut next = Level::new();
+        for (&(tx, ty), child) in below {
+            let parent = next
+                .entry((tx / 2, ty / 2))
+                .or_insert_with(|| vec![0.0; TILE_LEN]);
+            downsample(parent, child, tx, ty);
+        }
+        out.push(next);
+    }
+    out
+}
+
 /// The level at which one tile covers the whole map.
 pub(crate) fn top_level(s: &MapSettings) -> u32 {
     let side = s.width.max(s.height) as u64;
@@ -52,7 +84,7 @@ fn key(id: TileId) -> TileKey {
 
 /// Reads the overviews of `layer` from a project file without opening it, one per map.
 pub fn read_overviews(file: &Path, layer: Layer) -> Result<Vec<Overview>> {
-    let reader = Reader::open(file)?;
+    let reader = FileReader::open(file)?;
     reader
         .maps()?
         .into_iter()
@@ -123,6 +155,13 @@ impl Project {
         self.tiles().bytes()
     }
 
+    /// Drops cached tiles of derived layers after a rebuild replaced them.
+    pub(crate) fn forget_derived_tiles(&self) {
+        if let Some(cache) = self.cache.get() {
+            cache.forget(|k| Layer::parse(&k.layer).is_some_and(|l| l.is_derived()));
+        }
+    }
+
     /// Writes level-0 tiles and the pyramid tiles above them in one transaction.
     pub(crate) fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
         let mut all = writes.to_vec();
@@ -135,8 +174,6 @@ impl Project {
             Some((k, _)) => self.top_level(MapId(k.map_id))?,
             None => 0,
         };
-        let half = (TILE_SIZE / 2) as usize;
-        let t = TILE_SIZE as usize;
         for level in 1..=top {
             let mut next: HashMap<TileKey, Vec<f32>> = HashMap::new();
             for (k, child) in &cur {
@@ -153,14 +190,7 @@ impl Project {
                         e.insert(decode(rec.as_ref())?)
                     }
                 };
-                let (ox, oy) = ((k.tx % 2) as usize * half, (k.ty % 2) as usize * half);
-                for y in 0..half {
-                    for x in 0..half {
-                        let c = |dx: usize, dy: usize| child[(2 * y + dy) * t + 2 * x + dx];
-                        parent[(oy + y) * t + ox + x] =
-                            (c(0, 0) + c(1, 0) + c(0, 1) + c(1, 1)) * 0.25;
-                    }
-                }
+                downsample(parent, child, k.tx, k.ty);
             }
             for (k, values) in &next {
                 let rec = TileRecord {

@@ -7,8 +7,11 @@ use mmc_store::Store;
 
 mod cache;
 mod command;
+mod jobs;
 mod layer;
+mod pipeline;
 mod pyramid;
+pub mod rng;
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint};
@@ -17,6 +20,14 @@ pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;
 mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
+mod anchor;
+pub use anchor::{
+    AnchorEdit, Anchors, DEFAULT_ANCHOR_TOLERANCE, DerivedFeature, FeatureId, FeatureKind,
+};
+mod page;
+pub use page::{Document, Link, PageEdit, link_markup};
+mod search;
+pub use search::{NameHit, TextHit, TextSearch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -97,11 +108,14 @@ pub enum Error {
     UnknownMapKind(String),
     UnknownMap(MapId),
     CorruptTile,
+    DerivedLayer(Layer),
     UnknownEntityKind(String),
     UnknownEntity(EntityId),
     EntityExists(EntityId),
     InvalidField { key: String, reason: &'static str },
     CorruptEntity,
+    InvalidAnchor(&'static str),
+    UnknownFeature(FeatureId),
 }
 
 impl fmt::Display for Error {
@@ -111,11 +125,20 @@ impl fmt::Display for Error {
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
             Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
             Error::CorruptTile => write!(f, "the file has a damaged map tile"),
+            Error::DerivedLayer(l) => {
+                write!(
+                    f,
+                    "the {} layer is computed and can not be edited",
+                    l.as_str()
+                )
+            }
             Error::UnknownEntityKind(k) => write!(f, "the project has no entity kind {k}"),
             Error::UnknownEntity(id) => write!(f, "the project has no entity with id {}", id.0),
             Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
             Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
             Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
+            Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
+            Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
         }
     }
 }
@@ -135,6 +158,9 @@ pub struct Project {
     store: Store,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
+    names: search::NameIndex,
+    pipeline: pipeline::Pipeline,
+    anchors: anchor::State,
     cache: std::sync::OnceLock<cache::TileCache>,
 }
 
@@ -157,6 +183,9 @@ impl Project {
                 settings: root,
             }],
             history: Default::default(),
+            names: Default::default(),
+            pipeline: Default::default(),
+            anchors: Default::default(),
             cache: Default::default(),
         })
     }
@@ -169,12 +198,17 @@ impl Project {
             .into_iter()
             .map(Map::from_record)
             .collect::<Result<_>>()?;
-        Ok(Project {
+        let mut p = Project {
             store,
             maps,
             history: Default::default(),
+            names: Default::default(),
+            pipeline: Default::default(),
+            anchors: Default::default(),
             cache: Default::default(),
-        })
+        };
+        p.names = p.build_name_index()?;
+        Ok(p)
     }
 
     /// Adds a map with no parent and returns its id.
@@ -200,7 +234,8 @@ impl Project {
     }
 
     /// Closes the project and deletes its working copy.
-    pub fn close(self) -> Result<()> {
+    pub fn close(mut self) -> Result<()> {
+        self.pipeline.shutdown();
         // Tile workers hold read connections to the working copy; stop them first.
         drop(self.cache);
         Ok(self.store.close()?)

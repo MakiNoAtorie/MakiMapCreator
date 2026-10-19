@@ -1,5 +1,8 @@
 //! Seeded, parametric fixture generators shared by tests and the benchmark gate.
 
+mod search;
+pub use search::{LongPages, ManyEntities, word};
+
 use std::path::Path;
 
 use mmc_core::{

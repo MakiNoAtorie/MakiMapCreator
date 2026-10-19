@@ -7,13 +7,13 @@ use rusqlite::Connection;
 use crate::{MapRecord, Result, TileKey, TileRecord};
 
 /// A read-only connection to a project file or a working copy. Sees committed data only.
-pub struct Reader {
+pub struct FileReader {
     conn: Connection,
 }
 
-impl Reader {
-    pub fn open(file: &Path) -> Result<Reader> {
-        Ok(Reader {
+impl FileReader {
+    pub fn open(file: &Path) -> Result<FileReader> {
+        Ok(FileReader {
             conn: crate::open_read_only(file)?,
         })
     }

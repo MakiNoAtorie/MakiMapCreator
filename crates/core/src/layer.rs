@@ -14,13 +14,27 @@ pub(crate) const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 pub enum Layer {
     /// Metres, sea level 0.
     Height,
+    /// Derived: gradient magnitude of height, metres per metre.
+    Slope,
 }
 
 impl Layer {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Layer::Height => "height",
+            Layer::Slope => "slope",
         }
+    }
+
+    pub(crate) const ALL: [Layer; 2] = [Layer::Height, Layer::Slope];
+
+    pub(crate) fn parse(s: &str) -> Option<Layer> {
+        Layer::ALL.into_iter().find(|l| l.as_str() == s)
+    }
+
+    /// Derived layers are written by a pipeline stage, never by commands (ADR-0018).
+    pub fn is_derived(self) -> bool {
+        crate::pipeline::writes(self)
     }
 }
 

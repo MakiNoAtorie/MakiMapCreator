@@ -7,11 +7,18 @@ use rusqlite::{Connection, OpenFlags};
 
 mod assets;
 mod tiles;
+pub use tiles::{LayerTiles, TileConn};
 pub use tiles::{TileKey, TileRecord};
 mod reader;
-pub use reader::Reader;
+pub use reader::FileReader;
 mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
+mod pages;
+pub use pages::PageRecord;
+mod anchors;
+pub use anchors::AnchorRecord;
+mod search;
+pub use search::{Reader, TextHit};
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -29,6 +36,9 @@ const MIGRATIONS: &[&str] = &[
     assets::MIGRATION,
     tiles::MIGRATION,
     entities::MIGRATION,
+    pages::MIGRATION,
+    anchors::MIGRATION,
+    search::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -161,7 +171,7 @@ impl Store {
         maps(&self.conn)
     }
 
-    /// Path of the working copy, for extra read connections (see `Reader`).
+    /// Path of the working copy, for extra read connections (see `FileReader`).
     pub fn working_copy(&self) -> &Path {
         &self.working_copy
     }

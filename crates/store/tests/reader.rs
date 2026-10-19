@@ -1,4 +1,4 @@
-use mmc_store::{Error, Reader, Store, TileKey, TileRecord};
+use mmc_store::{Error, FileReader, Store, TileKey, TileRecord};
 
 fn key(level: u32) -> TileKey {
     TileKey {
@@ -19,14 +19,14 @@ fn reader_sees_committed_tiles_of_the_working_copy_and_the_saved_file() {
         data: vec![1, 2, 3],
         edited: false,
     };
-    let live = Reader::open(store.working_copy()).unwrap();
+    let live = FileReader::open(store.working_copy()).unwrap();
     assert_eq!(live.tile(&key(1)).unwrap(), None);
     store.write_tiles(&[(key(1), Some(rec.clone()))]).unwrap();
     assert_eq!(live.tile(&key(1)).unwrap(), Some(rec.clone()));
 
     let file = tmp.path().join("p.mmc");
     store.save(&file).unwrap();
-    let saved = Reader::open(&file).unwrap();
+    let saved = FileReader::open(&file).unwrap();
     assert_eq!(saved.maps().unwrap(), store.maps().unwrap());
     assert_eq!(saved.tile(&key(1)).unwrap(), Some(rec));
     drop((live, saved));
@@ -38,5 +38,5 @@ fn reader_refuses_a_file_that_is_not_a_project() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("x.txt");
     std::fs::write(&file, b"hello").unwrap();
-    assert!(matches!(Reader::open(&file), Err(Error::NotAProject)));
+    assert!(matches!(FileReader::open(&file), Err(Error::NotAProject)));
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use mmc_store::{Reader, TileKey};
+use mmc_store::{FileReader, TileKey};
 
 use crate::layer::{TILE_LEN, decode};
 
@@ -92,6 +92,13 @@ impl TileCache {
         }
     }
 
+    /// Drops loaded tiles that match, so the next request reloads them.
+    pub(crate) fn forget(&self, matches: impl Fn(&TileKey) -> bool) {
+        let mut s = self.shared.lock();
+        s.epoch += 1;
+        s.tiles.retain(|k, _| !matches(k));
+    }
+
     pub(crate) fn wait_idle(&self) {
         let mut s = self.shared.lock();
         while !s.queue.is_empty() || s.loading > 0 {
@@ -154,7 +161,7 @@ fn work(shared: &Shared, path: PathBuf) {
             }
         };
         if reader.is_none() {
-            reader = Reader::open(&path).ok();
+            reader = FileReader::open(&path).ok();
         }
         // ponytail: a failed read is dropped; the next frame's request retries it.
         let tile = reader
