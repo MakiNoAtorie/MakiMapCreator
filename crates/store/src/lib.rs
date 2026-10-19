@@ -132,6 +132,9 @@ impl Store {
 
     fn init(mut conn: Connection, working_copy: &Path) -> Result<Store> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // No fsync per edit: a running save floods the disk and makes each fsync wait.
+        // WAL stays consistent after an app crash; power loss may drop the last edits.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let tx = conn.transaction()?;
         for sql in &MIGRATIONS[user_version(&tx)? as usize..] {

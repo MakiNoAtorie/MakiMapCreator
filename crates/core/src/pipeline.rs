@@ -238,8 +238,8 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
             if cx.layers.contains_key(&l) {
                 continue;
             }
-            let tiles = match reader.layer_tiles(job.id, l.as_str()) {
-                Ok(t) => t,
+            let tiles = match reader.layer_tiles_until(job.id, l.as_str(), cancelled) {
+                Ok(t) => t?,
                 Err(e) => return Some(Err(e.into())),
             };
             let values = par_map(job.threads, &tiles, cancelled, |(_, r)| decode(Some(r)))?;
