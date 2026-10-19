@@ -1,7 +1,7 @@
 //! Win32 pen reading (WinTab packets or Ink `WM_POINTER`) into `PenEvent`s; from `spikes/pen-test`.
 
 use crate::input::{
-    PenApi, PenEvent, PhaseTracker, WintabState, active_api, normalise_pressure,
+    PenApi, PenEvent, PhaseTracker, WintabState, active_api, contact, normalise_pressure,
     tilt_from_orientation, wintab_is_eraser,
 };
 use std::{cell::RefCell, ffi::c_void, mem::zeroed, ptr::null_mut};
@@ -15,6 +15,8 @@ const PEN_FLAG_BARREL_: u32 = 0x1;
 const PEN_FLAG_INVERTED_: u32 = 0x2;
 const PEN_FLAG_ERASER_: u32 = 0x4;
 const INK_MAX: u32 = 1024;
+/// Ink coalesces moves; its history holds the samples in between.
+const INK_HISTORY: usize = 64;
 
 // wintab.h. Packet field order follows the bit order of PK_DATA.
 const WTI_DEFSYSCTX: u32 = 4;
@@ -23,6 +25,11 @@ const DVC_NAME: u32 = 1;
 const DVC_NPRESSURE: u32 = 15;
 const CXO_MESSAGES: u32 = 0x0004;
 const PK_DATA: u32 = 0x0002 | 0x0004 | 0x0020 | 0x0040 | 0x0080 | 0x0100 | 0x0400 | 0x1000;
+/// Packet status bit: packets were lost because the queue was full.
+const TPS_QUEUE_ERR: u32 = 0x0002;
+/// Queue sizes tried in order; the driver default of about 8 packets overflows in one slow frame.
+const QUEUE_SIZES: [i32; 7] = [1024, 512, 256, 128, 64, 32, 16];
+const PACKET_BATCH: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -62,7 +69,7 @@ struct Axis {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Packet {
     status: u32,
     time: u32,
@@ -78,11 +85,12 @@ struct Packet {
 
 type WtInfo = unsafe extern "system" fn(u32, u32, *mut c_void) -> u32;
 type WtOpen = unsafe extern "system" fn(HWND, *mut LogContext, BOOL) -> *mut c_void;
-type WtPacket = unsafe extern "system" fn(*mut c_void, u32, *mut Packet) -> BOOL;
+type WtPackets = unsafe extern "system" fn(*mut c_void, i32, *mut Packet) -> i32;
+type WtQueueSize = unsafe extern "system" fn(*mut c_void, i32) -> BOOL;
 type WtCtx = unsafe extern "system" fn(*mut c_void, BOOL) -> BOOL;
 
 struct Wintab {
-    packet: WtPacket,
+    packets: WtPackets,
     overlap: WtCtx,
     ctx: *mut c_void,
     msg: u32,
@@ -95,6 +103,8 @@ struct State {
     phase: PhaseTracker,
     queue: Vec<PenEvent>,
     repaint: eframe::egui::Context,
+    /// Packets marked as after a WinTab queue overflow, since the last `drain`.
+    lost: u32,
 }
 
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
@@ -124,19 +134,25 @@ pub fn install(hwnd: isize, setting: PenApi, repaint: eframe::egui::Context) -> 
             phase: PhaseTracker::default(),
             queue: Vec::new(),
             repaint,
+            lost: 0,
         })
     });
     unsafe { SetWindowSubclass(hwnd, Some(subclass), 1, 0) };
     Status { api, wintab: note }
 }
 
-/// Takes the pen events that arrived since the last call.
+/// Takes the pen events that arrived since the last call; logs WinTab queue overflows.
 pub fn drain() -> Vec<PenEvent> {
     STATE.with(|s| {
-        s.borrow_mut()
-            .as_mut()
-            .map(|s| std::mem::take(&mut s.queue))
-            .unwrap_or_default()
+        let mut s = s.borrow_mut();
+        let Some(s) = s.as_mut() else {
+            return Vec::new();
+        };
+        if s.lost > 0 {
+            log::warn!("wintab queue overflowed ({} packets flagged)", s.lost);
+            s.lost = 0;
+        }
+        std::mem::take(&mut s.queue)
     })
 }
 
@@ -154,7 +170,8 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> 
         let f = |n: &[u8]| GetProcAddress(lib, n.as_ptr()).ok_or(WintabState::BadDriver);
         let info: WtInfo = std::mem::transmute(f(b"WTInfoW\0")?);
         let open: WtOpen = std::mem::transmute(f(b"WTOpenW\0")?);
-        let packet: WtPacket = std::mem::transmute(f(b"WTPacket\0")?);
+        let packets: WtPackets = std::mem::transmute(f(b"WTPacketsGet\0")?);
+        let queue_size: WtQueueSize = std::mem::transmute(f(b"WTQueueSizeSet\0")?);
         let overlap: WtCtx = std::mem::transmute(f(b"WTOverlap\0")?);
         if info(0, 0, null_mut()) == 0 {
             return Err(WintabState::NoService);
@@ -173,6 +190,7 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> 
         }
         lc.options |= CXO_MESSAGES;
         lc.pkt_data = PK_DATA;
+        // Absolute mode: `buttons` is the state of every button, bit 0 the tip.
         lc.pkt_mode = 0;
         lc.move_mask = PK_DATA;
         // Output in screen pixels; the negative Y extent flips WinTab's Y-up origin.
@@ -182,6 +200,8 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> 
         if ctx.is_null() {
             return Err(WintabState::NoContext);
         }
+        let queue = QUEUE_SIZES.into_iter().find(|&n| queue_size(ctx, n) != 0);
+        log::info!("wintab queue size {queue:?}");
         let pressure = (axis.min.max(0) as u32, axis.max.max(1) as u32);
         let device = WintabState::Device {
             name: device,
@@ -189,7 +209,7 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> 
         };
         Ok((
             Wintab {
-                packet,
+                packets,
                 overlap,
                 ctx,
                 msg: lc.msg_base,
@@ -200,31 +220,33 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> 
     }
 }
 
-fn push(
-    s: &mut State,
-    hwnd: HWND,
+/// One sample in screen pixels; `tip` is the driver's contact state.
+struct Raw {
     screen: POINT,
     pressure: f32,
+    tip: bool,
     eraser: bool,
     tilt: [f32; 2],
     barrel: bool,
-) {
-    let mut pt = screen;
+}
+
+fn push(s: &mut State, hwnd: HWND, r: Raw) {
+    let mut pt = r.screen;
     unsafe { ScreenToClient(hwnd, &mut pt) };
-    let phase = s.phase.next(pressure > 0.0);
+    let phase = s.phase.next(contact(r.tip, r.pressure));
     s.queue.push(PenEvent {
         pos: [pt.x as f32, pt.y as f32],
-        pressure,
-        eraser,
-        tilt,
-        barrel,
+        pressure: r.pressure,
+        eraser: r.eraser,
+        tilt: r.tilt,
+        barrel: r.barrel,
         phase,
     });
     s.repaint.request_repaint();
 }
 
 /// Returns true when the message is consumed.
-unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
+unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, _lp: LPARAM) -> bool {
     STATE.with(|cell| {
         let mut guard = cell.borrow_mut();
         let Some(s) = guard.as_mut() else {
@@ -235,28 +257,28 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
             WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP if s.api == PenApi::Ink => {
                 let id = (wp & 0xFFFF) as u32;
                 let mut ty: POINTER_INPUT_TYPE = 0;
-                let mut pi: POINTER_PEN_INFO = unsafe { zeroed() };
+                let mut infos: [POINTER_PEN_INFO; INK_HISTORY] = unsafe { zeroed() };
+                let mut n = INK_HISTORY as u32;
                 unsafe {
                     if GetPointerType(id, &mut ty) == 0
                         || ty != PT_PEN
-                        || GetPointerPenInfo(id, &mut pi) == 0
+                        || GetPointerPenInfoHistory(id, &mut n, infos.as_mut_ptr()) == 0
                     {
                         return false;
                     }
                 }
-                let eraser = pi.penFlags & (PEN_FLAG_ERASER_ | PEN_FLAG_INVERTED_) != 0;
-                let barrel = pi.penFlags & PEN_FLAG_BARREL_ != 0;
-                let tilt = [pi.tiltX as f32, pi.tiltY as f32];
-                let p = normalise_pressure(pi.pressure, 0, INK_MAX);
-                push(
-                    s,
-                    hwnd,
-                    pi.pointerInfo.ptPixelLocation,
-                    p,
-                    eraser,
-                    tilt,
-                    barrel,
-                );
+                // History is newest first.
+                for pi in infos[..(n as usize).min(INK_HISTORY)].iter().rev() {
+                    let raw = Raw {
+                        screen: pi.pointerInfo.ptPixelLocation,
+                        pressure: normalise_pressure(pi.pressure, 0, INK_MAX),
+                        tip: pi.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT != 0,
+                        eraser: pi.penFlags & (PEN_FLAG_ERASER_ | PEN_FLAG_INVERTED_) != 0,
+                        tilt: [pi.tiltX as f32, pi.tiltY as f32],
+                        barrel: pi.penFlags & PEN_FLAG_BARREL_ != 0,
+                    };
+                    push(s, hwnd, raw);
+                }
                 false
             }
             WM_ACTIVATE => {
@@ -272,16 +294,31 @@ unsafe fn handle(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
                 if m != w.msg {
                     return false;
                 }
-                let mut pk = Packet::default();
-                if unsafe { (w.packet)(lp as *mut c_void, wp as u32, &mut pk) } == 0 {
-                    return true;
+                let (packets, ctx, range) = (w.packets, w.ctx, w.pressure);
+                // One message may stand for many queued packets; take them all, oldest first.
+                let mut buf = [Packet::default(); PACKET_BATCH];
+                loop {
+                    let n = unsafe { packets(ctx, PACKET_BATCH as i32, buf.as_mut_ptr()) };
+                    let n = n.clamp(0, PACKET_BATCH as i32) as usize;
+                    for pk in &buf[..n] {
+                        if pk.status & TPS_QUEUE_ERR != 0 {
+                            s.lost += 1;
+                        }
+                        // Bit 0 is the tip; any other button is a barrel switch.
+                        let raw = Raw {
+                            screen: POINT { x: pk.x, y: pk.y },
+                            pressure: normalise_pressure(pk.pressure, range.0, range.1),
+                            tip: pk.buttons & 1 != 0,
+                            eraser: wintab_is_eraser(pk.cursor),
+                            tilt: tilt_from_orientation(pk.azimuth, pk.altitude),
+                            barrel: pk.buttons & !1 != 0,
+                        };
+                        push(s, hwnd, raw);
+                    }
+                    if n < PACKET_BATCH {
+                        break;
+                    }
                 }
-                let p = normalise_pressure(pk.pressure, w.pressure.0, w.pressure.1);
-                let tilt = tilt_from_orientation(pk.azimuth, pk.altitude);
-                // Bit 0 is the tip; any other button is a barrel switch.
-                let barrel = pk.buttons & !1 != 0;
-                let eraser = wintab_is_eraser(pk.cursor);
-                push(s, hwnd, POINT { x: pk.x, y: pk.y }, p, eraser, tilt, barrel);
                 true
             }
         }

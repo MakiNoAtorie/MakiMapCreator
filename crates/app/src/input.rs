@@ -23,7 +23,12 @@ pub enum Phase {
     Up,
 }
 
-/// Derives the phase from successive contact states; both APIs report contact as pressure.
+/// Contact from the driver's tip state, else pressure; a zero-pressure dip with the tip down stays one stroke.
+pub fn contact(tip: bool, pressure: f32) -> bool {
+    tip || pressure > 0.0
+}
+
+/// Derives the phase from successive contact states.
 #[derive(Default)]
 pub struct PhaseTracker {
     contact: bool,
@@ -150,6 +155,19 @@ mod tests {
             .collect();
         use Phase::*;
         assert_eq!(got, [Hover, Down, Move, Up, Hover]);
+    }
+
+    #[test]
+    fn a_pressure_dip_with_the_tip_down_stays_one_stroke() {
+        let mut t = PhaseTracker::default();
+        let got: Vec<Phase> = [(true, 0.4), (true, 0.0), (true, 0.3), (false, 0.0)]
+            .into_iter()
+            .map(|(tip, p)| t.next(contact(tip, p)))
+            .collect();
+        use Phase::*;
+        assert_eq!(got, [Down, Move, Move, Up]);
+        // Without a tip state, pressure decides.
+        assert!(contact(false, 0.1) && !contact(false, 0.0));
     }
 
     #[test]
