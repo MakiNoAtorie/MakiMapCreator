@@ -101,8 +101,12 @@ impl Storage for Store {
         Ok(Store::generations(self, map_id)?)
     }
 
-    fn outlines(&self, map_id: i64) -> R<Vec<OutlineRecord>> {
-        Ok(Store::outlines(self, map_id)?)
+    fn objects(&self, map_id: i64) -> R<Vec<ObjectRecord>> {
+        Ok(Store::objects(self, map_id)?)
+    }
+
+    fn next_object_id(&self) -> R<i64> {
+        Ok(Store::next_object_id(self)?)
     }
 
     fn insert_child_map(&self, m: &NewChildMap) -> R<i64> {

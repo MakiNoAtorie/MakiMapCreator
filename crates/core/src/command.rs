@@ -21,6 +21,8 @@ pub enum Command {
     Paint(crate::PaintStroke),
     /// A generator's output (ADR-0003).
     Generate(crate::Generation),
+    /// A map object edit on the map it is applied on.
+    Object(crate::ObjectEdit),
 }
 
 /// Adds `strength * pressure * falloff` to `layer` around each point.
@@ -53,6 +55,7 @@ impl Project {
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
             Command::Paint(s) => Ok(Change::Tiles(self.paint(map, s)?)),
             Command::Generate(g) => Ok(Change::Generation(self.generation_change(map, g)?)),
+            Command::Object(e) => Ok(Change::Objects(self.object_change(map.id, e)?)),
         }
     }
 

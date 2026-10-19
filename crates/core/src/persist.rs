@@ -103,12 +103,18 @@ pub struct GenerationRecord {
     pub app_version: String,
 }
 
-/// The outline polygon of an entity on a map; `points` is opaque to the backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutlineRecord {
+/// A map object; `points` is opaque to the backend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectRecord {
+    pub id: i64,
     pub map_id: i64,
-    pub entity_id: i64,
+    pub layer: String,
+    /// "point", "path" or "polygon".
+    pub shape: String,
     pub points: Vec<u8>,
+    pub entity_id: Option<i64>,
+    pub label_dx: Option<f64>,
+    pub label_dy: Option<f64>,
 }
 
 /// A rectangle of one parent layer: parent pixels `x0..x0+width`, `y0..y0+height`.
@@ -187,8 +193,8 @@ pub enum Write {
     Anchor(i64, Option<AnchorRecord>),
     /// `false` removes the generation record.
     Generation(GenerationRecord, bool),
-    /// `false` removes the outline.
-    Outline(OutlineRecord, bool),
+    /// `None` deletes the map object.
+    Object(i64, Option<ObjectRecord>),
     /// `false` removes the user field.
     FieldDef(FieldDefRecord, bool),
     /// Flags a map deleted or not.
@@ -254,8 +260,10 @@ pub trait Storage: Send {
     fn next_generation_id(&self) -> Result<i64>;
     /// Generations of a map, oldest first.
     fn generations(&self, map_id: i64) -> Result<Vec<GenerationRecord>>;
-    /// Outlines of existing entities on a map, ordered by entity id.
-    fn outlines(&self, map_id: i64) -> Result<Vec<OutlineRecord>>;
+    /// Map objects of a map, ordered by id.
+    fn objects(&self, map_id: i64) -> Result<Vec<ObjectRecord>>;
+    /// The id the next new map object gets; ids are never reused.
+    fn next_object_id(&self) -> Result<i64>;
 
     /// Inserts a child map with its outline and parent context in one transaction.
     fn insert_child_map(&self, m: &NewChildMap) -> Result<i64>;

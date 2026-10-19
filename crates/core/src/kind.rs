@@ -98,6 +98,11 @@ pub trait MapKindModule: Send + Sync {
     /// Raster layers; a layer a stage writes is derived, the others are authored.
     fn layers(&self) -> &'static [Layer];
 
+    /// Map object layers (points, paths, polygons). `Layer::OUTLINES` is always one.
+    fn object_layers(&self) -> &'static [Layer] {
+        &[]
+    }
+
     /// Stages that compute the derived layers (ADR-0018).
     fn stages(&self) -> &'static [Stage] {
         &[]

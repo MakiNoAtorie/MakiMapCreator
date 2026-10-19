@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use mmc_store::{APPLICATION_ID, Error, SCHEMA_VERSION, Store};
+use mmc_store::{APPLICATION_ID, Error, MIGRATIONS, SCHEMA_VERSION, Store};
 use rusqlite::Connection;
 
 fn dir_names(dir: &Path) -> Vec<String> {
@@ -105,6 +105,46 @@ fn open_runs_migrations_on_an_older_file() {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION);
+}
+
+#[test]
+fn entity_outlines_of_an_older_file_become_map_objects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("old.mmc");
+    let before = MIGRATIONS
+        .iter()
+        .position(|m| m.contains("CREATE TABLE map_objects"))
+        .unwrap();
+    {
+        let conn = Connection::open(&file).unwrap();
+        conn.pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        for m in &MIGRATIONS[..before] {
+            conn.execute_batch(m).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO maps (kind, width, height, metres_per_pixel) VALUES ('world', 4, 4, 1);
+             INSERT INTO entities (id, kind, name, fields) VALUES (7, 'region', 'A', '{}');
+             INSERT INTO outlines (map_id, entity_id, points) VALUES (1, 7, x'0102');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", before as i32)
+            .unwrap();
+    }
+    let store = Store::open(&file, &tmp.path().join("wc.sqlite")).unwrap();
+    let objects = store.objects(1).unwrap();
+    assert_eq!(objects.len(), 1);
+    let o = &objects[0];
+    assert_eq!(
+        (
+            o.layer.as_str(),
+            o.shape.as_str(),
+            o.entity_id,
+            o.points.clone()
+        ),
+        ("outlines", "polygon", Some(7), vec![1, 2])
+    );
+    assert!(store.next_object_id().unwrap() > o.id);
 }
 
 #[test]

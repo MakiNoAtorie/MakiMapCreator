@@ -21,14 +21,15 @@ mod generations;
 mod save;
 pub use save::save_snapshot;
 mod delete;
+mod objects;
 mod port;
 mod resync;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
 
-/// Ordered migrations; `user_version` is the count applied.
-const MIGRATIONS: &[&str] = &[
+/// Ordered migrations; `user_version` is the count applied. Public for migration tests.
+pub const MIGRATIONS: &[&str] = &[
     "CREATE TABLE maps (
         id INTEGER PRIMARY KEY,
         parent_id INTEGER REFERENCES maps(id),
@@ -48,6 +49,7 @@ const MIGRATIONS: &[&str] = &[
     delete::MIGRATION,
     resync::MIGRATION,
     generations::PARAMS_MIGRATION,
+    objects::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -200,7 +202,7 @@ impl Store {
                 Write::Page(p) => pages::write_page(&tx, p)?,
                 Write::Anchor(id, rec) => anchors::write_anchor(&tx, *id, rec.as_ref())?,
                 Write::Generation(g, present) => generations::write_generation(&tx, g, *present)?,
-                Write::Outline(o, present) => generations::write_outline(&tx, o, *present)?,
+                Write::Object(id, rec) => objects::write_object(&tx, *id, rec.as_ref())?,
                 Write::FieldDef(d, present) => entities::write_field_def(&tx, d, *present)?,
                 Write::MapDeleted(id, d) => delete::write_map_deleted(&tx, *id, *d)?,
                 Write::ChildLink(id, link) => delete::write_child_link(&tx, *id, link.as_ref())?,

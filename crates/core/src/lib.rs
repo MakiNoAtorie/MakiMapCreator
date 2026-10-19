@@ -30,6 +30,8 @@ mod search;
 pub use search::{NameHit, TextHit, TextSearch};
 mod paint;
 pub use paint::PaintStroke;
+mod object;
+pub use object::{MapObject, ObjectEdit, ObjectId, Shape};
 mod generation;
 pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
 mod kind;
@@ -129,6 +131,9 @@ pub enum Error {
     UnknownGenerator(String),
     InvalidChild(&'static str),
     OutsideOutline,
+    UnknownObject(ObjectId),
+    NotAnObjectLayer(Layer),
+    InvalidObject(ObjectId),
     OwnMapChoice(EntityId),
     StalePlan,
 }
@@ -162,6 +167,9 @@ impl fmt::Display for Error {
             Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
             Error::InvalidChild(why) => write!(f, "child map: {why}"),
             Error::OutsideOutline => write!(f, "the edit is outside the area this map owns"),
+            Error::UnknownObject(id) => write!(f, "the map has no object with id {}", id.0),
+            Error::NotAnObjectLayer(l) => write!(f, "{} is not an object layer", l.as_str()),
+            Error::InvalidObject(id) => write!(f, "object {} has a wrong id or shape", id.0),
             Error::OwnMapChoice(id) => write!(
                 f,
                 "entity {} has its own map: choose to delete the map or keep it as a root map",

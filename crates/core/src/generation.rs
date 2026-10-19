@@ -1,7 +1,7 @@
 //! One-shot generation (ADR-0003): a generator's output is one command; the file records
 //! the generator, seed and app version of each run (ADR-0021).
 
-use crate::persist::{EntityRecord, GenerationRecord, OutlineRecord, TileRecord, Write};
+use crate::persist::{EntityRecord, GenerationRecord, ObjectRecord, TileRecord, Write};
 
 use crate::layer::{TILE_LEN, TILE_SIZE, encode};
 use crate::undo::TileChange;
@@ -60,7 +60,7 @@ fn decode_params(s: &str) -> Result<Vec<(String, f64)>> {
 pub(crate) struct GenerationChange {
     pub(crate) record: GenerationRecord,
     entities: Vec<EntityRecord>,
-    outlines: Vec<OutlineRecord>,
+    objects: Vec<ObjectRecord>,
     pub(crate) tiles: Vec<TileChange>,
 }
 
@@ -96,8 +96,8 @@ impl GenerationChange {
         for e in &self.entities {
             rows.push(Write::Entity(e.id, forward.then(|| e.clone())));
         }
-        for o in &self.outlines {
-            rows.push(Write::Outline(o.clone(), forward));
+        for o in &self.objects {
+            rows.push(Write::Object(o.id, forward.then(|| o.clone())));
         }
         rows.push(Write::Generation(self.record.clone(), forward));
         rows
@@ -118,7 +118,7 @@ impl Project {
                 app_version: APP_VERSION.into(),
             },
             entities: vec![],
-            outlines: vec![],
+            objects: vec![],
             tiles: vec![],
         };
         let s = map.settings;
@@ -145,7 +145,8 @@ impl Project {
                 }
             }
         }
-        for (id, e) in (first..).zip(&g.entities) {
+        let objects = self.store.next_object_id()?..;
+        for (next_object, (id, e)) in objects.zip((first..).zip(&g.entities)) {
             if !kinds.iter().any(|k| k.id == e.kind) {
                 return Err(Error::UnknownEntityKind(e.kind.clone()));
             }
@@ -155,11 +156,15 @@ impl Project {
                 name: e.name.clone(),
                 fields: "{}".into(),
             });
-            c.outlines.push(OutlineRecord {
-                map_id: map.id.0,
-                entity_id: id,
-                points: encode_outline(&e.outline),
-            });
+            let outline = crate::MapObject {
+                id: crate::ObjectId(next_object),
+                layer: Layer::OUTLINES,
+                shape: crate::Shape::Polygon,
+                points: e.outline.clone(),
+                entity: Some(EntityId(id)),
+                label_offset: None,
+            };
+            c.objects.push(crate::object::record_of(map.id, &outline));
         }
         Ok(c)
     }
@@ -185,14 +190,18 @@ impl Project {
         }
     }
 
-    /// Outlines of entities on `map`, ordered by entity id.
+    /// Outlines of existing entities on `map` (polygons on `Layer::OUTLINES`), by entity id.
     pub fn outlines(&self, map: MapId) -> Result<Vec<(EntityId, Vec<RootPoint>)>> {
-        self.map(map)?;
-        self.store
-            .outlines(map.0)?
-            .into_iter()
-            .map(|o| Ok((EntityId(o.entity_id), decode_outline(&o.points)?)))
-            .collect()
+        let mut out = vec![];
+        for o in self.objects(map)? {
+            if let (Layer::OUTLINES, crate::Shape::Polygon, Some(e)) = (o.layer, o.shape, o.entity)
+                && self.store.entity(e.0)?.is_some()
+            {
+                out.push((e, o.points));
+            }
+        }
+        out.sort_by_key(|o| o.0);
+        Ok(out)
     }
 
     /// Generator runs on `map`, oldest first.

@@ -22,6 +22,8 @@ impl Layer {
     pub const HEIGHT: Layer = Layer("height");
     /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
     pub const LOCK: Layer = Layer("lock");
+    /// Object layer: the outline polygons of entities on a map, for example generated regions.
+    pub const OUTLINES: Layer = Layer("outlines");
 
     pub fn as_str(self) -> &'static str {
         self.0

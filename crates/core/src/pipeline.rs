@@ -20,7 +20,11 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
         Change::Tiles(t) => t.iter().map(|c| c.key.layer).collect(),
         Change::Generation(g) => g.tiles.iter().map(|c| c.key.layer).collect(),
         Change::Resync(r) => r.tiles().iter().map(|c| c.key.layer).collect(),
-        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => vec![],
+        Change::Entities(_)
+        | Change::Page(_)
+        | Change::Anchor(_)
+        | Change::Deletion(_)
+        | Change::Objects(_) => vec![],
     }
 }
 

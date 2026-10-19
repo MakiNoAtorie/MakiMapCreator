@@ -47,7 +47,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Deleting map M goes to the history of M's parent; for a root map, to the project history (`undo_project`, key `MapId(0)`). A `Change` variant that deletes maps is handled in `delete::history_key`.
 - Deleted maps are flagged, not removed, until the project is next opened. A new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`.
 - Every edit returns one `undo::Change`; `write(change, forward)` writes the after or before records.
-- Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
+- Entity and map object ids come from AUTOINCREMENT sequences and are never reused, so redo stays safe across maps.
+- Map objects (point, path, polygon; optional entity and label offset) live on object layers: the kind's `object_layers` plus `Layer::OUTLINES`. Entity outlines are polygons on `Layer::OUTLINES`; edits are `Command::Object`.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
 - Search: FTS tables live in `store/src/search.rs` (rowid = entity id), kept in the same transaction as entity and page writes. The in-memory name index lives in `Project` and is updated in `write_entity_changes`.
 - Write raster tiles through core (`Project::write_rows`), never `Storage::write` directly: it updates the pyramid and the tile cache.

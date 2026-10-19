@@ -67,7 +67,8 @@ pub(crate) fn write_child_link(tx: &Connection, id: i64, link: Option<&ChildLink
 pub(crate) const PURGE: &str = "
     CREATE TEMP TABLE gone AS SELECT id FROM maps WHERE deleted;
     DELETE FROM tiles WHERE map_id IN gone;
-    DELETE FROM outlines WHERE map_id IN gone OR entity_id NOT IN (SELECT id FROM entities);
+    DELETE FROM map_objects WHERE map_id IN gone
+        OR (entity_id IS NOT NULL AND entity_id NOT IN (SELECT id FROM entities));
     DELETE FROM generations WHERE map_id IN gone;
     DELETE FROM parent_context WHERE map_id IN gone;
     DELETE FROM child_maps WHERE map_id IN gone;

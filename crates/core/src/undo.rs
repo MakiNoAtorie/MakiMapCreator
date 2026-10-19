@@ -36,6 +36,7 @@ pub(crate) enum Change {
     Generation(crate::generation::GenerationChange),
     Deletion(crate::delete::DeletionChange),
     Resync(crate::resync::ResyncChange),
+    Objects(crate::object::ObjectChange),
 }
 
 #[derive(Default)]
@@ -114,6 +115,7 @@ impl Project {
             Change::Generation(g) => self.write_generation_change(g, forward),
             Change::Deletion(d) => self.write_deletion(d, forward),
             Change::Resync(r) => self.write_resync_change(r, forward),
+            Change::Objects(o) => self.store.write(&o.rows(forward)),
         };
         res?;
         self.mark_out_of_date(changes)

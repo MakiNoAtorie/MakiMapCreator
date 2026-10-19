@@ -139,7 +139,11 @@ impl Project {
             Change::Tiles(t) => t.as_slice(),
             Change::Generation(g) => &g.tiles,
             Change::Resync(r) => r.tiles(),
-            Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => {
+            Change::Entities(_)
+            | Change::Page(_)
+            | Change::Anchor(_)
+            | Change::Deletion(_)
+            | Change::Objects(_) => {
                 return Ok(());
             }
         };
