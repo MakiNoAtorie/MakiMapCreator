@@ -31,3 +31,18 @@ fn create_save_reopen_keeps_map_tree_and_settings() {
     assert_eq!(project.maps(), before.as_slice());
     project.close().unwrap();
 }
+
+#[test]
+fn a_project_keeps_one_seed_and_new_projects_differ() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = RegionKind.default_settings();
+    let mut a = mmc_fixtures::create(&dir.path().join("a.sqlite"), s).unwrap();
+    let b = mmc_fixtures::create(&dir.path().join("b.sqlite"), s).unwrap();
+    let seed = a.seed().unwrap();
+    assert_ne!(seed, b.seed().unwrap());
+    let file = dir.path().join("a.mmc");
+    a.save(&file);
+    a.close().unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("c.sqlite")).unwrap();
+    assert_eq!(q.seed().unwrap(), seed);
+}

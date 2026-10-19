@@ -43,6 +43,10 @@ impl Storage for Store {
         Ok(Store::maps(self)?)
     }
 
+    fn seed(&self) -> R<u64> {
+        Ok(Store::seed(self)? as u64)
+    }
+
     fn tile(&self, key: &TileKey) -> R<Option<TileRecord>> {
         Ok(Store::tile(self, key)?)
     }

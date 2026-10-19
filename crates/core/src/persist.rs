@@ -247,6 +247,8 @@ pub trait Storage: Send {
     ) -> Result<i64>;
     /// Live maps, ordered by id.
     fn maps(&self) -> Result<Vec<MapRecord>>;
+    /// The project seed, set once when the project is made.
+    fn seed(&self) -> Result<u64>;
     fn tile(&self, key: &TileKey) -> Result<Option<TileRecord>>;
     /// Level-0 tiles of a layer that the user edited by hand, ordered by (tx, ty).
     fn edited_tiles(&self, map_id: i64, layer: Layer) -> Result<Vec<(u32, u32)>>;

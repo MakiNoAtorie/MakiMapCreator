@@ -53,6 +53,9 @@ pub const MIGRATIONS: &[&str] = &[
     resync::MIGRATION,
     generations::PARAMS_MIGRATION,
     objects::MIGRATION,
+    // One project seed (ADR-0021); a new or older file gets a random one.
+    "CREATE TABLE project (seed INTEGER NOT NULL);
+     INSERT INTO project (seed) VALUES (random());",
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -281,6 +284,13 @@ impl Store {
     /// All maps, ordered by id.
     pub fn maps(&self) -> Result<Vec<MapRecord>> {
         maps(&self.conn)
+    }
+
+    /// The u64 project seed, bit for bit.
+    pub fn seed(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT seed FROM project", [], |r| r.get(0))?)
     }
 
     /// Writes all rows in one transaction.

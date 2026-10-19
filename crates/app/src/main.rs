@@ -286,6 +286,8 @@ impl App {
             return;
         };
         self.close();
+        // Generator runs default to the project seed, so neighbouring child maps match.
+        self.seed = project.seed().unwrap_or(1);
         self.snap = Snapshot {
             maps: project.maps().to_vec(),
             ..Default::default()

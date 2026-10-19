@@ -301,6 +301,12 @@ impl Project {
         &self.maps
     }
 
+    /// The project seed (ADR-0021). Generator runs default to it, so neighbouring child maps
+    /// match at their shared edges.
+    pub fn seed(&self) -> Result<u64> {
+        self.store.seed()
+    }
+
     /// The map kinds this project was opened with.
     pub fn kinds(&self) -> &Kinds {
         &self.kinds

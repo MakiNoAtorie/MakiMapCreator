@@ -41,6 +41,7 @@ pub struct GeneratorDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenRun {
     pub generator: String,
+    /// The project seed unless the user picks another (`Project::seed`).
     pub seed: u64,
     /// Values by parameter id; a missing one takes the declared default.
     pub params: Vec<(String, f64)>,
