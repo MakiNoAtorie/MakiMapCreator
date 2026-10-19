@@ -81,6 +81,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Draw passes live in `mmc-render`, keyed by `Layer`; a kind lists only its `render_layers`.
 - A generator returns one `Command::Generate`; core assigns entity ids and records generator, seed and `APP_VERSION`.
 - A store write that also writes entities calls `write_entity_rows` inside its own transaction; a core path that creates entities updates `names`.
+- Each map has a root-space `origin` (root maps at 0,0) on its own pixel grid. Generators compute pixel centres from global indices: `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree.
+- Generated tiles have `edited = false`. Child-map store code lives in `store/src/children.rs`.
+- A kind's seam tests go in `crates/kind-<name>/tests/`; dev-dependencies include the parent kind.
 
 ## Pipeline and jobs
 
