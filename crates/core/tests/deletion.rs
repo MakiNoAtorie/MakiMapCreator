@@ -364,3 +364,29 @@ fn creating_a_child_map_undoes_and_redoes_from_the_parent_history() {
     assert_eq!(map(&p, t), town);
     assert_eq!(land(&p, t, at(6.1e3, 6.1e3)), Some(0.75));
 }
+
+#[test]
+fn undoing_a_parent_deletion_restores_the_out_of_date_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let Tree {
+        mut p,
+        world,
+        region_map: r,
+        ..
+    } = tree(dir.path());
+    let s = PaintStroke {
+        layer: LAND,
+        points: vec![at(8e3, 8e3)],
+        radius: 2e3,
+        value: 1.0,
+    };
+    p.apply(world, Command::Paint(s)).unwrap();
+    assert!(p.is_out_of_date(r).unwrap());
+    p.delete_map(world).unwrap();
+    assert!(
+        !p.is_out_of_date(r).unwrap(),
+        "a root map is never out of date"
+    );
+    assert!(p.undo_project().unwrap());
+    assert!(p.is_out_of_date(r).unwrap());
+}

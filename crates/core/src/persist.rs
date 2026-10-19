@@ -161,6 +161,7 @@ pub struct ChildLink {
     pub entity_id: i64,
     pub outline: Vec<u8>,
     pub context: Vec<ContextRecord>,
+    pub out_of_date: bool,
 }
 
 /// What a re-sync replaces on a child map; `outline` and context `data` are opaque.

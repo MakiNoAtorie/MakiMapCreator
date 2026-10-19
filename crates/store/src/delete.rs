@@ -20,16 +20,17 @@ impl Store {
         else {
             return Ok(None);
         };
-        let (entity_id, outline) = self.conn.query_row(
-            "SELECT entity_id, outline FROM child_maps WHERE map_id = ?1",
+        let (entity_id, outline, out_of_date) = self.conn.query_row(
+            "SELECT entity_id, outline, out_of_date FROM child_maps WHERE map_id = ?1",
             [map_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         Ok(Some(ChildLink {
             parent_id,
             entity_id,
             outline,
             context: crate::children::context(&self.conn, map_id)?,
+            out_of_date,
         }))
     }
 }
@@ -55,8 +56,8 @@ pub(crate) fn write_child_link(tx: &Connection, id: i64, link: Option<&ChildLink
         params![id, l.parent_id],
     )?;
     tx.execute(
-        "INSERT INTO child_maps (map_id, entity_id, outline) VALUES (?1, ?2, ?3)",
-        params![id, l.entity_id, l.outline],
+        "INSERT INTO child_maps (map_id, entity_id, outline, out_of_date) VALUES (?1, ?2, ?3, ?4)",
+        params![id, l.entity_id, l.outline, l.out_of_date],
     )?;
     crate::children::insert_context(tx, id, &l.context)
 }
