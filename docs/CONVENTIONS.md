@@ -90,6 +90,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Each map has a root-space `origin` (root maps at 0,0) on its own pixel grid. Generators compute pixel centres from global indices: `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree.
 - Generated tiles have `edited = false`. Child-map store code lives in `store/src/children.rs`.
 - A kind's seam tests go in `crates/kind-<name>/tests/`; dev-dependencies include the parent kind.
+- Out-of-date marking runs in `Project::write`, so every tile write flags the child maps it touches.
+- Regeneration and re-sync are preview (a `RegenPlan`, no writes) then `apply_plan` (one command). A plan whose `before` records changed is refused with `StalePlan`. Edited tiles and locked pixels (`Layer::Lock` > 0.5) are never overwritten.
 
 ## Pipeline and jobs
 
