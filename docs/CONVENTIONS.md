@@ -59,6 +59,10 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `mmc-app` uses eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent`; Win32 code stays in `pen_win.rs` behind `cfg(windows)`.
 - `PenEvent.pos` is in window client physical pixels; divide by `pixels_per_point` for egui points.
 - Win32 calls use the `windows-sys` version that eframe uses.
+- UI strings live in `crates/app/i18n/en-US/main.ftl`, read through `i18n::tr`/`tr_args`. Numbers are formatted in Rust before they go in as arguments.
+- Fonts go in `crates/app/fonts/` with the names in `theme::FONT_FILES`; missing files fall back to egui defaults.
+- Project file extension `.mmc`; working copies in `%LOCALAPPDATA%/MakiMapCreator/working/`.
+- The app holds the project in `Arc<Mutex<Option<Project>>>`; the UI thread only uses `try_lock`, except on open and close.
 
 ## Benchmark gate
 
