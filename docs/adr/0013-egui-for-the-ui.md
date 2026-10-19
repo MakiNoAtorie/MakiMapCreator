@@ -6,5 +6,5 @@ We chose egui because it is immediate-mode (no widget state to keep in sync with
 
 ## Consequences
 
-- Phase 0 decides between eframe and our own winit loop with `egui-winit` and `egui-wgpu`. The deciding test is WinTab: the window must receive WinTab packets (by subclassing the window procedure), and the map canvas must get pen events with full pressure.
+- The app runs on eframe (wgpu backend), not on our own winit loop with `egui-winit` and `egui-wgpu`. The deciding test was WinTab: eframe gives the window handle at startup, so the app subclasses the window procedure (`SetWindowSubclass`), reads WinTab packets or Windows Ink `WM_POINTER` messages there, and queues them as one pen event type for the map canvas, with the full driver pressure range. eframe needs less code, and nothing in the pen path needs control of the loop. Change to our own loop only if a later need (for example, frame pacing for the map renderer) is blocked by eframe.
 - The page editor is a custom egui widget, not `TextEdit` (ADR-0012).
