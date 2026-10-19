@@ -37,6 +37,8 @@ pub(crate) enum Change {
     Deletion(crate::delete::DeletionChange),
     Resync(crate::resync::ResyncChange),
     Objects(crate::object::ObjectChange),
+    /// A child map was made; undo removes it.
+    NewMap(crate::Map),
 }
 
 #[derive(Default)]
@@ -116,6 +118,7 @@ impl Project {
             Change::Deletion(d) => self.write_deletion(d, forward),
             Change::Resync(r) => self.write_resync_change(r, forward),
             Change::Objects(o) => self.store.write(&o.rows(forward)),
+            Change::NewMap(m) => self.write_new_map(m, forward),
         };
         res?;
         self.mark_out_of_date(changes)

@@ -338,3 +338,29 @@ fn a_reopened_project_no_longer_has_the_deleted_map() {
     assert_eq!(q.maps(), &expected[..]);
     assert_eq!(map(&q, t).parent, None);
 }
+
+#[test]
+fn creating_a_child_map_undoes_and_redoes_from_the_parent_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let Tree {
+        mut p,
+        world,
+        region_map: r,
+        town_map: t,
+        ..
+    } = tree(dir.path());
+    assert!(p.undo(world).unwrap(), "undo the page edit");
+    // The region map has a child of its own, so its creation can not be undone yet.
+    let err = p.undo(world).unwrap_err();
+    assert!(matches!(err, Error::MapHasChildren(m) if m == r), "{err}");
+    assert!(p.maps().iter().any(|m| m.id == r));
+
+    let town = map(&p, t);
+    assert!(p.undo(r).unwrap(), "undo the paint on the region map");
+    assert!(p.undo(r).unwrap(), "undo the town map's creation");
+    assert!(p.maps().iter().all(|m| m.id != t));
+    assert!(matches!(p.outlines(t), Err(Error::UnknownMap(_))));
+    assert!(p.redo(r).unwrap());
+    assert_eq!(map(&p, t), town);
+    assert_eq!(land(&p, t, at(6.1e3, 6.1e3)), Some(0.75));
+}

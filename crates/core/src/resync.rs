@@ -188,7 +188,8 @@ impl Project {
             | Change::Page(_)
             | Change::Anchor(_)
             | Change::Deletion(_)
-            | Change::Objects(_) => {
+            | Change::Objects(_)
+            | Change::NewMap(_) => {
                 return Ok(());
             }
         };

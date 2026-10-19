@@ -132,6 +132,8 @@ pub enum Error {
     UnknownObject(ObjectId),
     NotAnObjectLayer(Layer),
     InvalidObject(ObjectId),
+    /// Undo of a child map's creation while it has child maps of its own.
+    MapHasChildren(MapId),
     OwnMapChoice(EntityId),
     StalePlan,
 }
@@ -169,6 +171,9 @@ impl fmt::Display for Error {
             Error::UnknownObject(id) => write!(f, "the map has no object with id {}", id.0),
             Error::NotAnObjectLayer(l) => write!(f, "{} is not an object layer", l.as_str()),
             Error::InvalidObject(id) => write!(f, "object {} has a wrong id or shape", id.0),
+            Error::MapHasChildren(id) => {
+                write!(f, "map {} has child maps; delete them first", id.0)
+            }
             Error::OwnMapChoice(id) => write!(
                 f,
                 "entity {} has its own map: choose to delete the map or keep it as a root map",

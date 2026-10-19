@@ -24,7 +24,8 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
         | Change::Page(_)
         | Change::Anchor(_)
         | Change::Deletion(_)
-        | Change::Objects(_) => vec![],
+        | Change::Objects(_)
+        | Change::NewMap(_) => vec![],
     }
 }
 

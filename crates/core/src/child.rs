@@ -1,7 +1,7 @@
 //! Child maps (ADR-0001, ADR-0002, ADR-0008, ADR-0019): made from an entity's outline on the
 //! parent, own only that outline, and keep a snapshot of the parent context.
 
-use crate::persist::{ContextRecord, NewChildMap, TileRecord};
+use crate::persist::{ContextRecord, NewChildMap, TileRecord, Write};
 
 use crate::generation::{decode_outline, encode_outline};
 use crate::layer::{TILE_SIZE, decode, encode, tile_of};
@@ -146,14 +146,35 @@ impl Project {
             outline: encode_outline(&outline),
             context,
         })?);
-        self.maps.push(Map {
+        let map = Map {
             id,
             parent: Some(parent),
             settings,
             origin,
             outline: Some(outline),
-        });
+        };
+        self.maps.push(map.clone());
+        // Undo of the parent's history removes the child again (#1 story 35).
+        self.record(parent, Change::NewMap(map))?;
         Ok(id)
+    }
+
+    /// Writes a child map's creation (`forward`) or its removal.
+    pub(crate) fn write_new_map(&mut self, m: &Map, forward: bool) -> Result<()> {
+        if !forward && self.maps.iter().any(|x| x.parent == Some(m.id)) {
+            return Err(Error::MapHasChildren(m.id));
+        }
+        self.store.write(&[Write::MapDeleted(m.id.0, !forward)])?;
+        self.maps.retain(|x| x.id != m.id);
+        if forward {
+            self.maps.push(m.clone());
+            self.maps.sort_by_key(|x| x.id);
+            self.rebuild_derived(m.id)?;
+        } else {
+            self.pipeline.forget(m.id);
+            self.forget_map_tiles(m.id);
+        }
+        Ok(())
     }
 
     /// A snapshot of `pm`'s `layers` under a child area at `origin`, plus one parent
