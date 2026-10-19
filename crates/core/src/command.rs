@@ -18,6 +18,9 @@ pub enum Command {
     Page(crate::PageEdit),
     /// Anchors are project-level; the edit goes to the history of the map it is applied on.
     Anchor(crate::AnchorEdit),
+    Paint(crate::PaintStroke),
+    /// A generator's output (ADR-0003).
+    Generate(crate::Generation),
 }
 
 /// Adds `strength * pressure * falloff` to `layer` around each point.
@@ -45,6 +48,8 @@ impl Project {
             Command::Entity(e) => Ok(Change::Entities(self.entity_changes(e)?)),
             Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
+            Command::Paint(s) => Ok(Change::Tiles(self.paint(map, s)?)),
+            Command::Generate(g) => Ok(Change::Generation(self.generation_change(map, g)?)),
         }
     }
 

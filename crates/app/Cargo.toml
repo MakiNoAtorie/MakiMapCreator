@@ -7,6 +7,11 @@ publish = false
 
 [dependencies]
 eframe = "0.36"
+fluent-bundle = "0.16.0"
+mmc-core = { version = "0.1.0", path = "../core" }
+mmc-render = { version = "0.1.0", path = "../render" }
+rfd = "0.17.2"
+unic-langid = "0.9.6"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

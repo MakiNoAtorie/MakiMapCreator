@@ -15,6 +15,10 @@ mod pages;
 pub use pages::PageRecord;
 mod anchors;
 pub use anchors::AnchorRecord;
+mod search;
+pub use search::{Reader, TextHit};
+mod generations;
+pub use generations::{GenerationRecord, OutlineRecord};
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -34,6 +38,8 @@ const MIGRATIONS: &[&str] = &[
     entities::MIGRATION,
     pages::MIGRATION,
     anchors::MIGRATION,
+    search::MIGRATION,
+    generations::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

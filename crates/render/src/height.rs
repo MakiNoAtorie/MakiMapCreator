@@ -68,9 +68,14 @@ pub struct HeightPass {
 
 impl HeightPass {
     pub fn new(device: &wgpu::Device) -> HeightPass {
+        HeightPass::with_shader(device, SHADER)
+    }
+
+    /// A one-layer pass with another fragment shader of the same bindings.
+    pub(crate) fn with_shader(device: &wgpu::Device, shader: &str) -> HeightPass {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("height"),
-            source: wgpu::ShaderSource::Wgsl(format!("{VIEW_WGSL}{SHADER}").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{VIEW_WGSL}{shader}").into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("height"),
