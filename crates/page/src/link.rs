@@ -13,10 +13,15 @@ pub struct EntityLink {
 /// Links in `text` in order. The label is one line with no `]`.
 // ponytail: links inside code spans and fences also count; skip them if backlinks show false hits.
 pub fn entity_links(text: &str) -> Vec<EntityLink> {
+    let code = code_ranges(text);
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(i) = text[from..].find("[[") {
         let start = from + i;
+        if code.iter().any(|r| r.contains(&start)) {
+            from = start + 2;
+            continue;
+        }
         match parse(&text[start + 2..]) {
             Some((id, label, len)) => {
                 out.push(EntityLink {
@@ -30,6 +35,18 @@ pub fn entity_links(text: &str) -> Vec<EntityLink> {
         }
     }
     out
+}
+
+/// Byte ranges of code spans and code blocks: link markup there is plain text.
+fn code_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    Parser::new(text)
+        .into_offset_iter()
+        .filter_map(|(e, r)| match e {
+            Event::Code(_) | Event::Start(Tag::CodeBlock(_)) => Some(r),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Parses `id|label]]`; returns the id, the label and the bytes used.

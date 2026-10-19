@@ -64,3 +64,10 @@ fn link_pipes_do_not_split_table_cells() {
     );
     assert_eq!(p.text.matches('b').count(), 1);
 }
+
+#[test]
+fn links_in_code_are_text() {
+    let text = "Use `[[1|a]]` or\n\n```\n[[2|b]]\n```\n\n    [[3|c]]\n\nsee [[4|d]].";
+    let ids: Vec<i64> = entity_links(text).iter().map(|l| l.id).collect();
+    assert_eq!(ids, [4]);
+}
