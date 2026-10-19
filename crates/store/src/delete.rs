@@ -1,5 +1,4 @@
-//! Map deletion: a deleted map keeps its rows, flagged, while undo can bring it back;
-//! opening a working copy purges them and the rows of deleted entities.
+//! Map deletion: deleted maps stay flagged while undo can restore them; open purges them.
 
 use mmc_core::persist::ChildLink;
 use rusqlite::{Connection, params};
@@ -62,8 +61,7 @@ pub(crate) fn write_child_link(tx: &Connection, id: i64, link: Option<&ChildLink
     crate::children::insert_context(tx, id, &l.context)
 }
 
-/// Removes deleted maps with their rows, and rows of deleted entities. Runs when a working
-/// copy opens, because no undo record outlives the session.
+/// Purges deleted maps and rows of deleted entities on open; no undo record outlives a session.
 // Add here every new table that has a map or entity key.
 pub(crate) const PURGE: &str = "
     CREATE TEMP TABLE gone AS SELECT id FROM maps WHERE deleted;

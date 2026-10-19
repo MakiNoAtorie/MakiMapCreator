@@ -1,5 +1,4 @@
-//! Stateless hash RNG: values depend only on (seed, stage, key), never on thread order.
-//! Stable within one app version only (ADR-0021).
+//! Stateless hash RNG keyed by (seed, stage, key); stable within one app version (ADR-0021).
 
 use crate::RootPoint;
 
@@ -39,8 +38,7 @@ pub fn unit(seed: u64, stage: &str, key: Key) -> f64 {
     (hash(seed, stage, key) >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// Smooth value noise in `0..1`, sampled in root space on a lattice of `cell` metres,
-/// so maps at any scale see the same noise at the same place.
+/// Value noise in `0..1` on a root-space lattice of `cell` metres, the same at every map scale.
 pub fn noise(seed: u64, stage: &str, at: RootPoint, cell: f64) -> f64 {
     let (gx, gy) = (at.x / cell, at.y / cell);
     let (x0, y0) = (gx.floor(), gy.floor());

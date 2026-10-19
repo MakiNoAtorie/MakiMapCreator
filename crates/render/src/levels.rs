@@ -10,9 +10,7 @@ use crate::{Error, Raster, Renderer, Result, Scene, View};
 type Fetched = Option<(u32, Arc<[f32]>)>;
 
 impl Renderer {
-    /// Never blocks: reads the pyramid level that fits the view's zoom from the tile cache.
-    /// Tiles not loaded yet are drawn from the finest loaded level above; the scene is then
-    /// not complete, and a later call after the loads finish replaces it.
+    /// Never blocks: tiles not loaded yet show a coarser level and the scene is not complete.
     pub fn scene_cached(&self, project: &Project, view: View) -> Result<Scene> {
         let map = find_map(project, view)?;
         let level = fit_level(map, view, project.top_level(map.id)?);

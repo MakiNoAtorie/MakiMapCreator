@@ -190,8 +190,7 @@ fn anchors_of(f: &DerivedFeature) -> Result<Anchors> {
 }
 
 impl Project {
-    /// Replaces the derived features. A derived stage calls this before its rebuild commits;
-    /// tests call it with a synthetic set. Matching runs after the next rebuild, or on `match_anchors`.
+    /// Replaces the derived features; matching runs after the next rebuild or on `match_anchors`.
     pub fn set_derived_features(&mut self, features: Vec<DerivedFeature>) {
         self.anchors.features = Some(features);
     }
@@ -207,8 +206,7 @@ impl Project {
         rec.map(|r| Anchors::decode(&r.points)).transpose()
     }
 
-    /// An anchored river (mouth or picked point) or lake (inside point) within `tolerance`
-    /// metres of `at`.
+    /// An anchored river (mouth or picked point) or lake (inside point) within `tolerance` of `at`.
     pub(crate) fn anchored_at(&self, at: RootPoint, tolerance: f64) -> Result<Option<EntityId>> {
         for r in self.store.anchors()? {
             let near = match Anchors::decode(&r.points)? {
@@ -240,9 +238,7 @@ impl Project {
             .collect())
     }
 
-    /// Attaches each anchored entity to the nearest derived feature within the tolerance, or
-    /// flags it unplaced. Not an undoable edit: it follows the derived data. Does nothing until
-    /// `set_derived_features` was called.
+    /// Attaches anchored entities to the nearest derived feature or flags them unplaced; not undoable.
     pub fn match_anchors(&mut self) -> Result<()> {
         for mut rec in self.store.anchors()? {
             let new = self.matched(&rec)?;

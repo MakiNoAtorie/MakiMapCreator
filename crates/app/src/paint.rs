@@ -1,6 +1,4 @@
-//! Painting state and UI: tool strip, options bar, brush cursor, stroke overlay.
-//! A stroke is shown by an overlay while the pen is down and until the renderer shows the
-//! edit; core gets one command per stroke at pen up, so a stroke is one undo step.
+//! Painting UI and state; one stroke is one command at pen up, shown by an overlay until drawn.
 
 use std::collections::VecDeque;
 
@@ -128,8 +126,7 @@ impl Painter {
         }
     }
 
-    /// Applies queued edits when the project is free, polls derived layers, and clears the
-    /// overlay once the canvas shows the result. Returns an error text.
+    /// Applies queued edits, polls derived layers and drops the overlay once drawn; gives an error text.
     pub fn flush(
         &mut self,
         project: &SharedProject,

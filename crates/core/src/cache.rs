@@ -1,5 +1,4 @@
-//! Tile cache: workers load tiles from the working copy into an LRU bounded by memory, and one
-//! worker updates pyramid levels above edited tiles, off the edit path (ADR-0014).
+//! Tile cache: workers load tiles into a memory-bounded LRU and update pyramid levels (ADR-0014).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};

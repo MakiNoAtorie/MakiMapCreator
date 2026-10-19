@@ -23,8 +23,7 @@ impl Scene {
     }
 }
 
-/// Blends each summary tint over image pixels whose map pixel centre is inside its outline.
-/// It uses absolute image pixels, so a tiled render equals a single render.
+/// Blends summary tints by map pixel centre, so a tiled render equals a single render.
 // ponytail: CPU, pixels × outlines; move to a shader pass if many children slow the frame.
 pub(crate) fn tint(scene: &Scene, img: &mut Image) {
     if scene.summaries.is_empty() {

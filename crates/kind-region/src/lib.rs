@@ -1,5 +1,4 @@
-//! Crude region map kind (Phase 0): height from an upsample of the parent's land plus
-//! root-space noise (ADR-0002, ADR-0008).
+//! Crude region map kind: height from the parent's land plus root-space noise (ADR-0008).
 
 use mmc_core::{
     Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind, MapKindModule,

@@ -1,5 +1,4 @@
-//! Win32 pen reading: subclasses the eframe window procedure and turns WinTab packets
-//! or Windows Ink `WM_POINTER` messages into `PenEvent`s. Ported from `spikes/pen-test`.
+//! Win32 pen reading (WinTab packets or Ink `WM_POINTER`) into `PenEvent`s; from `spikes/pen-test`.
 
 use crate::input::{
     PenApi, PenEvent, PhaseTracker, WintabState, active_api, normalise_pressure,

@@ -1,5 +1,4 @@
-//! Map objects: points, paths and polygons on an object layer of one map. Each has a stable
-//! id, may reference an entity and may carry a label offset.
+//! Map objects: points, paths and polygons with stable ids, an optional entity and label offset.
 
 use crate::generation::{decode_outline, encode_outline};
 use crate::persist::{ObjectRecord, Write};
@@ -138,9 +137,7 @@ impl Project {
         Ok(out)
     }
 
-    /// The entity drawn at `at` on `map`: the newest map object of an existing entity that
-    /// covers it (a polygon) or lies within `tolerance` metres (a point or path), else an
-    /// anchored river or lake within `tolerance`.
+    /// The entity at `at`: newest covering polygon or point/path within `tolerance`, else an anchor.
     pub fn entity_at(&self, map: MapId, at: RootPoint, tolerance: f64) -> Result<Option<EntityId>> {
         for o in self.objects(map)?.into_iter().rev() {
             let Some(e) = o.entity else { continue };

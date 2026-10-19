@@ -137,8 +137,7 @@ impl Project {
         self.names.find(query, limit)
     }
 
-    /// Starts a full-text search over names, text fields and pages (every word, the last as prefix).
-    /// Sees the edits applied before this call. Results hold at most `limit` entities.
+    /// Starts a full-text search on a worker; sees edits made before the call (every word, last as prefix).
     pub fn search_text(&self, query: &str, limit: usize) -> Result<TextSearch> {
         let reader = self.store.text_index()?;
         let query = query.to_owned();

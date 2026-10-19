@@ -1,5 +1,4 @@
-//! Child maps (ADR-0001, ADR-0002, ADR-0008, ADR-0019): made from an entity's outline on the
-//! parent, own only that outline, and keep a snapshot of the parent context.
+//! Child maps: made from an entity outline on the parent, own only it, keep parent context (ADR-0019).
 
 use crate::persist::{ContextRecord, NewChildMap, TileRecord, Write};
 
@@ -8,12 +7,10 @@ use crate::layer::{TILE_SIZE, decode, encode, tile_of};
 use crate::undo::Change;
 use crate::{EntityId, Error, Layer, Map, MapId, MapSettings, Project, Result, RootPoint};
 
-/// Margin around a child's outline, in parent pixels. Refinement moves a coast about one
-/// parent cell (ADR-0008), so two cells show it in full.
+/// Margin around a child's outline in parent pixels: refinement moves a coast about one cell (ADR-0008).
 pub const CHILD_MARGIN: f64 = 2.0;
 
-/// Largest child width or height in pixels: the default region size (8192², 256 MB of f32 per
-/// layer while generating).
+/// Largest child side in pixels, the default region size (256 MB of f32 a layer while generating).
 pub const MAX_CHILD_SIZE: f64 = 8192.0;
 
 /// A snapshot of one parent layer around a child map, taken when the child was made.
@@ -31,8 +28,7 @@ pub struct ParentContext {
 }
 
 impl ParentContext {
-    /// Bilinear sample at a root-space point. It uses global parent pixel indices, so two
-    /// snapshots of the same parent give the same value at the same point.
+    /// Bilinear sample at a root-space point; global parent pixel indices make snapshots agree.
     pub fn sample(&self, at: RootPoint) -> f32 {
         let m = self.metres_per_pixel;
         let gx = (at.x - self.origin.x) / m - 0.5;
@@ -71,10 +67,7 @@ impl Map {
 }
 
 impl Project {
-    /// Makes a child map on the outline of `entity` on `parent` (ADR-0001). The child covers
-    /// the outline's bounding box plus `CHILD_MARGIN`, owns only the outline, and keeps a
-    /// snapshot of the parent context layers its kind declares. `metres_per_pixel` defaults to
-    /// the parent's divided by the kind's scale factor.
+    /// Makes a child map of `entity`'s outline on `parent` (bounding box plus `CHILD_MARGIN`).
     pub fn create_child_map(
         &mut self,
         parent: MapId,
@@ -181,8 +174,7 @@ impl Project {
         Ok(())
     }
 
-    /// A snapshot of `pm`'s `layers` under a child area at `origin`, plus one parent
-    /// pixel for interpolation, clipped to the parent.
+    /// A snapshot of `pm`'s `layers` under a child area, plus one pixel for interpolation.
     pub(crate) fn snapshot(
         &self,
         layers: &[Layer],

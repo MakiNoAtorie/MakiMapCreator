@@ -14,9 +14,7 @@ pub(crate) struct Saves {
 }
 
 impl Project {
-    /// Starts writing a snapshot of the project to `file` on a worker; editing goes on
-    /// meanwhile. The file gets every edit made before the snapshot and none after it.
-    /// A newer save replaces an older one that has not started writing.
+    /// Starts a background save of every edit made before this call; a newer save replaces it.
     pub fn save(&mut self, file: &Path) {
         // The top pyramid level is the file's overview; it must be current in the snapshot.
         self.wait_pyramid();
@@ -32,8 +30,7 @@ impl Project {
         );
     }
 
-    /// The result of the latest save once it has finished; `None` while it runs or after
-    /// the result was taken. Never blocks.
+    /// The latest save's result once finished; `None` while it runs or once taken. Never blocks.
     pub fn poll_save(&mut self) -> Option<Result<()>> {
         self.saves.jobs.take()
     }

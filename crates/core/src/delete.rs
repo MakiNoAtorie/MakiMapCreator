@@ -1,9 +1,4 @@
-//! Deletion rules: a deleted map keeps its entities and pages, and its child maps become root
-//! maps. An entity with its own map is deleted only with an explicit `OwnMap` choice.
-//!
-//! Undo rule: a change that deletes map M goes to the history of M's parent, or to the project
-//! history (`undo_project`) when M is a root map. Any other change goes to the history of the
-//! map it was applied on. A deleted map keeps its rows and history until the project reopens.
+//! Map deletion: entities stay, children become roots; undo goes to the parent's or project history.
 
 use crate::persist::{ChildLink, Write};
 

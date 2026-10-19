@@ -1,5 +1,4 @@
-//! Benchmark gate for the ADR-0014 budgets. Run in release:
-//! `cargo run -p mmc-bench --release -- [results.json]`; exit 1 if a budget is exceeded.
+//! Benchmark gate for the ADR-0014 budgets: `cargo run -p mmc-bench --release -- [results.json]`.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -57,8 +56,7 @@ fn measure() -> BTreeMap<String, f64> {
             time_ms(|| project.apply(map, cmd).unwrap()).0
         })
         .collect();
-    // Save and open time the fixture as built: strokes during a save would grow the file
-    // by an amount that depends on machine speed.
+    // Save and open time the fixture as built; strokes during a save grow the file by machine speed.
     project.wait_for_jobs().unwrap();
     let save = (0..RUNS)
         .map(|_| {
@@ -69,8 +67,7 @@ fn measure() -> BTreeMap<String, f64> {
             .0
         })
         .collect();
-    // Editing pause: the median stroke of each save, strokes going on until the save ends.
-    // A save that blocks edits makes its first stroke last the whole save.
+    // Editing pause: the median stroke during each save; a blocking save makes one stroke the whole save.
     let paused = dir.path().join("paused.mmc");
     let pause = (0..RUNS)
         .map(|_| {
@@ -129,8 +126,7 @@ fn measure() -> BTreeMap<String, f64> {
     }
     p.close().unwrap();
 
-    // ADR-0014: full rebuild of derived region layers at 4096² after an edit. Strokes are wide
-    // enough to touch most tiles; each timed stroke changes many tiles.
+    // ADR-0014: full rebuild of derived layers at 4096² after a stroke wide enough to touch many tiles.
     let fixture = LargeMap {
         size: 4096,
         radius: 2000.0,

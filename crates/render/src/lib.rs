@@ -127,9 +127,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// A renderer on the WARP software adapter (DirectX 12); needs no GPU.
-    /// All WARP renderers share one device: several WARP devices used on parallel threads
-    /// crash inside d3d10warp.dll (access violation).
+    /// A renderer on the shared WARP device (DX12, no GPU); parallel WARP devices crash d3d10warp.
     pub fn warp() -> Result<Renderer> {
         static WARP: OnceLock<std::result::Result<(wgpu::Device, wgpu::Queue), String>> =
             OnceLock::new();
@@ -171,8 +169,7 @@ impl Renderer {
         self.passes.push((layer, pass));
     }
 
-    /// Reads full-resolution tiles of the layers that registered passes draw, for the area
-    /// of `view`. Blocks on disk; export uses it. The screen uses `scene_cached`.
+    /// Reads full-resolution tiles for `view`; blocks on disk, so only export uses it.
     pub fn scene(&self, project: &Project, view: View) -> Result<Scene> {
         let map = levels::find_map(project, view)?;
         self.assemble(map, view, 0, |layer, tx, ty| {

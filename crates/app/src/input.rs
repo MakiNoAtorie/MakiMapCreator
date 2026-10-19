@@ -41,8 +41,7 @@ impl PhaseTracker {
     }
 }
 
-/// Tablet API that delivers pen events. Only one is active at a time: while a WinTab
-/// context is open the Wacom driver sends no Ink pen messages.
+/// Tablet API; one at a time, as the Wacom driver sends no Ink messages while WinTab is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PenApi {
     WinTab,
@@ -77,10 +76,7 @@ pub fn wintab_is_eraser(cursor: u32) -> bool {
     cursor % 3 == 2
 }
 
-/// Drops the mouse press that a pen tap also generates (WinTab: the driver's mouse
-/// emulation; Ink: winit's touch-to-pointer emulation). A press counts as the pen's when
-/// a pen event arrived within `window` seconds before it, which covers the hover samples
-/// that precede every tap.
+/// Drops the mouse press a pen tap also makes: one within `window` s after a pen event.
 pub struct DuplicatePressFilter {
     window: f64,
     last_pen: f64,
@@ -111,8 +107,7 @@ pub fn normalise_pressure(raw: u32, min: u32, max: u32) -> f32 {
     (raw.clamp(min, max) - min) as f32 / (max - min) as f32
 }
 
-/// WinTab orientation (tenths of a degree) to tilt in degrees from vertical, along x and y.
-/// Azimuth is clockwise from screen up; altitude is the angle above the tablet.
+/// WinTab azimuth and altitude (tenths of a degree) to tilt from vertical along x and y.
 pub fn tilt_from_orientation(azimuth: i32, altitude: i32) -> [f32; 2] {
     let az = (azimuth as f32 / 10.0).to_radians();
     // Negative altitude means the pen is inverted (eraser end); tilt uses its magnitude.

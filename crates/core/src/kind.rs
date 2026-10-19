@@ -1,6 +1,4 @@
-//! The map kind interface (ADR-0001). Each kind is a crate that implements it; the caller
-//! assembles the kinds it ships into `Kinds` and gives them to the project. A new kind needs
-//! no edit in core or render.
+//! The map kind interface (ADR-0001); a new kind needs no edit in core or render.
 
 use crate::{Command, Layer, MapId, MapKind, MapSettings, Project, Result, Stage};
 

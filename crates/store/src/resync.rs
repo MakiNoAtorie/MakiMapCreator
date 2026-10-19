@@ -1,5 +1,4 @@
-//! Re-sync state of child maps (ADR-0022): the out-of-date flag, and the outline and parent
-//! context that a re-sync replaces.
+//! Re-sync state of child maps (ADR-0022): out-of-date flag, outline and parent context.
 
 use mmc_core::persist::ChildState;
 use rusqlite::{Connection, params};

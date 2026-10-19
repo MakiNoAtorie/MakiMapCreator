@@ -1,5 +1,4 @@
 //! The persistence port: core's records and the traits a storage backend implements.
-//! Core never names a backend; the caller (app, tests, bench) passes one in.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -117,8 +116,7 @@ pub struct ObjectRecord {
     pub label_dy: Option<f64>,
 }
 
-/// A rectangle of one parent layer: parent pixels `x0..x0+width`, `y0..y0+height`.
-/// `origin_x`, `origin_y` and `metres_per_pixel` are the parent's transform.
+/// Parent pixels `x0..x0+width`, `y0..y0+height` of one layer, with the parent's transform.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextRecord {
     pub layer: String,

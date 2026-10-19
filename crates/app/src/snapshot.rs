@@ -1,5 +1,4 @@
-//! Project data the panels show, reloaded when the project changed, so drawing never
-//! queries the project (ADR-0014).
+//! Project data the panels show, reloaded on change, so drawing never queries (ADR-0014).
 
 use std::collections::HashMap;
 

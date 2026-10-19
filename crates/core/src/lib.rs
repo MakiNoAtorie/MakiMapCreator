@@ -208,8 +208,7 @@ pub struct Project {
 }
 
 impl Project {
-    /// Creates a project with one root map on an empty `store`. `kinds` are the map kinds
-    /// the app ships; maps of other kinds can not be made or opened.
+    /// Creates a project with one root map; maps of kinds not in `kinds` can not be made or opened.
     pub fn create(
         store: Box<dyn persist::Storage>,
         kinds: std::sync::Arc<Kinds>,
@@ -306,8 +305,7 @@ impl Project {
         &self.maps
     }
 
-    /// The project seed (ADR-0021). Generator runs default to it, so neighbouring child maps
-    /// match at their shared edges.
+    /// The project seed (ADR-0021); generator runs default to it, so neighbours match.
     pub fn seed(&self) -> Result<u64> {
         self.store.seed()
     }

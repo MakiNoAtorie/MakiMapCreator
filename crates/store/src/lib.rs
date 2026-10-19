@@ -119,12 +119,10 @@ impl From<Error> for mmc_core::Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Foreground writes waiting or running. Background writers pause between chunks while it
-/// is above 0, so an edit waits for at most one chunk (ADR-0014).
+/// Foreground writes pending; background writers wait between chunks while it is above 0.
 pub(crate) type Gate = Arc<AtomicUsize>;
 
-/// Retries a locked database every 100 µs for about 5 s. The default handler sleeps up to
-/// 100 ms per retry, longer than a frame.
+/// Retries a locked database every 100 µs for about 5 s; the default waits up to 100 ms a retry.
 fn busy_wait(attempt: i32) -> bool {
     std::thread::sleep(Duration::from_micros(100));
     attempt < 50_000
@@ -184,15 +182,12 @@ impl Store {
         matches!(lock(working_copy), Err(Error::InUse))
     }
 
-    /// Copies the project `file` to `working_copy` and migrates the copy.
-    /// The project file is only read.
+    /// Copies the project `file` to `working_copy` and migrates the copy; the file is only read.
     pub fn open(file: &Path, working_copy: &Path) -> Result<Store> {
         let src = open_read_only(file)?;
         refuse_existing(working_copy)?;
         let lock = lock(working_copy)?;
-        // A plain copy under a read lock: VACUUM INTO rebuilds every page and fsyncs the
-        // copy, 5-10x slower on CI disks. The project file is never in WAL mode (save
-        // writes it with VACUUM INTO), so the file alone is the whole database.
+        // A plain copy under a read lock: the saved file is never in WAL mode, and VACUUM INTO is slow.
         src.execute_batch("BEGIN; SELECT count(*) FROM sqlite_master;")?;
         // Not fs::copy: it keeps a read-only attribute on the working copy.
         let mut from = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(file)?);
@@ -202,12 +197,10 @@ impl Store {
     }
 
     fn init(mut conn: Connection, working_copy: &Path, lock: std::fs::File) -> Result<Store> {
-        // No fsync for the switch to WAL: it would flush the whole fresh copy of an opened
-        // file. The project file still holds the data until the first edit.
+        // No fsync for the switch to WAL; the project file holds the data until the first edit.
         conn.pragma_update(None, "synchronous", "OFF")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        // No fsync per edit: a running save floods the disk and makes each fsync wait.
-        // WAL stays consistent after an app crash; power loss may drop the last edits.
+        // No fsync per edit; WAL survives an app crash, a power loss may drop the last edits.
         tune(&conn)?;
         // Worker connections checkpoint the WAL; a checkpoint on an edit's commit stalls it.
         conn.pragma_update(None, "wal_autocheckpoint", 0)?;
@@ -245,8 +238,7 @@ impl Store {
         TileConn::open_gated(&self.working_copy, self.gate.clone())
     }
 
-    /// Writes a snapshot of the working copy over `file`: `VACUUM INTO` a
-    /// temporary file in the same folder, then an atomic rename.
+    /// Writes a snapshot over `file`: `VACUUM INTO` a temporary file, then an atomic rename.
     pub fn save(&self, file: &Path) -> Result<()> {
         save_snapshot(&self.working_copy, file)
     }

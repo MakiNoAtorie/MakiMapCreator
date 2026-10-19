@@ -51,8 +51,7 @@ impl Store {
     }
 }
 
-/// Moves level-0 tiles of a map by (`dx`, `dy`) tiles and drops its upper levels, inside the
-/// caller's transaction. Keys go through negative values so no update hits another row.
+/// Moves level-0 tiles by whole tiles and drops upper levels; keys pass through negatives.
 pub(crate) fn shift_tiles(tx: &Connection, map_id: i64, dx: i64, dy: i64) -> Result<()> {
     tx.execute(
         "DELETE FROM tiles WHERE map_id = ?1 AND level > 0",
@@ -90,8 +89,7 @@ pub(crate) fn write_tile(tx: &Connection, k: &TileKey, rec: Option<&TileRecord>)
 /// Bytes of tile data per background write transaction: an edit waits at most this long.
 const CHUNK_BYTES: usize = 1 << 20;
 
-/// A second connection to the working copy for worker threads. WAL lets it read while the
-/// main connection writes. Its writes go in small transactions that give way to edits.
+/// A worker's connection to the working copy; its writes give way to edits.
 pub struct TileConn {
     conn: Connection,
     gate: crate::Gate,
@@ -115,8 +113,7 @@ impl TileConn {
             .unwrap_or_default())
     }
 
-    /// As `layer_tiles`, but gives `None` as soon as `stop` returns true, so a superseded
-    /// rebuild frees the CPU and disk at once.
+    /// As `layer_tiles`, but `None` once `stop` is true, so a superseded rebuild stops at once.
     pub fn layer_tiles_until(
         &self,
         map_id: i64,
@@ -151,8 +148,7 @@ impl TileConn {
         tile(&self.conn, key)
     }
 
-    /// Writes tiles in transactions of about `CHUNK_BYTES`; `None` deletes the tile. Before
-    /// each one it waits while the store has an edit pending, so edits never queue behind it.
+    /// Writes tiles in about `CHUNK_BYTES` transactions, each after pending edits.
     pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
         let mut rest = writes;
         while !rest.is_empty() {

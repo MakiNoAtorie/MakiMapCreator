@@ -5,8 +5,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Result, Store};
 
-// No foreign key to entities: a deleted entity keeps its page row so undo of the delete restores it.
-// ponytail: orphan pages stay in the file; purge them on save if file size matters.
+// No foreign key to entities: undo of a delete restores the page; open purges orphan pages.
 pub(crate) const MIGRATION: &str = "
     CREATE TABLE page_templates (
         kind TEXT PRIMARY KEY REFERENCES entity_kinds(id),

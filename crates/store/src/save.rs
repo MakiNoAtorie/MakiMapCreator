@@ -6,9 +6,7 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::{Result, Store, check_header, path_str, remove_db_files};
 
-/// Writes a snapshot of the working copy over `file` from its own connection, so the
-/// working copy stays writable: `VACUUM INTO` reads one WAL snapshot into `<file>.tmp`,
-/// then an atomic rename. Callers run one save at a time per `file`.
+/// Writes a WAL snapshot over `file` on its own connection (`VACUUM INTO`, then rename).
 pub fn save_snapshot(working_copy: &Path, file: &Path) -> Result<()> {
     let mut tmp = file.as_os_str().to_owned();
     tmp.push(".tmp");

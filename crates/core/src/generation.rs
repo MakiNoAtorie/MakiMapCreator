@@ -1,5 +1,4 @@
-//! One-shot generation (ADR-0003): a generator's output is one command; the file records
-//! the generator, seed and app version of each run (ADR-0021).
+//! One-shot generation (ADR-0003); the file records each run and its app version (ADR-0021).
 
 use crate::persist::{EntityRecord, GenerationRecord, ObjectRecord, TileRecord, Write};
 
@@ -105,8 +104,7 @@ impl GenerationChange {
 }
 
 impl Project {
-    /// The rows of `g` on `map`. `shift` is how many tiles the map's stored tiles move right and
-    /// down before this writes, when a re-sync grows the map (0 otherwise).
+    /// The rows of `g` on `map`; `shift` is the tile move a growing re-sync makes first.
     pub(crate) fn generation_change(
         &self,
         map: &Map,

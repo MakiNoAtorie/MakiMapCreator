@@ -97,8 +97,7 @@ pub struct Sample {
     pub pressure: f32,
 }
 
-/// Turns a pen path into one core command: stamps at even spacing along the path, each with
-/// its own radius and pressure. `None` for an empty path.
+/// One core command for a pen path: evenly spaced stamps with their own radius and pressure.
 pub fn plan(
     action: ToolAction,
     layer: Layer,
@@ -285,7 +284,10 @@ mod tests {
         let s = brush(Direction::Raise, &o, &[p(0.0, 0.1), p(300.0, 1.0)]);
         let r: Vec<f64> = s.points.iter().map(|q| q.radius).collect();
         assert!(r.windows(2).all(|w| w[0] <= w[1]), "{r:?}");
-        assert!(r[0] < 20.0 && r[r.len() - 1] > 70.0 && r[r.len() - 1] <= 80.0, "{r:?}");
+        assert!(
+            r[0] < 20.0 && r[r.len() - 1] > 70.0 && r[r.len() - 1] <= 80.0,
+            "{r:?}"
+        );
     }
 
     #[test]

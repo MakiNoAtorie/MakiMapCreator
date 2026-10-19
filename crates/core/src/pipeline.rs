@@ -1,5 +1,4 @@
-//! Stage pipeline (ADR-0018): stages declare the layers they read and write; derived
-//! layers rebuild on worker threads after each edit (ADR-0014).
+//! Stage pipeline (ADR-0018): derived layers rebuild on workers after each edit (ADR-0014).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -88,8 +87,7 @@ fn dirty<L: PartialEq + Clone>(decls: &[(&[L], &[L])], changed: &[L]) -> Vec<boo
     out
 }
 
-/// `f` over `items` on `threads` scoped threads; output in item order, so it never depends on
-/// scheduling. `None` when `cancelled` became true.
+/// `f` over `items` on scoped threads, in item order; `None` when `cancelled` became true.
 pub fn par_map<T: Sync, R: Send>(
     threads: usize,
     items: &[T],
@@ -232,8 +230,7 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
     Some(Ok((reader, job.id, job.threads, derived, out)))
 }
 
-/// Writes only the tiles whose bytes changed, in one transaction, so readers see the old or
-/// the new state. Runs under the jobs lock, so the digests match the working copy.
+/// Writes only changed tiles; runs under the jobs lock, so the digests match the working copy.
 fn commit(committed: &Committed, out: Result<Output>) -> Result<()> {
     let (conn, map, threads, derived, layers) = out?;
     let mut committed = committed.lock().unwrap();
@@ -337,8 +334,7 @@ impl Project {
         Ok(())
     }
 
-    /// Collects finished rebuilds without blocking; `true` if one has finished since the last call.
-    /// Rebuild errors surface here.
+    /// Collects finished rebuilds without blocking; `true` if one finished. Errors surface here.
     pub fn poll_jobs(&mut self) -> Result<bool> {
         let mut any = false;
         for st in self.pipeline.maps.values_mut() {

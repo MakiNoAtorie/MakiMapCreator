@@ -35,8 +35,7 @@ pub(crate) struct State {
     context: Option<(MapId, Vec<ContextRecord>)>,
 }
 
-/// What a re-sync or masked regeneration would write. The preview writes nothing;
-/// `Project::apply_plan` writes it as one command.
+/// A previewed re-sync or masked regeneration; `Project::apply_plan` writes it as one command.
 #[derive(Debug, Clone)]
 pub struct RegenPlan {
     pub map: MapId,
@@ -46,8 +45,7 @@ pub struct RegenPlan {
     pub kept_edited: Vec<TileAt>,
     /// Tiles with locked pixels. Those pixels are kept.
     pub kept_locked: Vec<TileAt>,
-    /// Tiles with ground the new outline loses. That ground stays as read-only context; its
-    /// data is cleared only on confirm.
+    /// Tiles with ground the new outline loses; it stays context until cleared on confirm.
     pub lost_ground: Vec<TileAt>,
     /// The edited tiles among `lost_ground`.
     pub lost_edited: Vec<TileAt>,
@@ -146,7 +144,6 @@ fn pixel(tx: u32, ty: u32, i: usize) -> (u32, u32) {
 
 impl Project {
     /// Whether a parent edit changed ground under child `map` since its last re-sync.
-    /// Always `false` for a root map.
     pub fn is_out_of_date(&self, map: MapId) -> Result<bool> {
         self.map(map)?;
         self.store.out_of_date(map.0)
@@ -223,8 +220,7 @@ impl Project {
         Ok(())
     }
 
-    /// Previews `run` on `map` again, only inside `selection` (root space; `None` is the
-    /// whole map). Edited tiles and locked pixels are kept (ADR-0003, ADR-0022). Writes nothing.
+    /// Previews `run` inside `selection` (root space; `None` is all); edited and locked data stay.
     pub fn preview_regeneration(
         &self,
         map: MapId,
@@ -249,10 +245,7 @@ impl Project {
         self.store.tile(&old)
     }
 
-    /// Previews re-syncing child `map` with its parent: a new parent snapshot, then the map's
-    /// last generator run on unedited, unlocked tiles. `outline` moves the outline (root
-    /// space): gained ground is generated; lost ground stays as read-only context and is
-    /// cleared only on confirm. An outline past the map's rectangle grows the map. Writes nothing.
+    /// Previews a re-sync with the parent; `outline` moves the outline and may grow the map.
     pub fn preview_resync(
         &mut self,
         map: MapId,
@@ -316,8 +309,7 @@ impl Project {
         }
     }
 
-    /// The tiles `cmd` would rewrite on `m`. `outlines` is (old, new, map before a resize)
-    /// for a re-sync that moves the outline.
+    /// The tiles `cmd` would rewrite on `m`; `outlines` is (old, new, map before a resize).
     fn plan(
         &self,
         m: &Map,
@@ -418,8 +410,7 @@ impl Project {
         Ok(plan)
     }
 
-    /// Writes a previewed plan as one undoable command on its map. Lost ground is cleared only
-    /// when `confirm_lost` is true. Refuses a plan the map has changed under.
+    /// Writes a previewed plan as one command; clears lost ground only on confirm; refuses stale plans.
     pub fn apply_plan(&mut self, plan: RegenPlan, confirm_lost: bool) -> Result<()> {
         let RegenPlan {
             map,
@@ -504,9 +495,7 @@ impl Project {
     }
 }
 
-/// The rectangle a child map needs for `outline` plus `margin` metres: its own rectangle grown
-/// by whole tiles to the left and top, so stored tiles only move by whole tiles. `None` when
-/// the outline fits.
+/// The rectangle `outline` plus `margin` needs, grown by whole tiles; `None` when it fits.
 fn grow(m: &Map, outline: &[RootPoint], margin: f64) -> Result<Option<Resize>> {
     let mpp = m.settings.metres_per_pixel;
     let tile = TILE_SIZE as f64 * mpp;

@@ -34,8 +34,7 @@ impl<T> Default for Jobs<T> {
 }
 
 impl<T: Send + 'static> Jobs<T> {
-    /// Runs `job`, then `commit` on its output unless a newer job exists. Commits run one at
-    /// a time, so an older job never commits after a newer one.
+    /// Runs `job`, then `commit` unless a newer job exists; commits run one at a time, in order.
     pub fn submit<P>(
         &mut self,
         job: impl FnOnce(Cancelled) -> Option<P> + Send + 'static,

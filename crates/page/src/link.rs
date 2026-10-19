@@ -11,7 +11,6 @@ pub struct EntityLink {
 }
 
 /// Links in `text` in order. The label is one line with no `]`.
-// ponytail: links inside code spans and fences also count; skip them if backlinks show false hits.
 pub fn entity_links(text: &str) -> Vec<EntityLink> {
     let code = code_ranges(text);
     let mut out = Vec::new();

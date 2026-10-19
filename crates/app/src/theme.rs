@@ -126,8 +126,7 @@ impl Theme {
     }
 }
 
-/// Installs the embedded fonts; missing ones fall back to egui's default fonts.
-/// Serif families are `FontFamily::Name("serif" | "serif-bold" | "serif-italic")`.
+/// Installs the embedded fonts (missing ones fall back to egui's); serif families are "serif*".
 pub fn install_fonts(ctx: &egui::Context) {
     let mut f = FontDefinitions::default();
     let fallback = f.families[&FontFamily::Proportional].clone();

@@ -1,5 +1,4 @@
-//! Tile pyramid: level `l` halves level `l - 1`; each pixel is the mean of 2x2 pixels below.
-//! The top level is one tile over the whole map and serves as the map's overview.
+//! Tile pyramid: level `l` pixels are 2x2 means of level `l - 1`; the top tile is the overview.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
@@ -117,8 +116,7 @@ impl Project {
         Ok(top_level(&self.map(map)?.settings))
     }
 
-    /// Never blocks. Queues `id` for loading on workers and returns the finest loaded tile
-    /// at `id.level` or above that covers it, with its level; `None` if none is loaded yet.
+    /// Never blocks: queues `id` and returns the finest loaded tile at or above its level.
     pub fn cached_tile(&self, id: TileId) -> Result<Option<(u32, Tile)>> {
         let top = self.top_level(id.map)?;
         let cache = self.tiles();
@@ -164,8 +162,7 @@ impl Project {
         }
     }
 
-    /// Writes `rows` in one transaction. For level-0 tiles among them, a worker then updates
-    /// the pyramid levels above.
+    /// Writes `rows` in one transaction; a worker then updates pyramid levels above level-0 tiles.
     pub(crate) fn write_rows(&self, rows: &[Write]) -> Result<()> {
         let put = rows
             .iter()
@@ -229,8 +226,7 @@ impl Project {
     }
 }
 
-/// Pyramid tiles above `changed` level-0 tiles (with their new values): the records to
-/// write and the decoded tiles. `read` gives the stored parents, for their other quadrants.
+/// Pyramid tiles above `changed` level-0 tiles: records to write and decoded tiles.
 pub(crate) type Upper = (Vec<(TileKey, Option<TileRecord>)>, Vec<(TileKey, Tile)>);
 
 pub(crate) fn upper_levels(

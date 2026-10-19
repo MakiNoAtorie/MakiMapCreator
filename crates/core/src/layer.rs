@@ -101,7 +101,7 @@ impl Project {
             return Ok(None);
         }
         let ((tx, ty), i) = tile_of(x as u32, y as u32);
-        // ponytail: decodes a whole tile per read; the tile cache comes with the pyramid (#9).
+        // ponytail: decodes a whole tile per read; read through the tile cache if this gets hot.
         let rec = self.store.tile(&map.tile_key(layer, tx, ty))?;
         Ok(Some(decode(rec.as_ref())?[i]))
     }

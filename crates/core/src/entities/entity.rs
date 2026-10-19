@@ -75,8 +75,7 @@ pub enum EntityEdit {
         key: String,
         value: Value,
     },
-    /// Also removes the entity's relations. Refused with `Error::OwnMapChoice` if the
-    /// entity has its own map.
+    /// Also removes the entity's relations; refused with `OwnMapChoice` if it has its own map.
     Delete(EntityId),
     /// Deletes an entity and says what happens to the maps made from it.
     DeleteWithMap {
@@ -85,8 +84,7 @@ pub enum EntityEdit {
     },
     Relate(Relation),
     Unrelate(Relation),
-    /// Adds a user field to a kind (ADR-0010); `builtin` is ignored. Refuses a key the kind
-    /// already has.
+    /// Adds a user field to a kind (ADR-0010); refuses a key the kind already has.
     AddField(FieldDef),
 }
 

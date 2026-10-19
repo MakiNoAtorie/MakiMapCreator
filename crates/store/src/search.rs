@@ -5,8 +5,7 @@ use rusqlite::{Connection, OpenFlags, params};
 
 use crate::{Result, Store};
 
-// Rowid = entity id. Entity rows are written with the entity, page rows with the page.
-// A deleted entity keeps its page row (undo restores it); queries join `entities` to hide it.
+// Rowid = entity id; a deleted entity keeps its page row for undo, so queries join `entities`.
 pub(crate) const MIGRATION: &str = "
     CREATE VIRTUAL TABLE fts_entities USING fts5(name, text);
     CREATE VIRTUAL TABLE fts_pages USING fts5(body);
@@ -69,8 +68,7 @@ impl Store {
 }
 
 impl Reader {
-    /// Existing entities whose name, text fields or page match every word of `text` (last as prefix).
-    /// Name and field hits come first, then page hits; best rank first in each group.
+    /// Existing entities matching every word (last as prefix); name and field hits first.
     pub fn search_text(&self, text: &str, limit: usize) -> Result<Vec<TextHitRecord>> {
         let limit = limit as i64;
         let Some(q) = match_query(text) else {
