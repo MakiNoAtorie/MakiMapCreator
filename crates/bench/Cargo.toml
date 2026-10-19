@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+mmc-core = { version = "0.1.0", path = "../core" }
+mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
+tempfile = "3.27.0"
