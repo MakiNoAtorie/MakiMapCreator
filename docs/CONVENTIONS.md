@@ -42,6 +42,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Every edit returns one `undo::Change`; `write(change, forward)` writes the after or before records.
 - Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
+- Search: FTS tables live in `store/src/search.rs` (rowid = entity id), kept in the same transaction as entity and page writes. The in-memory name index lives in `Project` and is updated in `write_entity_changes`.
 
 ## Tests
 
