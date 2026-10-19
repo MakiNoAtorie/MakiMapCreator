@@ -69,6 +69,7 @@ impl App {
         let report =
             |id: &str, e: &mmc_core::Error| Some(tr_args(id, &[("error", &errors::text(e))]));
         if let Some(file) = self.pending_save.take() {
+            log::info!("save started: {}", file.display());
             p.save(&file);
             self.saving = true;
         }
@@ -76,6 +77,7 @@ impl App {
             && let Some(r) = p.poll_save()
         {
             self.saving = false;
+            log::info!("save finished: {r:?}");
             if let Err(e) = r {
                 self.message = report("error-save", &e);
             }

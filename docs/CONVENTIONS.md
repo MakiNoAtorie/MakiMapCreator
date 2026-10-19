@@ -81,6 +81,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 ## App
 
+- The app logs to `%LOCALAPPDATA%/MakiMapCreator/logs/mmc.log` (previous session: `mmc.prev.log`) through the `log` crate: info for user actions and their results, warn for every message shown to the user; dependencies log warnings only.
+
 - eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent` (client physical pixels); Win32 code stays in `pen_win.rs` behind `cfg(windows)`, on eframe's `windows-sys`.
 - The pen API is a setting in `%LOCALAPPDATA%/MakiMapCreator/settings.txt` (`pen = wintab|ink`), read at start; a first argument overrides it.
 - UI strings live in `app/i18n/en-US/main.ftl` (`tr`, `tr_args`); numbers are formatted before they go in. Fonts in `app/fonts/` (`theme::FONT_FILES`).

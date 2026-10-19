@@ -53,6 +53,7 @@ fn file_dialog() -> rfd::FileDialog {
 
 impl App {
     pub(crate) fn run(&mut self, action: AppCommand) {
+        log::info!("file command {action:?}");
         match action {
             AppCommand::New => {
                 let root = mmc_kind_region::RegionKind.default_settings();
@@ -101,6 +102,7 @@ impl App {
 
     /// Restores (`true`) or discards the first leftover working copy.
     pub(crate) fn resolve_leftover(&mut self, restore: bool) {
+        log::info!("leftover working copy: restore = {restore}");
         let leftover = self.leftovers.remove(0);
         if restore {
             let kinds = self.kinds.clone();

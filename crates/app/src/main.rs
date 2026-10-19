@@ -7,6 +7,7 @@ mod i18n;
 mod input;
 mod intents;
 mod jobs;
+mod logfile;
 mod map_canvas;
 mod paint;
 mod panels;
@@ -50,7 +51,9 @@ const SEARCH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3)
 const PANELS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Tab);
 
 fn main() -> eframe::Result {
+    logfile::init(&files::app_dir());
     let setting = pen::cli_override().unwrap_or_else(|| pen::load_setting(&files::app_dir()));
+    log::info!("pen setting {setting:?}");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]),
         ..Default::default()
@@ -106,6 +109,8 @@ struct App {
     view: Option<MapView>,
     canvas: Option<Canvas>,
     message: Option<String>,
+    /// The last message written to the log.
+    logged_message: Option<String>,
     hover: Option<RootPoint>,
     elevation: Option<f32>,
     /// Name of the entity under the cursor.
@@ -167,6 +172,7 @@ impl App {
             view: None,
             canvas,
             message: None,
+            logged_message: None,
             hover: None,
             elevation: None,
             hover_entity: None,
@@ -212,6 +218,12 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.message != self.logged_message {
+            if let Some(m) = &self.message {
+                log::warn!("message: {m}");
+            }
+            self.logged_message = self.message.clone();
+        }
         let t = Theme::new(self.dark);
         let (now, ppp) = ui.input(|i| (i.time, i.pixels_per_point));
         let mut pen_hover = None;

@@ -115,6 +115,10 @@ impl Painter {
                 }
                 self.stroke.push(sample);
                 let path = std::mem::take(&mut self.stroke);
+                let (lo, hi) = path.iter().fold((f32::MAX, f32::MIN), |(lo, hi), s| {
+                    (lo.min(s.pressure), hi.max(s.pressure))
+                });
+                log::info!("stroke: {} samples, pressure {lo:.3}..{hi:.3}", path.len());
                 if let Some(cmd) = self.plan(&path) {
                     let raise = self.dir == Direction::Raise;
                     let discs = brush::stamp_discs(&cmd);
@@ -153,11 +157,17 @@ impl Painter {
         let mut error = None;
         let mut changed = false;
         while let Some(op) = self.ops.pop_front() {
+            let name = match op {
+                Op::Commit(_) => "apply",
+                Op::Undo => "undo",
+                Op::Redo => "redo",
+            };
             let r = match op {
                 Op::Commit(cmd) => p.apply(map, cmd).map(|()| true),
                 Op::Undo => p.undo(map),
                 Op::Redo => p.redo(map),
             };
+            log::info!("{name} on map {map:?}: {r:?}");
             match r {
                 Ok(c) => changed |= c,
                 Err(e) => {

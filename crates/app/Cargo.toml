@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 eframe = "0.36"
 fluent-bundle = "0.16.0"
+log = "0.4"
 mmc-core = { version = "0.1.0", path = "../core" }
 mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
 mmc-kind-world = { version = "0.1.0", path = "../kind-world" }

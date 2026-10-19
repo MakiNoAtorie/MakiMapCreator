@@ -28,6 +28,7 @@ impl App {
         if self.job.is_some() {
             return;
         }
+        log::info!("job started ({error})");
         let project = self.project.clone();
         let job = std::thread::spawn(move || match project.lock().unwrap().as_mut() {
             Some(p) => work(p),
@@ -43,7 +44,9 @@ impl App {
         let Some((job, error)) = self.job.take() else {
             return;
         };
-        match job.join() {
+        let r = job.join();
+        log::info!("job finished ({error}): ok = {}", matches!(r, Ok(Ok(_))));
+        match r {
             Ok(Ok(Done::Closed)) => {}
             Ok(Ok(Done::Generated(m))) => self.note_command(m, now, true),
             Ok(Ok(Done::Child(c))) => {

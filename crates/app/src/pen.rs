@@ -72,6 +72,7 @@ pub fn start(cc: &eframe::CreationContext, setting: PenApi) -> String {
         return String::new();
     };
     let s = crate::pen_win::install(h.hwnd.get(), setting, cc.egui_ctx.clone());
+    log::info!("pen api {:?}, wintab {:?}", s.api, s.wintab);
     status(s.api, &s.wintab)
 }
 

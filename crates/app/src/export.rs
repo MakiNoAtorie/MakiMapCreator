@@ -84,6 +84,7 @@ impl App {
         };
         let (project, kinds) = (self.project.clone(), self.kinds.clone());
         let hidden = self.hidden.clone();
+        log::info!("export started: {} px wide to {}", width, file.display());
         self.export.running = Some(std::thread::spawn(move || {
             let mut r = Renderer::from_device(rs.device.clone(), rs.queue.clone());
             for p in kinds.get(s.kind).map_or(&[][..], |k| k.render_passes()) {
@@ -117,7 +118,9 @@ impl App {
         let Some(job) = self.export.running.take() else {
             return;
         };
-        self.message = Some(match job.join() {
+        let r = job.join();
+        log::info!("export finished: ok = {}", matches!(r, Ok(Ok(_))));
+        self.message = Some(match r {
             Ok(Ok(file)) => tr_args("export-done", &[("file", &file.display().to_string())]),
             Ok(Err(e)) => tr_args("error-export", &[("error", &errors::render_text(&e))]),
             Err(_) => tr_args("error-export", &[("error", &tr("error-crashed"))]),
