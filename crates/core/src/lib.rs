@@ -15,6 +15,8 @@ mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
 mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
+mod search;
+pub use search::{NameHit, TextHit, TextSearch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -118,6 +120,7 @@ pub struct Project {
     store: Store,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
+    names: search::NameIndex,
 }
 
 impl Project {
@@ -139,6 +142,7 @@ impl Project {
                 settings: root,
             }],
             history: Default::default(),
+            names: Default::default(),
         })
     }
 
@@ -161,11 +165,14 @@ impl Project {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok(Project {
+        let mut p = Project {
             store,
             maps,
             history: Default::default(),
-        })
+            names: Default::default(),
+        };
+        p.names = p.build_name_index()?;
+        Ok(p)
     }
 
     /// Adds a map with no parent and returns its id.

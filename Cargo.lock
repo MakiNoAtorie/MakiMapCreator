@@ -1871,6 +1871,7 @@ name = "mmc-fixtures"
 version = "0.1.0"
 dependencies = [
  "mmc-core",
+ "serde_json",
  "tempfile",
 ]
 

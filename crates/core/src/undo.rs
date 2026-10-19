@@ -77,7 +77,7 @@ impl Project {
     }
 
     /// Writes the after records, or the before records when `forward` is false.
-    fn write(&self, changes: &Change, forward: bool) -> Result<()> {
+    fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
         match changes {
             Change::Tiles(tiles) => {
                 let writes: Vec<_> = tiles

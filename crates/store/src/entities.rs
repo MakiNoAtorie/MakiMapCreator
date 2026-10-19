@@ -200,6 +200,8 @@ impl Store {
                 )?,
                 None => tx.execute("DELETE FROM entities WHERE id = ?1", [id])?,
             };
+            let rec = rec.as_ref().map(|e| (e.name.as_str(), e.fields.as_str()));
+            crate::search::index_entity(&tx, *id, rec)?;
         }
         for (r, present) in relations {
             let sql = if *present {
