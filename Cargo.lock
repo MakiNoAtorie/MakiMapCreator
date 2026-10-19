@@ -1826,6 +1826,11 @@ dependencies = [
 [[package]]
 name = "mmc-bench"
 version = "0.1.0"
+dependencies = [
+ "mmc-core",
+ "mmc-fixtures",
+ "tempfile",
+]
 
 [[package]]
 name = "mmc-core"
@@ -1835,6 +1840,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zstd",
+]
+
+[[package]]
+name = "mmc-fixtures"
+version = "0.1.0"
+dependencies = [
+ "mmc-core",
+ "tempfile",
 ]
 
 [[package]]

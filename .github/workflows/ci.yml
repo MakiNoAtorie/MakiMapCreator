@@ -27,3 +27,11 @@ jobs:
           if git grep -n -i -E 'rusqlite|sqlite' -- 'crates/*/Cargo.toml' ':!crates/store'; then
             echo "SQL dependency outside crates/store"; exit 1
           fi
+      - name: Benchmark gate
+        run: cargo run -p mmc-bench --release -- bench-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: bench-results.json
+          if-no-files-found: ignore

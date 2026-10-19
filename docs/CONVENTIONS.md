@@ -56,3 +56,11 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `mmc-app` uses eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent`; Win32 code stays in `pen_win.rs` behind `cfg(windows)`.
 - `PenEvent.pos` is in window client physical pixels; divide by `pixels_per_point` for egui points.
 - Win32 calls use the `windows-sys` version that eframe uses.
+
+## Benchmark gate
+
+- `mmc-bench` measures through the `mmc-core` public API only. CI runs `cargo run -p mmc-bench --release -- bench-results.json` and fails on any exceeded budget. Results are JSON: name to `median_ms`, `budget_ms`, `ok`.
+- Add a budget: one line `name = max_ms` in `crates/bench/budgets.toml`, and one entry with the same name in `measure()` in `crates/bench/src/main.rs`. A budget with no result fails.
+- Gate on the median of `RUNS` runs, never one run. Budget = the ADR-0014 number; where the ADR gives none, about 10x the measured median. CI runners are noisy: raise a budget only with a reason in the commit.
+- Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
+- Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
