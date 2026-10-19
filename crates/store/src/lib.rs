@@ -7,9 +7,12 @@ use rusqlite::{Connection, OpenFlags};
 
 mod assets;
 mod tiles;
+pub use tiles::{LayerTiles, TileConn};
 pub use tiles::{TileKey, TileRecord};
 mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
+mod pages;
+pub use pages::PageRecord;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -27,6 +30,7 @@ const MIGRATIONS: &[&str] = &[
     assets::MIGRATION,
     tiles::MIGRATION,
     entities::MIGRATION,
+    pages::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
