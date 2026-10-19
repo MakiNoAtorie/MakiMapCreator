@@ -59,8 +59,16 @@ fn main() -> eframe::Result {
     logfile::init(&files::app_dir());
     let setting = pen::cli_override().unwrap_or_else(|| pen::load_setting(&files::app_dir()));
     log::info!("pen setting {setting:?}");
+    let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    let fallback = setup.instance_descriptor.backends;
+    setup.instance_descriptor.backends = mmc_render::preferred_backends(fallback);
+    log::info!("wgpu backends {:?}", setup.instance_descriptor.backends);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]),
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(setup),
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(

@@ -433,6 +433,23 @@ impl Renderer {
     }
 }
 
+/// DX12 on Windows when a GPU has it, else `fallback`; Vulkan there loads other apps' overlay layers.
+/// `WGPU_BACKEND` in the environment overrides this.
+pub fn preferred_backends(fallback: wgpu::Backends) -> wgpu::Backends {
+    if !cfg!(windows) || wgpu::Backends::from_env().is_some() {
+        return fallback;
+    }
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::DX12,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    // WARP is always listed; only a hardware adapter counts.
+    let gpu = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
+        .iter()
+        .any(|a| a.get_info().device_type != wgpu::DeviceType::Cpu);
+    if gpu { wgpu::Backends::DX12 } else { fallback }
+}
+
 /// Renders `scene` on a worker thread and writes it to `path` as an RGBA PNG.
 pub fn export_png(
     renderer: Arc<Renderer>,
