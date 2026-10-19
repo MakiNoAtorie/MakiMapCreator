@@ -110,10 +110,11 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Outlines on a map, ordered by entity id.
+    /// Outlines of existing entities on a map, ordered by entity id.
     pub fn outlines(&self, map_id: i64) -> Result<Vec<OutlineRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT map_id, entity_id, points FROM outlines WHERE map_id = ?1 ORDER BY entity_id",
+            "SELECT o.map_id, o.entity_id, o.points FROM outlines o
+             JOIN entities e ON e.id = o.entity_id WHERE o.map_id = ?1 ORDER BY o.entity_id",
         )?;
         let rows = stmt.query_map([map_id], |r| {
             Ok(OutlineRecord {

@@ -23,6 +23,8 @@ mod children;
 pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
 mod save;
 pub use save::save_snapshot;
+mod delete;
+pub use delete::ChildLink;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -45,6 +47,7 @@ const MIGRATIONS: &[&str] = &[
     search::MIGRATION,
     generations::MIGRATION,
     children::MIGRATION,
+    delete::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -135,6 +138,7 @@ impl Store {
             tx.execute_batch(sql)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.execute_batch(delete::PURGE)?;
         tx.commit()?;
         Ok(Store {
             conn,

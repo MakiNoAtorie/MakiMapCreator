@@ -33,6 +33,8 @@ mod kind;
 pub use kind::{Kinds, MapKindModule, Summary, Tool};
 mod child;
 pub use child::{CHILD_MARGIN, CHILD_SCALE_FACTOR, ParentContext};
+mod delete;
+pub use delete::OwnMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -113,6 +115,7 @@ pub enum Error {
     UnknownGenerator(String),
     InvalidChild(&'static str),
     OutsideOutline,
+    OwnMapChoice(EntityId),
 }
 
 impl fmt::Display for Error {
@@ -139,6 +142,11 @@ impl fmt::Display for Error {
             Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
             Error::InvalidChild(why) => write!(f, "child map: {why}"),
             Error::OutsideOutline => write!(f, "the edit is outside the area this map owns"),
+            Error::OwnMapChoice(id) => write!(
+                f,
+                "entity {} has its own map: choose to delete the map or keep it as a root map",
+                id.0
+            ),
         }
     }
 }
