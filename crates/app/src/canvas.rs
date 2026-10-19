@@ -15,10 +15,13 @@ const RENDER_TILE: u32 = 2048;
 pub type SharedProject = Arc<Mutex<Option<Project>>>;
 
 pub struct Canvas {
-    requests: Sender<View>,
-    results: Receiver<(View, mmc_render::Result<Image>)>,
+    requests: Sender<(View, u64)>,
+    results: Receiver<(View, u64, mmc_render::Result<Image>)>,
     requested: Option<View>,
     shown: Option<(View, TextureHandle)>,
+    /// Bumped by `invalidate`; a render carries the value it was requested under.
+    epoch: u64,
+    fresh_epoch: u64,
     pub error: Option<String>,
 }
 
@@ -31,13 +34,13 @@ impl Canvas {
         let device = render_state.device.clone();
         let mut renderer = Renderer::from_device(device.clone(), render_state.queue.clone());
         renderer.register(Layer::Height, Box::new(HeightPass::new(&device)));
-        let (requests, jobs) = channel::<View>();
+        let (requests, jobs) = channel::<(View, u64)>();
         let (done, results) = channel();
         std::thread::spawn(move || {
-            while let Ok(mut view) = jobs.recv() {
+            while let Ok((mut view, mut epoch)) = jobs.recv() {
                 // A newer request replaces older ones (ADR-0014).
-                while let Ok(v) = jobs.try_recv() {
-                    view = v;
+                while let Ok((v, e)) = jobs.try_recv() {
+                    (view, epoch) = (v, e);
                 }
                 // ponytail: scene reads full-resolution tiles under the project lock; pyramid levels (#9) cut this when zoomed out.
                 let scene = match project.lock().unwrap().as_ref() {
@@ -45,7 +48,7 @@ impl Canvas {
                     None => continue,
                 };
                 let result = scene.and_then(|s| renderer.render(&s, RENDER_TILE));
-                if done.send((view, result)).is_err() {
+                if done.send((view, epoch, result)).is_err() {
                     break;
                 }
                 ctx.request_repaint();
@@ -56,6 +59,8 @@ impl Canvas {
             results,
             requested: None,
             shown: None,
+            epoch: 0,
+            fresh_epoch: 0,
             error: None,
         }
     }
@@ -65,6 +70,18 @@ impl Canvas {
         self.requested = None;
         self.shown = None;
         self.error = None;
+    }
+
+    /// Forces a new render of the same view, for example after an edit; returns the epoch to wait for.
+    pub fn invalidate(&mut self) -> u64 {
+        self.epoch += 1;
+        self.requested = None;
+        self.epoch
+    }
+
+    /// True once a render requested at or after `epoch` has arrived.
+    pub fn fresh(&self, epoch: u64) -> bool {
+        self.fresh_epoch >= epoch
     }
 
     /// Requests `view` when it changed, takes finished renders and paints the latest into `rect`.
@@ -80,9 +97,10 @@ impl Canvas {
         };
         if self.requested != Some(view) && view.width > 0 && view.height > 0 {
             self.requested = Some(view);
-            let _ = self.requests.send(view);
+            let _ = self.requests.send((view, self.epoch));
         }
-        while let Ok((v, result)) = self.results.try_recv() {
+        while let Ok((v, epoch, result)) = self.results.try_recv() {
+            self.fresh_epoch = self.fresh_epoch.max(epoch);
             match result {
                 Ok(img) => {
                     let pixels = ColorImage::from_rgba_unmultiplied(

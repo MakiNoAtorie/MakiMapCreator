@@ -201,7 +201,7 @@ fn anchors_and_unplaced_state_survive_save_and_open() {
     p.set_derived_features(vec![]);
     p.match_anchors().unwrap();
     let file = dir.path().join("a.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
     let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(q.anchors(silver).unwrap(), Some(silver_anchors(1_000.0)));

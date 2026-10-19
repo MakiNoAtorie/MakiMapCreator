@@ -163,7 +163,8 @@ fn proof_step_2_child_region_map_from_parent_context() {
     // Save and reopen keep the transform, outline and snapshot.
     let before = p.maps().to_vec();
     let file = dir.path().join("w.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
     p.close().unwrap();
     let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.maps(), before.as_slice());

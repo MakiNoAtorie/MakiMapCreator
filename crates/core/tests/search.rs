@@ -87,7 +87,8 @@ fn name_index_follows_edits_undo_redo_and_reopen() {
     assert_eq!(names(&p, "bet"), [a]);
 
     let file = dir.path().join("p.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
     let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(names(&q, "bet"), [a]);
 }

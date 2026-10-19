@@ -89,7 +89,7 @@ fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
     assert_eq!(regions(&p, map), expected);
 
     let file = dir.path().join("w.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
     let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(regions(&p, map), expected);

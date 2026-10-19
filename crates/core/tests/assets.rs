@@ -47,9 +47,9 @@ fn newer_content_replaces_the_asset_entry() {
 fn assets_survive_save_and_reload() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("p.mmc");
-    let p = new_project(tmp.path());
+    let mut p = new_project(tmp.path());
     p.add_asset("pack", "tree", b"abc").unwrap();
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
     let p = Project::open(&file, &tmp.path().join("wc2.sqlite")).unwrap();
     assert_eq!(

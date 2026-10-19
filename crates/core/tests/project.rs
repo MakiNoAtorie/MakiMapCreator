@@ -18,12 +18,12 @@ fn create_save_reopen_keeps_map_tree_and_settings() {
         metres_per_pixel: 25.0,
     };
 
-    let project = Project::create(&app_data.path().join("a.sqlite"), settings).unwrap();
+    let mut project = Project::create(&app_data.path().join("a.sqlite"), settings).unwrap();
     let before = project.maps().to_vec();
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].parent, None);
     assert_eq!(before[0].settings, settings);
-    project.save(&file).unwrap();
+    project.save(&file);
     project.close().unwrap();
 
     let project = Project::open(&file, &app_data.path().join("b.sqlite")).unwrap();

@@ -104,11 +104,22 @@ fn derived_tiles_are_saved_so_open_does_not_rebuild() {
         .unwrap();
     p.wait_for_jobs().unwrap();
     let flank = slope(&p, map, 2105.0, 2005.0);
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
 
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let mut q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(slope(&q, map, 2105.0, 2005.0), flank);
+
+    // After open, a rebuild that flattens the terrain must still remove the saved slope tiles.
+    q.apply(map, stroke(Layer::Height, 2005.0, 2005.0, -50.0))
+        .unwrap();
+    q.wait_for_jobs().unwrap();
+    assert!(
+        all_tiles(&q, map, Layer::Slope)
+            .iter()
+            .flatten()
+            .all(|v| *v == 0.0)
+    );
     q.close().unwrap();
 }
 

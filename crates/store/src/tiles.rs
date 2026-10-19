@@ -52,22 +52,7 @@ impl Store {
 
     /// Writes all tiles in one transaction; `None` deletes the tile.
     pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        for (k, rec) in writes {
-            match rec {
-                Some(r) => tx.execute(
-                    "INSERT OR REPLACE INTO tiles (map_id, layer, level, tx, ty, data, edited)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![k.map_id, k.layer, k.level, k.tx, k.ty, r.data, r.edited],
-                )?,
-                None => tx.execute(
-                    "DELETE FROM tiles
-                     WHERE map_id = ?1 AND layer = ?2 AND level = ?3 AND tx = ?4 AND ty = ?5",
-                    params![k.map_id, k.layer, k.level, k.tx, k.ty],
-                )?,
-            };
-        }
-        Ok(tx.commit()?)
+        write_tiles(&self.conn, writes)
     }
 
     /// Level-0 tiles of a layer that the user edited by hand, ordered by (tx, ty).
@@ -80,6 +65,26 @@ impl Store {
         let rows = stmt.query_map(params![map_id, layer], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+}
+
+/// Writes all tiles in one transaction; `None` deletes the tile.
+fn write_tiles(conn: &Connection, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for (k, rec) in writes {
+        match rec {
+            Some(r) => tx.execute(
+                "INSERT OR REPLACE INTO tiles (map_id, layer, level, tx, ty, data, edited)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![k.map_id, k.layer, k.level, k.tx, k.ty, r.data, r.edited],
+            )?,
+            None => tx.execute(
+                "DELETE FROM tiles
+                 WHERE map_id = ?1 AND layer = ?2 AND level = ?3 AND tx = ?4 AND ty = ?5",
+                params![k.map_id, k.layer, k.level, k.tx, k.ty],
+            )?,
+        };
+    }
+    Ok(tx.commit()?)
 }
 
 /// Level-0 tiles of one layer as ((tx, ty), record), ordered.
@@ -117,23 +122,9 @@ impl TileConn {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Replaces all level-0 tiles of each layer in one transaction.
-    pub fn replace_layers(&mut self, map_id: i64, layers: &[(&str, LayerTiles)]) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        for (layer, tiles) in layers {
-            tx.execute(
-                "DELETE FROM tiles WHERE map_id = ?1 AND layer = ?2 AND level = 0",
-                params![map_id, layer],
-            )?;
-            for ((x, y), r) in tiles {
-                tx.execute(
-                    "INSERT INTO tiles (map_id, layer, level, tx, ty, data, edited)
-                     VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
-                    params![map_id, layer, x, y, r.data, r.edited],
-                )?;
-            }
-        }
-        Ok(tx.commit()?)
+    /// As `Store::write_tiles`, on this connection.
+    pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
+        write_tiles(&self.conn, writes)
     }
 }
 

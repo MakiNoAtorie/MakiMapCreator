@@ -222,7 +222,7 @@ fn entities_fields_and_relations_survive_save_and_reload() {
     };
     edit(&mut p, EntityEdit::Relate(rel.clone())).unwrap();
     let file = dir.path().join("world.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
 
     let mut p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
