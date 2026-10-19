@@ -1,6 +1,7 @@
 //! Anchors of named natural features and their match state (ADR-0023).
 
-use rusqlite::{OptionalExtension, Row, params};
+use mmc_core::persist::AnchorRecord;
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{Result, Store};
 
@@ -13,15 +14,6 @@ pub(crate) const MIGRATION: &str = "
         unplaced INTEGER NOT NULL
     );
 ";
-
-/// `points` is `x,y;x,y` in root-space metres; core owns the meaning.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AnchorRecord {
-    pub entity_id: i64,
-    pub points: String,
-    pub feature_id: Option<i64>,
-    pub unplaced: bool,
-}
 
 fn record(r: &Row) -> rusqlite::Result<AnchorRecord> {
     Ok(AnchorRecord {
@@ -55,21 +47,19 @@ impl Store {
         let rows = stmt.query_map([], record)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+}
 
-    /// Writes the row, or deletes it when `rec` is `None`.
-    pub fn write_anchor(&self, entity_id: i64, rec: Option<&AnchorRecord>) -> Result<()> {
-        match rec {
-            Some(a) => self.conn.execute(
-                "INSERT INTO anchors (entity_id, points, feature_id, unplaced)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (entity_id) DO UPDATE SET points = excluded.points,
-                 feature_id = excluded.feature_id, unplaced = excluded.unplaced",
-                params![a.entity_id, a.points, a.feature_id, a.unplaced],
-            )?,
-            None => self
-                .conn
-                .execute("DELETE FROM anchors WHERE entity_id = ?1", [entity_id])?,
-        };
-        Ok(())
-    }
+/// Writes the row, or deletes it when `rec` is `None`, inside the caller's transaction.
+pub(crate) fn write_anchor(tx: &Connection, id: i64, rec: Option<&AnchorRecord>) -> Result<()> {
+    match rec {
+        Some(a) => tx.execute(
+            "INSERT INTO anchors (entity_id, points, feature_id, unplaced)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (entity_id) DO UPDATE SET points = excluded.points,
+             feature_id = excluded.feature_id, unplaced = excluded.unplaced",
+            params![a.entity_id, a.points, a.feature_id, a.unplaced],
+        )?,
+        None => tx.execute("DELETE FROM anchors WHERE entity_id = ?1", [id])?,
+    };
+    Ok(())
 }

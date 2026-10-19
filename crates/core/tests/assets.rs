@@ -1,7 +1,7 @@
 use mmc_core::{MapKind, MapSettings, Project};
 
 fn new_project(dir: &std::path::Path) -> Project {
-    Project::create(
+    mmc_fixtures::create(
         &dir.join("wc.sqlite"),
         MapSettings::default_for(MapKind::World),
     )
@@ -51,7 +51,7 @@ fn assets_survive_save_and_reload() {
     p.add_asset("pack", "tree", b"abc").unwrap();
     p.save(&file);
     p.close().unwrap();
-    let p = Project::open(&file, &tmp.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &tmp.path().join("wc2.sqlite")).unwrap();
     assert_eq!(
         p.asset("pack", "tree").unwrap().as_deref(),
         Some(&b"abc"[..])

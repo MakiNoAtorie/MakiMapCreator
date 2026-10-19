@@ -3,11 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
-use mmc_store::{TileConn, TileKey, TileRecord};
+use crate::persist::{TileKey, TileOpener, TileRecord, TileStore};
 
 use crate::jobs::{Cancelled, Jobs};
 use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode, tile_of};
@@ -18,20 +17,9 @@ use crate::{Error, MapId, Project, Result};
 // ponytail: entity and page changes feed no stage yet; map them to layers when a stage reads entities.
 fn changed_layers(change: &Change) -> Vec<Layer> {
     match change {
-        Change::Tiles(t) => t
-            .iter()
-            .filter_map(|c| Layer::parse(&c.key.layer))
-            .collect(),
-        Change::Generation(g) => g
-            .tiles
-            .iter()
-            .filter_map(|c| Layer::parse(&c.key.layer))
-            .collect(),
-        Change::Resync(r) => r
-            .tiles()
-            .iter()
-            .filter_map(|c| Layer::parse(&c.key.layer))
-            .collect(),
+        Change::Tiles(t) => t.iter().map(|c| c.key.layer).collect(),
+        Change::Generation(g) => g.tiles.iter().map(|c| c.key.layer).collect(),
+        Change::Resync(r) => r.tiles().iter().map(|c| c.key.layer).collect(),
         Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => vec![],
     }
 }
@@ -194,7 +182,7 @@ struct MapJob {
     width: u32,
     height: u32,
     metres_per_pixel: f64,
-    working_copy: PathBuf,
+    open: TileOpener,
     dirty: Vec<bool>,
     threads: usize,
     /// Top pyramid level; derived layers are written with all levels.
@@ -204,7 +192,12 @@ struct MapJob {
 /// Per computed tile: digest and zstd bytes, `None` when all zeros.
 type Encoded = Vec<((u32, u32), Option<(u64, Vec<u8>)>)>;
 /// Per written layer: level-0 tiles, and levels 1..=top decoded for the pyramid.
-type Output = (TileConn, i64, usize, Vec<(Layer, Encoded, Vec<Level>)>);
+type Output = (
+    Box<dyn TileStore>,
+    i64,
+    usize,
+    Vec<(Layer, Encoded, Vec<Level>)>,
+);
 
 /// Digests of the derived tiles in the working copy; `None` until loaded.
 type Committed = Mutex<Option<HashMap<(Layer, (u32, u32)), u64>>>;
@@ -223,7 +216,7 @@ fn tile_key(map: i64, layer: Layer, (tx, ty): (u32, u32)) -> TileKey {
 fn level_key(map: i64, layer: Layer, level: u32, (tx, ty): (u32, u32)) -> TileKey {
     TileKey {
         map_id: map,
-        layer: layer.as_str().to_owned(),
+        layer,
         level,
         tx,
         ty,
@@ -232,9 +225,9 @@ fn level_key(map: i64, layer: Layer, level: u32, (tx, ty): (u32, u32)) -> TileKe
 
 /// Runs the dirty stages in order on its own connection to the working copy.
 fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
-    let reader = match TileConn::open(&job.working_copy) {
+    let reader = match (job.open)() {
         Ok(r) => r,
-        Err(e) => return Some(Err(e.into())),
+        Err(e) => return Some(Err(e)),
     };
     let mut cx = Ctx {
         width: job.width,
@@ -251,9 +244,9 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
             if cx.layers.contains_key(&l) {
                 continue;
             }
-            let tiles = match reader.layer_tiles_until(job.id, l.as_str(), cancelled) {
+            let tiles = match reader.layer_tiles_until(job.id, l, cancelled) {
                 Ok(t) => t?,
-                Err(e) => return Some(Err(e.into())),
+                Err(e) => return Some(Err(e)),
             };
             let values = par_map(job.threads, &tiles, cancelled, |(_, r)| decode(Some(r)))?;
             let raster = tiles.iter().map(|(t, _)| *t).zip(values);
@@ -296,7 +289,10 @@ fn commit(committed: &Committed, out: Result<Output>) -> Result<()> {
         None => {
             let mut k = HashMap::new();
             for l in Layer::ALL.into_iter().filter(|l| l.is_derived()) {
-                for (t, r) in conn.layer_tiles(map, l.as_str())? {
+                let tiles = conn
+                    .layer_tiles_until(map, l, &|| false)?
+                    .unwrap_or_default();
+                for (t, r) in tiles {
                     k.insert((l, t), digest(&r.data));
                 }
             }
@@ -452,7 +448,7 @@ impl Project {
             width: s.width,
             height: s.height,
             metres_per_pixel: s.metres_per_pixel,
-            working_copy: self.store.working_copy().to_owned(),
+            open: self.store.tile_opener(),
             dirty: st.dirty.clone(),
             threads: self.pipeline.threads,
             top: crate::pyramid::top_level(&s),

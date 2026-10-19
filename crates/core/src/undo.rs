@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use mmc_store::{TileKey, TileRecord};
+use crate::persist::{TileKey, TileRecord, Write};
 
 use crate::entity::EntityChanges;
 use crate::{Command, MapId, Project, Result};
@@ -16,6 +16,14 @@ pub(crate) struct TileChange {
     pub key: TileKey,
     pub before: Option<TileRecord>,
     pub after: Option<TileRecord>,
+}
+
+impl TileChange {
+    /// The row write for the after state, or the before state when `forward` is false.
+    pub(crate) fn write(&self, forward: bool) -> Write {
+        let rec = if forward { &self.after } else { &self.before };
+        Write::Tile(self.key.clone(), rec.clone())
+    }
 }
 
 /// The records one command changed.
@@ -97,16 +105,8 @@ impl Project {
     fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
         let res = match changes {
             Change::Tiles(tiles) => {
-                let writes: Vec<_> = tiles
-                    .iter()
-                    .map(|c| {
-                        (
-                            c.key.clone(),
-                            if forward { &c.after } else { &c.before }.clone(),
-                        )
-                    })
-                    .collect();
-                self.write_tiles(&writes)
+                let rows: Vec<_> = tiles.iter().map(|c| c.write(forward)).collect();
+                self.write_rows(&rows)
             }
             Change::Entities(e) => self.write_entity_changes(e, forward),
             Change::Page(p) => self.write_page_change(p, forward),

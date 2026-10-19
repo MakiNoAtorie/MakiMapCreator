@@ -314,11 +314,8 @@ mod tests {
 
     fn project() -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
-        let p = Project::create(
-            &dir.path().join("w.mmc"),
-            MapSettings::default_for(MapKind::World),
-        )
-        .unwrap();
+        let store = mmc_store::Store::create(&dir.path().join("w.mmc")).unwrap();
+        let p = Project::create(Box::new(store), MapSettings::default_for(MapKind::World)).unwrap();
         (dir, p)
     }
 

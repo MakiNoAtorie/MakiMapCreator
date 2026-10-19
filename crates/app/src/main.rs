@@ -24,6 +24,7 @@ use mmc_core::{
     Command, Entity, EntityEdit, EntityId, FieldDef, Kinds, Layer, Map, MapId, MapKind,
     MapSettings, Project, RootPoint,
 };
+use mmc_store::Store;
 use paint::Painter;
 use panels::{Intent, Pick, Search};
 use theme::Theme;
@@ -224,12 +225,18 @@ impl App {
     fn run(&mut self, action: AppCommand) {
         match action {
             AppCommand::New => {
-                let r = Project::create(&working_copy(), MapSettings::default_for(MapKind::Region));
+                let r = Store::create(&working_copy())
+                    .map_err(Into::into)
+                    .and_then(|s| {
+                        Project::create(Box::new(s), MapSettings::default_for(MapKind::Region))
+                    });
                 self.replace(r.map(|p| (p, None)), "error-new");
             }
             AppCommand::Open => {
                 if let Some(file) = file_dialog().pick_file() {
-                    let r = Project::open(&file, &working_copy());
+                    let r = Store::open(&file, &working_copy())
+                        .map_err(Into::into)
+                        .and_then(|s| Project::load(Box::new(s)));
                     self.replace(r.map(|p| (p, Some(file))), "error-open");
                 }
             }
@@ -1088,9 +1095,11 @@ impl eframe::App for App {
         {
             self.leftovers.remove(0);
             if restore {
-                let r = Project::restore(&leftover);
+                let r = Store::restore(&leftover)
+                    .map_err(Into::into)
+                    .and_then(|s| Project::load(Box::new(s)));
                 self.replace(r.map(|p| (p, None)), "error-restore");
-            } else if let Err(e) = Project::discard_working_copy(&leftover) {
+            } else if let Err(e) = Store::discard(&leftover) {
                 self.message = Some(tr_args("error-restore", &[("error", &e.to_string())]));
             }
         }

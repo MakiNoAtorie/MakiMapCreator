@@ -1,6 +1,7 @@
 //! Entity pages, page templates and the page link index (ADR-0012).
 
-use rusqlite::{OptionalExtension, params};
+use mmc_core::persist::PageRecord;
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Result, Store};
 
@@ -36,14 +37,6 @@ pub(crate) const MIGRATION: &str = "
         ('desert', '## Overview\n\n## Places\n');
 ";
 
-/// One page with the entity ids its links point to. `body: None` means no page row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageRecord {
-    pub entity_id: i64,
-    pub body: Option<String>,
-    pub links: Vec<i64>,
-}
-
 impl Store {
     pub fn page(&self, entity_id: i64) -> Result<Option<String>> {
         Ok(self
@@ -67,28 +60,6 @@ impl Store {
             .optional()?)
     }
 
-    /// Writes the page and rebuilds its link index rows in one transaction.
-    pub fn write_page(&self, p: &PageRecord) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        match &p.body {
-            Some(b) => tx.execute(
-                "INSERT INTO pages (entity_id, body) VALUES (?1, ?2)
-                 ON CONFLICT (entity_id) DO UPDATE SET body = excluded.body",
-                params![p.entity_id, b],
-            )?,
-            None => tx.execute("DELETE FROM pages WHERE entity_id = ?1", [p.entity_id])?,
-        };
-        crate::search::index_page(&tx, p.entity_id, p.body.as_deref())?;
-        tx.execute("DELETE FROM page_links WHERE from_id = ?1", [p.entity_id])?;
-        for to in &p.links {
-            tx.execute(
-                "INSERT OR IGNORE INTO page_links (to_id, from_id) VALUES (?1, ?2)",
-                [to, &p.entity_id],
-            )?;
-        }
-        Ok(tx.commit()?)
-    }
-
     /// Existing entities whose page links to `entity_id`, ordered by id.
     pub fn backlinks(&self, entity_id: i64) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
@@ -98,4 +69,25 @@ impl Store {
         let rows = stmt.query_map([entity_id], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+}
+
+/// Writes the page and rebuilds its link index rows, inside the caller's transaction.
+pub(crate) fn write_page(tx: &Connection, p: &PageRecord) -> Result<()> {
+    match &p.body {
+        Some(b) => tx.execute(
+            "INSERT INTO pages (entity_id, body) VALUES (?1, ?2)
+             ON CONFLICT (entity_id) DO UPDATE SET body = excluded.body",
+            params![p.entity_id, b],
+        )?,
+        None => tx.execute("DELETE FROM pages WHERE entity_id = ?1", [p.entity_id])?,
+    };
+    crate::search::index_page(tx, p.entity_id, p.body.as_deref())?;
+    tx.execute("DELETE FROM page_links WHERE from_id = ?1", [p.entity_id])?;
+    for to in &p.links {
+        tx.execute(
+            "INSERT OR IGNORE INTO page_links (to_id, from_id) VALUES (?1, ?2)",
+            [to, &p.entity_id],
+        )?;
+    }
+    Ok(())
 }

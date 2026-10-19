@@ -1,4 +1,4 @@
-use mmc_core::{Command, Layer, MapKind, MapSettings, PaintStroke, Project, RootPoint};
+use mmc_core::{Command, Layer, MapKind, MapSettings, PaintStroke, RootPoint};
 use mmc_kind_world::WorldKind;
 use mmc_render::{Renderer, View};
 
@@ -11,7 +11,7 @@ fn a_world_map_draws_land_and_sea_through_its_kind_passes() {
         height: 100,
         metres_per_pixel: 1000.0,
     };
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings).unwrap();
     let map = p.maps()[0].id;
     p.apply(
         map,

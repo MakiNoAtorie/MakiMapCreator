@@ -12,6 +12,7 @@ mmc-core = { version = "0.1.0", path = "../core" }
 mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
 mmc-kind-world = { version = "0.1.0", path = "../kind-world" }
 mmc-render = { version = "0.1.0", path = "../render" }
+mmc-store = { version = "0.1.0", path = "../store" }
 rfd = "0.17.2"
 serde_json = "1.0.154"
 unic-langid = "0.9.6"

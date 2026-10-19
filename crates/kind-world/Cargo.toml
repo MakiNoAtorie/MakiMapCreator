@@ -7,4 +7,5 @@ edition = "2024"
 mmc-core = { version = "0.1.0", path = "../core" }
 
 [dev-dependencies]
+mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
 tempfile = "3.27.0"

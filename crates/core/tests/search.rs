@@ -4,7 +4,7 @@ use mmc_core::{
 use serde_json::json;
 
 fn new_project(dir: &std::path::Path) -> (Project, MapId) {
-    let p = Project::create(
+    let p = mmc_fixtures::create(
         &dir.join("wc.sqlite"),
         MapSettings::default_for(MapKind::Region),
     )
@@ -89,7 +89,7 @@ fn name_index_follows_edits_undo_redo_and_reopen() {
     let file = dir.path().join("p.mmc");
     p.save(&file);
     p.wait_for_save().unwrap();
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(names(&q, "bet"), [a]);
 }
 

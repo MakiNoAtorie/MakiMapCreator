@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mmc_core::{
     BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TileId, read_overviews,
+    TileId,
 };
 use mmc_render::{HeightPass, Image, Renderer, View, export_png};
 
@@ -16,7 +16,7 @@ fn fixture(dir: &std::path::Path) -> (Project, MapId) {
         height: 400,
         metres_per_pixel: 10.0,
     };
-    let mut p = Project::create(&dir.join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), settings).unwrap();
     let map = p.maps()[0].id;
     for (x, y, r, s) in [
         (2000.0, 1500.0, 1200.0, 1500.0),
@@ -151,7 +151,10 @@ fn reopen(dir: &std::path::Path) -> (Project, MapId) {
     p.save(&file);
     p.wait_for_save().unwrap();
     p.close().unwrap();
-    (Project::open(&file, &dir.join("wc2.sqlite")).unwrap(), map)
+    (
+        mmc_fixtures::open(&file, &dir.join("wc2.sqlite")).unwrap(),
+        map,
+    )
 }
 
 #[test]
@@ -201,7 +204,7 @@ fn the_overview_draws_a_first_frame_before_the_project_opens() {
     p.wait_for_save().unwrap();
     p.close().unwrap();
 
-    let overviews = read_overviews(&file, Layer::Height).unwrap();
+    let overviews = mmc_fixtures::read_overviews(&file, Layer::Height).unwrap();
     let r = renderer();
     let scene = r
         .overview_scene(&overviews[0], view(map, 300, 200))

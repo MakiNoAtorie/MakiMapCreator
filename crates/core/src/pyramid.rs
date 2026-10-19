@@ -3,10 +3,9 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 use std::sync::Arc;
 
-use mmc_store::{FileReader, TileKey, TileRecord};
+use crate::persist::{ProjectReader, TileKey, TileRecord, Write};
 
 use crate::cache::{Tile, TileCache};
 use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode};
@@ -75,7 +74,7 @@ pub(crate) fn top_level(s: &MapSettings) -> u32 {
 fn key(id: TileId) -> TileKey {
     TileKey {
         map_id: id.map.0,
-        layer: id.layer.as_str().to_owned(),
+        layer: id.layer,
         level: id.level,
         tx: id.tx,
         ty: id.ty,
@@ -83,8 +82,7 @@ fn key(id: TileId) -> TileKey {
 }
 
 /// Reads the overviews of `layer` from a project file without opening it, one per map.
-pub fn read_overviews(file: &Path, layer: Layer) -> Result<Vec<Overview>> {
-    let reader = FileReader::open(file)?;
+pub fn read_overviews(reader: &dyn ProjectReader, layer: Layer) -> Result<Vec<Overview>> {
     reader
         .maps()?
         .into_iter()
@@ -107,7 +105,7 @@ pub fn read_overviews(file: &Path, layer: Layer) -> Result<Vec<Overview>> {
 impl Project {
     fn tiles(&self) -> &TileCache {
         self.cache
-            .get_or_init(|| TileCache::new(self.store.working_copy()))
+            .get_or_init(|| TileCache::new(self.store.tile_opener()))
     }
 
     /// The coarsest pyramid level of `map`; its single tile covers the whole map.
@@ -158,26 +156,31 @@ impl Project {
     /// Drops cached tiles of derived layers after a rebuild replaced them.
     pub(crate) fn forget_derived_tiles(&self) {
         if let Some(cache) = self.cache.get() {
-            cache.forget(|k| Layer::parse(&k.layer).is_some_and(|l| l.is_derived()));
+            cache.forget(|k| k.layer.is_derived());
         }
     }
 
-    /// Writes level-0 tiles; a worker then updates the pyramid levels above them.
-    pub(crate) fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
-        let put = writes
+    /// Writes `rows` in one transaction. For level-0 tiles among them, a worker then updates
+    /// the pyramid levels above.
+    pub(crate) fn write_rows(&self, rows: &[Write]) -> Result<()> {
+        let put = rows
             .iter()
+            .filter_map(|w| match w {
+                Write::Tile(k, rec) => Some((k, rec)),
+                _ => None,
+            })
             .map(|(k, rec)| Ok((k.clone(), decode(rec.as_ref())?.into())))
             .collect::<Result<Vec<(TileKey, Tile)>>>()?;
-        self.store.write_tiles(writes)?;
-        if writes.is_empty() {
+        self.store.write(rows)?;
+        if put.is_empty() {
             return Ok(());
         }
         let cache = self.tiles();
-        cache.put(put);
-        for (k, _) in writes {
+        for (k, _) in &put {
             let top = self.top_level(MapId(k.map_id))?;
             cache.mark_dirty([k.clone()], top);
         }
+        cache.put(put);
         Ok(())
     }
 

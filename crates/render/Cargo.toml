@@ -10,6 +10,7 @@ pollster = "1.0"
 wgpu = "30.0.1"
 
 [dev-dependencies]
+mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
 blake3 = "1.8"
 mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
 mmc-kind-world = { version = "0.1.0", path = "../kind-world" }

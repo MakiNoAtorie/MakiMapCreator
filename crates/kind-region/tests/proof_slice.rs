@@ -63,7 +63,7 @@ fn proof_slice_steps_1_2_4_5_6_7_8() {
         height: 64,
         metres_per_pixel: KM,
     };
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings).unwrap();
     let w = p.maps()[0].id;
 
     // Step 1: paint land, generate crude regions as entities.
@@ -127,7 +127,7 @@ fn proof_slice_steps_1_2_4_5_6_7_8() {
     p.wait_for_save().unwrap();
     let maps = p.maps().to_vec();
     p.close().unwrap();
-    let mut p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let mut p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.maps(), maps.as_slice());
     assert_eq!(p.page(region).unwrap(), text);
     assert_eq!(p.backlinks(other).unwrap(), [region]);

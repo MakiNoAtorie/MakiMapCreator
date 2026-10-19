@@ -1,4 +1,6 @@
-use mmc_store::{EntityRecord, PageRecord, Store, TileKey, TileRecord};
+use mmc_core::Layer;
+use mmc_core::persist::{EntityRecord, PageRecord, TileKey, TileRecord, Write};
+use mmc_store::Store;
 use rusqlite::Connection;
 
 fn count(conn: &Connection, sql: &str) -> i64 {
@@ -13,7 +15,7 @@ fn open_purges_deleted_maps_and_rows_of_deleted_entities() {
     let gone = store.insert_map(None, "region", 256, 256, 10.0).unwrap();
     let tile = |map_id| TileKey {
         map_id,
-        layer: "height".into(),
+        layer: Layer::Height,
         level: 0,
         tx: 0,
         ty: 0,
@@ -23,7 +25,10 @@ fn open_purges_deleted_maps_and_rows_of_deleted_entities() {
         edited: true,
     };
     store
-        .write_tiles(&[(tile(kept), Some(rec.clone())), (tile(gone), Some(rec))])
+        .write(&[
+            Write::Tile(tile(kept), Some(rec.clone())),
+            Write::Tile(tile(gone), Some(rec)),
+        ])
         .unwrap();
     let entity = |id| EntityRecord {
         id,
@@ -32,19 +37,23 @@ fn open_purges_deleted_maps_and_rows_of_deleted_entities() {
         fields: "{}".into(),
     };
     store
-        .write_entities(&[(1, Some(entity(1))), (2, Some(entity(2)))], &[])
+        .write(&[
+            Write::Entity(1, Some(entity(1))),
+            Write::Entity(2, Some(entity(2))),
+        ])
         .unwrap();
     for id in [1, 2] {
         store
-            .write_page(&PageRecord {
+            .write(&[Write::Page(PageRecord {
                 entity_id: id,
                 body: Some("text".into()),
                 links: vec![],
-            })
+            })])
             .unwrap();
     }
-    store.write_map_deletion(&[(gone, true)], &[]).unwrap();
-    store.write_entities(&[(2, None)], &[]).unwrap();
+    store
+        .write(&[Write::MapDeleted(gone, true), Write::Entity(2, None)])
+        .unwrap();
     let file = dir.path().join("p.mmc");
     store.save(&file).unwrap();
     store.close().unwrap();

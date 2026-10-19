@@ -21,7 +21,7 @@ fn paint(x: f64, y: f64, value: f32) -> Command {
 #[test]
 fn paint_sets_land_and_sea_and_undoes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), world()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
     let land = |p: &Project, x: f64| {
         p.layer_value(map, Layer::Land, RootPoint { x, y: 100_000.0 })

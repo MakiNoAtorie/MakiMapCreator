@@ -45,7 +45,7 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<RootPoint> {
 
 /// A world with two square regions sharing the edge x = 12 km and a coast through both.
 fn two_regions(dir: &std::path::Path) -> (Project, MapId) {
-    let mut p = Project::create(&dir.join("wc.sqlite"), world(32)).unwrap();
+    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world(32)).unwrap();
     let w = p.maps()[0].id;
     p.apply(w, paint(at(12.0, 0.0), 11.0, 1.0)).unwrap();
     let region = |name: &str, outline| NewEntity {
@@ -86,7 +86,7 @@ fn height(p: &Project, map: MapId, x: f64, y: f64) -> Option<f32> {
 fn proof_step_2_child_region_map_from_parent_context() {
     let dir = tempfile::tempdir().unwrap();
     let kinds = kinds();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), world(64)).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world(64)).unwrap();
     let w = p.maps()[0].id;
     assert_eq!(p.maps()[0].origin, at(0.0, 0.0));
     p.apply(w, paint(at(32.0, 32.0), 20.0, 1.0)).unwrap();
@@ -166,7 +166,7 @@ fn proof_step_2_child_region_map_from_parent_context() {
     p.save(&file);
     p.wait_for_save().unwrap();
     p.close().unwrap();
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.maps(), before.as_slice());
     assert_eq!(p.parent_context(child, Layer::Land).unwrap().unwrap(), ctx);
     assert_eq!(

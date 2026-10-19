@@ -1,4 +1,4 @@
-use mmc_core::{MapKind, MapSettings, Project};
+use mmc_core::{MapKind, MapSettings};
 
 #[test]
 fn default_region_is_8192_at_10_metres_per_pixel() {
@@ -18,7 +18,7 @@ fn create_save_reopen_keeps_map_tree_and_settings() {
         metres_per_pixel: 25.0,
     };
 
-    let mut project = Project::create(&app_data.path().join("a.sqlite"), settings).unwrap();
+    let mut project = mmc_fixtures::create(&app_data.path().join("a.sqlite"), settings).unwrap();
     let before = project.maps().to_vec();
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].parent, None);
@@ -26,7 +26,7 @@ fn create_save_reopen_keeps_map_tree_and_settings() {
     project.save(&file);
     project.close().unwrap();
 
-    let project = Project::open(&file, &app_data.path().join("b.sqlite")).unwrap();
+    let project = mmc_fixtures::open(&file, &app_data.path().join("b.sqlite")).unwrap();
     assert_eq!(project.maps(), before.as_slice());
     project.close().unwrap();
 }

@@ -5,7 +5,7 @@ use mmc_core::{
 use serde_json::{Map, Value, json};
 
 fn new_project(dir: &std::path::Path) -> Project {
-    Project::create(
+    mmc_fixtures::create(
         &dir.join("wc.sqlite"),
         MapSettings::default_for(MapKind::Region),
     )
@@ -225,7 +225,7 @@ fn entities_fields_and_relations_survive_save_and_reload() {
     p.save(&file);
     p.close().unwrap();
 
-    let mut p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let mut p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     let river = p.entity(r).unwrap().unwrap();
     assert_eq!(river.name, "Sill");
     assert_eq!(river.fields["length_km"], json!(42.5));

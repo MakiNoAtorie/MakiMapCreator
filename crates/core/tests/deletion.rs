@@ -99,7 +99,7 @@ fn tree(dir: &std::path::Path) -> Tree {
         height: 32,
         metres_per_pixel: 1000.0,
     };
-    let mut p = Project::create(&dir.join("wc.sqlite"), world).unwrap();
+    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world).unwrap();
     let w = p.maps()[0].id;
     let region = outline_entity(&mut p, w, "region", rect(4e3, 4e3, 12e3, 12e3));
     let r = p.create_child_map(&k, w, region, None).unwrap();
@@ -329,7 +329,7 @@ fn a_reopened_project_no_longer_has_the_deleted_map() {
     let expected = p.maps().to_vec();
     p.close().unwrap();
 
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(q.maps(), &expected[..]);
     assert_eq!(map(&q, t).parent, None);
 }

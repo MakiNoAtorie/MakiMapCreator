@@ -1,7 +1,7 @@
 //! Child maps (ADR-0001, ADR-0002, ADR-0008, ADR-0019): made from an entity's outline on the
 //! parent, own only that outline, and keep a snapshot of the parent context.
 
-use mmc_store::{ContextRecord, NewChildMap, TileRecord};
+use crate::persist::{ContextRecord, NewChildMap, TileRecord};
 
 use crate::generation::{decode_outline, encode_outline};
 use crate::layer::{TILE_SIZE, decode, encode, tile_of};

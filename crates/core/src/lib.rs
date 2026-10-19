@@ -1,14 +1,12 @@
 //! Headless core: the project model and its public API (seam 1). No UI, no SQL.
 
 use std::fmt;
-use std::path::Path;
-
-use mmc_store::Store;
 
 mod cache;
 mod command;
 mod jobs;
 mod layer;
+pub mod persist;
 mod pipeline;
 mod pyramid;
 pub mod rng;
@@ -105,7 +103,7 @@ pub struct Map {
 }
 
 impl Map {
-    fn from_record(r: mmc_store::MapRecord) -> Result<Map> {
+    fn from_record(r: persist::MapRecord) -> Result<Map> {
         Ok(Map {
             id: MapId(r.id),
             parent: r.parent_id.map(MapId),
@@ -126,7 +124,15 @@ impl Map {
 
 #[derive(Debug)]
 pub enum Error {
-    Store(mmc_store::Error),
+    /// The file is not a project of this app.
+    NotAProject,
+    /// The file comes from a newer app.
+    NewerVersion {
+        found: i32,
+        supported: i32,
+    },
+    /// The storage backend failed; the text is its message.
+    Storage(String),
     UnknownMapKind(String),
     UnknownMap(MapId),
     CorruptTile,
@@ -134,7 +140,10 @@ pub enum Error {
     UnknownEntityKind(String),
     UnknownEntity(EntityId),
     EntityExists(EntityId),
-    InvalidField { key: String, reason: &'static str },
+    InvalidField {
+        key: String,
+        reason: &'static str,
+    },
     CorruptEntity,
     InvalidAnchor(&'static str),
     UnknownFeature(FeatureId),
@@ -148,7 +157,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Store(e) => e.fmt(f),
+            Error::NotAProject => write!(f, "the file is not a MakiMapCreator project"),
+            Error::NewerVersion { found, supported } => write!(
+                f,
+                "the file was saved by a newer version of the app                  (file version {found}, this app supports up to {supported})"
+            ),
+            Error::Storage(e) => write!(f, "storage error: {e}"),
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
             Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
             Error::CorruptTile => write!(f, "the file has a damaged map tile"),
@@ -181,17 +195,11 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<mmc_store::Error> for Error {
-    fn from(e: mmc_store::Error) -> Self {
-        Error::Store(e)
-    }
-}
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// An open project. Edits go to a working copy; `save` writes the project file.
 pub struct Project {
-    store: Store,
+    store: Box<dyn persist::Storage>,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
     names: search::NameIndex,
@@ -203,9 +211,8 @@ pub struct Project {
 }
 
 impl Project {
-    /// Creates a project with one root map. `working_copy` is a file path in local app data.
-    pub fn create(working_copy: &Path, root: MapSettings) -> Result<Project> {
-        let store = Store::create(working_copy)?;
+    /// Creates a project with one root map on an empty `store`.
+    pub fn create(store: Box<dyn persist::Storage>, root: MapSettings) -> Result<Project> {
         let id = store.insert_map(
             None,
             root.kind.as_str(),
@@ -232,13 +239,8 @@ impl Project {
         })
     }
 
-    /// Opens the project `file` into a new working copy at `working_copy`.
-    pub fn open(file: &Path, working_copy: &Path) -> Result<Project> {
-        Project::load(Store::open(file, working_copy)?)
-    }
-
-    /// A project on `store` with its maps read from the store.
-    fn load(store: Store) -> Result<Project> {
+    /// A project on an opened or restored `store`.
+    pub fn load(store: Box<dyn persist::Storage>) -> Result<Project> {
         let maps = store
             .maps()?
             .into_iter()
@@ -286,7 +288,7 @@ impl Project {
         self.pipeline.shutdown();
         // Tile workers hold read connections to the working copy; stop them first.
         drop(self.cache);
-        Ok(self.store.close()?)
+        self.store.close()
     }
 
     /// All maps in the tree, ordered by id.
@@ -298,14 +300,14 @@ impl Project {
 impl Project {
     /// Embeds a copy of an asset; identical content is stored once (ADR-0015).
     pub fn add_asset(&self, pack_id: &str, asset_id: &str, data: &[u8]) -> Result<()> {
-        Ok(self.store.add_asset(pack_id, asset_id, data)?)
+        self.store.add_asset(pack_id, asset_id, data)
     }
 
     pub fn asset(&self, pack_id: &str, asset_id: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self.store.asset(pack_id, asset_id)?)
+        self.store.asset(pack_id, asset_id)
     }
 
     pub fn asset_blob_count(&self) -> Result<i64> {
-        Ok(self.store.asset_blob_count()?)
+        self.store.asset_blob_count()
     }
 }

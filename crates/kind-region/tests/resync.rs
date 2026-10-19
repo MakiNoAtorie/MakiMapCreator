@@ -64,7 +64,7 @@ fn setup(dir: &std::path::Path) -> (Project, MapId, MapId, MapId) {
         height: 32,
         metres_per_pixel: KM,
     };
-    let mut p = Project::create(&dir.join("wc.sqlite"), world).unwrap();
+    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world).unwrap();
     let w = p.maps()[0].id;
     p.apply(w, paint(Layer::Land, at(12.0, 0.0), 11.0, 1.0))
         .unwrap();
@@ -146,7 +146,7 @@ fn a_parent_edit_inside_a_childs_area_marks_only_that_child_out_of_date() {
     p.save(&file);
     p.wait_for_save().unwrap();
     p.close().unwrap();
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert!(p.is_out_of_date(west).unwrap());
     assert!(!p.is_out_of_date(east).unwrap());
 }

@@ -1,6 +1,6 @@
 //! Anchors: named rivers and lakes keep their identity across derived rebuilds (ADR-0023).
 
-use mmc_store::AnchorRecord;
+use crate::persist::{AnchorRecord, Write};
 
 use crate::{EntityId, Error, Project, Result, RootPoint};
 
@@ -231,7 +231,8 @@ impl Project {
             let new = self.matched(&rec)?;
             if (rec.feature_id, rec.unplaced) != new {
                 (rec.feature_id, rec.unplaced) = new;
-                self.store.write_anchor(rec.entity_id, Some(&rec))?;
+                self.store
+                    .write(&[Write::Anchor(rec.entity_id, Some(rec))])?;
             }
         }
         Ok(())
@@ -300,6 +301,6 @@ impl Project {
 
     pub(crate) fn write_anchor_change(&self, c: &AnchorChange, forward: bool) -> Result<()> {
         let rec = if forward { &c.after } else { &c.before };
-        Ok(self.store.write_anchor(c.entity, rec.as_ref())?)
+        self.store.write(&[Write::Anchor(c.entity, rec.clone())])
     }
 }

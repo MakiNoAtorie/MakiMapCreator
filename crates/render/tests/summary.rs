@@ -2,7 +2,7 @@
 
 use mmc_core::{
     Command, Generation, Kinds, Layer, MapKind, MapKindModule, MapSettings, NewEntity, PaintStroke,
-    Project, RootPoint,
+    RootPoint,
 };
 use mmc_kind_region::RegionKind;
 use mmc_kind_world::WorldKind;
@@ -27,7 +27,7 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
         height: 64,
         metres_per_pixel: KM,
     };
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings).unwrap();
     let w = p.maps()[0].id;
     p.apply(
         w,

@@ -4,7 +4,7 @@ use mmc_core::{
 };
 
 fn new_project(dir: &std::path::Path) -> Project {
-    Project::create(
+    mmc_fixtures::create(
         &dir.join("wc.sqlite"),
         MapSettings::default_for(MapKind::Region),
     )
@@ -186,7 +186,7 @@ fn pages_and_backlinks_survive_save_and_reload() {
     p.save(&file);
     p.close().unwrap();
 
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.page(a).unwrap(), text);
     assert_eq!(p.backlinks(b).unwrap(), [a]);
 }

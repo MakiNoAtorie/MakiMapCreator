@@ -17,7 +17,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Architecture
 
 - Only `mmc-store` uses SQL or depends on `rusqlite`. CI fails if another crate's `Cargo.toml` names SQLite.
-- `mmc-core` depends on `mmc-store` and maps store records to core types. `mmc-store` does not depend on `mmc-core`; its API uses plain records.
+- `mmc-core` defines the persistence port (`mmc_core::persist`: `Storage`, `TileStore`, `TextIndex`, `ProjectReader` and the records). `mmc-store` implements it and depends on core; core never names the store. App, tests and bench pass a `Box<dyn Storage>` in (tests: `mmc_fixtures::create`/`open`/`restore`).
+- One edit is one `Storage::write` batch of `persist::Write` rows: one transaction.
 - Core has no UI, no SQL and no global state.
 - File paths that the app owns (working copy in local app data) are parameters, never looked up inside core or store, so tests use temp dirs.
 
@@ -49,7 +50,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
 - Search: FTS tables live in `store/src/search.rs` (rowid = entity id), kept in the same transaction as entity and page writes. The in-memory name index lives in `Project` and is updated in `write_entity_changes`.
-- Write raster tiles through core (`Project::write_tiles` path), never `store.write_tiles` directly: it updates the pyramid and the tile cache.
+- Write raster tiles through core (`Project::write_rows`), never `Storage::write` directly: it updates the pyramid and the tile cache.
 - Pyramid level `l` pixel = 2x2 mean of level `l-1`; the top level (one tile) is the map's overview. Pyramid tiles have `edited = false`; `edited_tiles` is level 0 only.
 - Edits write level 0; a background worker updates upper levels. `Project::save` waits for it before the snapshot. Tests use `wait_tiles()`.
 - The screen uses `scene_cached` and redraws until `is_complete()`; export uses `scene` (level 0, blocking).

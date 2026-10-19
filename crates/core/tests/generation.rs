@@ -54,7 +54,7 @@ fn regions(p: &Project, map: MapId) -> Vec<(String, Vec<RootPoint>)> {
 #[test]
 fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), world()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, generation("region")).unwrap();
 
@@ -91,7 +91,7 @@ fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
     let file = dir.path().join("w.mmc");
     p.save(&file);
     p.close().unwrap();
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(regions(&p, map), expected);
     assert_eq!(p.generations(map).unwrap().len(), 1);
 }
@@ -99,7 +99,7 @@ fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
 #[test]
 fn generation_refuses_an_unknown_entity_kind() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), world()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
     let err = p.apply(map, generation("galaxy")).unwrap_err();
     assert!(matches!(err, Error::UnknownEntityKind(_)), "{err}");

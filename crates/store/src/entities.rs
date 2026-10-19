@@ -1,6 +1,7 @@
 //! Entities (project-level), their kinds, field definitions and relations (ADR-0009, ADR-0010).
 
-use rusqlite::{OptionalExtension, Row, params};
+use mmc_core::persist::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{Result, Store};
 
@@ -51,41 +52,6 @@ pub(crate) const MIGRATION: &str = "
         ('settlement', 'population', 'Population', 'number', NULL, 1);
 ";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntityKindRecord {
-    pub id: String,
-    pub label: String,
-    /// "political" or "natural".
-    pub category: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldDefRecord {
-    pub kind: String,
-    pub key: String,
-    pub label: String,
-    pub field_type: String,
-    /// JSON array of options for choice fields.
-    pub choices: Option<String>,
-    pub builtin: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntityRecord {
-    pub id: i64,
-    pub kind: String,
-    pub name: String,
-    /// JSON object of field values.
-    pub fields: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelationRecord {
-    pub from_id: i64,
-    pub to_id: i64,
-    pub rel_type: String,
-}
-
 fn entity_row(r: &Row) -> rusqlite::Result<EntityRecord> {
     Ok(EntityRecord {
         id: r.get(0)?,
@@ -127,15 +93,6 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    pub fn insert_field_def(&self, d: &FieldDefRecord) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO field_defs (kind, key, label, type, choices, builtin)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![d.kind, d.key, d.label, d.field_type, d.choices, d.builtin],
-        )?;
-        Ok(())
     }
 
     /// The id the next new entity gets; ids of deleted entities are never reused.
@@ -181,46 +138,46 @@ impl Store {
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
-
-    /// Writes entities and relations in one transaction. `None` deletes an
-    /// entity; `false` deletes a relation.
-    pub fn write_entities(
-        &self,
-        entities: &[(i64, Option<EntityRecord>)],
-        relations: &[(RelationRecord, bool)],
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        write_entity_rows(&tx, entities, relations)?;
-        Ok(tx.commit()?)
-    }
 }
 
-/// Entity and relation writes inside the caller's transaction.
-pub(crate) fn write_entity_rows(
-    tx: &rusqlite::Transaction,
-    entities: &[(i64, Option<EntityRecord>)],
-    relations: &[(RelationRecord, bool)],
-) -> Result<()> {
-    for (id, rec) in entities {
-        match rec {
-            Some(e) => tx.execute(
-                "INSERT INTO entities (id, kind, name, fields) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (id) DO UPDATE
-                 SET kind = excluded.kind, name = excluded.name, fields = excluded.fields",
-                params![e.id, e.kind, e.name, e.fields],
-            )?,
-            None => tx.execute("DELETE FROM entities WHERE id = ?1", [id])?,
-        };
-        let rec = rec.as_ref().map(|e| (e.name.as_str(), e.fields.as_str()));
-        crate::search::index_entity(tx, *id, rec)?;
-    }
-    for (r, present) in relations {
-        let sql = if *present {
-            "INSERT OR IGNORE INTO relations (from_id, to_id, type) VALUES (?1, ?2, ?3)"
-        } else {
-            "DELETE FROM relations WHERE from_id = ?1 AND to_id = ?2 AND type = ?3"
-        };
-        tx.execute(sql, params![r.from_id, r.to_id, r.rel_type])?;
+/// Writes or deletes (`None`) one entity and its search row, inside the caller's transaction.
+pub(crate) fn write_entity(tx: &Connection, id: i64, rec: Option<&EntityRecord>) -> Result<()> {
+    match rec {
+        Some(e) => tx.execute(
+            "INSERT INTO entities (id, kind, name, fields) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (id) DO UPDATE
+             SET kind = excluded.kind, name = excluded.name, fields = excluded.fields",
+            params![e.id, e.kind, e.name, e.fields],
+        )?,
+        None => tx.execute("DELETE FROM entities WHERE id = ?1", [id])?,
+    };
+    let rec = rec.map(|e| (e.name.as_str(), e.fields.as_str()));
+    crate::search::index_entity(tx, id, rec)?;
+    Ok(())
+}
+
+pub(crate) fn write_relation(tx: &Connection, r: &RelationRecord, present: bool) -> Result<()> {
+    let sql = if present {
+        "INSERT OR IGNORE INTO relations (from_id, to_id, type) VALUES (?1, ?2, ?3)"
+    } else {
+        "DELETE FROM relations WHERE from_id = ?1 AND to_id = ?2 AND type = ?3"
+    };
+    tx.execute(sql, params![r.from_id, r.to_id, r.rel_type])?;
+    Ok(())
+}
+
+pub(crate) fn write_field_def(tx: &Connection, d: &FieldDefRecord, present: bool) -> Result<()> {
+    if present {
+        tx.execute(
+            "INSERT INTO field_defs (kind, key, label, type, choices, builtin)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![d.kind, d.key, d.label, d.field_type, d.choices, d.builtin],
+        )?;
+    } else {
+        tx.execute(
+            "DELETE FROM field_defs WHERE kind = ?1 AND key = ?2 AND NOT builtin",
+            params![d.kind, d.key],
+        )?;
     }
     Ok(())
 }

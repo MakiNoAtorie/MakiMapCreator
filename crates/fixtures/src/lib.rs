@@ -6,8 +6,34 @@ pub use search::{LongPages, ManyEntities, word};
 use std::path::Path;
 
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
+    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Overview, Project, Result, RootPoint,
+    StrokePoint,
 };
+use mmc_store::{FileReader, Store};
+
+/// A new project with its working copy at `working_copy`, on the SQLite store.
+pub fn create(working_copy: &Path, root: MapSettings) -> Result<Project> {
+    Project::create(Box::new(Store::create(working_copy)?), root)
+}
+
+/// Opens the project `file` into a new working copy.
+pub fn open(file: &Path, working_copy: &Path) -> Result<Project> {
+    Project::load(Box::new(Store::open(file, working_copy)?))
+}
+
+/// Opens a working copy a crash left behind, in place.
+pub fn restore(working_copy: &Path) -> Result<Project> {
+    Project::load(Box::new(Store::restore(working_copy)?))
+}
+
+pub fn discard_working_copy(working_copy: &Path) -> Result<()> {
+    Ok(Store::discard(working_copy)?)
+}
+
+/// The overviews of `layer` in the project `file`, read without opening it.
+pub fn read_overviews(file: &Path, layer: Layer) -> Result<Vec<Overview>> {
+    mmc_core::read_overviews(&FileReader::open(file)?, layer)
+}
 
 /// Splitmix64: small, seeded and stable across platforms.
 pub struct Rng(u64);
@@ -91,7 +117,7 @@ impl LargeMap {
 
     /// Creates the project with its working copy at `working_copy`, edited by `strokes` strokes.
     pub fn build(&self, working_copy: &Path) -> (Project, MapId) {
-        let mut p = Project::create(working_copy, self.settings()).unwrap();
+        let mut p = create(working_copy, self.settings()).unwrap();
         let map = p.maps()[0].id;
         let mut rng = Rng::new(self.seed);
         for _ in 0..self.strokes {

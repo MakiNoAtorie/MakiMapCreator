@@ -1,9 +1,11 @@
-use mmc_store::{Error, FileReader, Store, TileKey, TileRecord};
+use mmc_core::Layer;
+use mmc_core::persist::{TileKey, TileRecord, Write};
+use mmc_store::{Error, FileReader, Store};
 
 fn key(level: u32) -> TileKey {
     TileKey {
         map_id: 1,
-        layer: "height".into(),
+        layer: Layer::Height,
         level,
         tx: 0,
         ty: 0,
@@ -21,7 +23,9 @@ fn reader_sees_committed_tiles_of_the_working_copy_and_the_saved_file() {
     };
     let live = FileReader::open(store.working_copy()).unwrap();
     assert_eq!(live.tile(&key(1)).unwrap(), None);
-    store.write_tiles(&[(key(1), Some(rec.clone()))]).unwrap();
+    store
+        .write(&[Write::Tile(key(1), Some(rec.clone()))])
+        .unwrap();
     assert_eq!(live.tile(&key(1)).unwrap(), Some(rec.clone()));
 
     let file = tmp.path().join("p.mmc");

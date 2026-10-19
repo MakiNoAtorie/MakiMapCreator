@@ -1,7 +1,7 @@
 //! One-shot generation (ADR-0003): a generator's output is one command; the file records
 //! the generator, seed and app version of each run (ADR-0021).
 
-use mmc_store::{EntityRecord, GenerationRecord, OutlineRecord, TileRecord};
+use crate::persist::{EntityRecord, GenerationRecord, OutlineRecord, TileRecord, Write};
 
 use crate::layer::{TILE_LEN, TILE_SIZE, encode};
 use crate::undo::TileChange;
@@ -73,6 +73,21 @@ pub(crate) fn decode_outline(bytes: &[u8]) -> Result<Vec<RootPoint>> {
         .collect())
 }
 
+impl GenerationChange {
+    /// Tiles, entities, outlines and the record, for one transaction (#14, #15).
+    pub(crate) fn rows(&self, forward: bool) -> Vec<Write> {
+        let mut rows: Vec<Write> = self.tiles.iter().map(|t| t.write(forward)).collect();
+        for e in &self.entities {
+            rows.push(Write::Entity(e.id, forward.then(|| e.clone())));
+        }
+        for o in &self.outlines {
+            rows.push(Write::Outline(o.clone(), forward));
+        }
+        rows.push(Write::Generation(self.record.clone(), forward));
+        rows
+    }
+}
+
 impl Project {
     pub(crate) fn generation_change(&self, map: &Map, g: &Generation) -> Result<GenerationChange> {
         let kinds = self.entity_kinds()?;
@@ -137,20 +152,13 @@ impl Project {
         c: &GenerationChange,
         forward: bool,
     ) -> Result<()> {
-        // ponytail: tiles and records are two transactions; join them if a crash between matters.
-        let tiles: Vec<_> = c
-            .tiles
-            .iter()
-            .map(|t| {
-                (
-                    t.key.clone(),
-                    if forward { &t.after } else { &t.before }.clone(),
-                )
-            })
-            .collect();
-        self.write_tiles(&tiles)?;
-        self.store
-            .write_generation(&c.record, &c.entities, &c.outlines, forward)?;
+        self.write_rows(&c.rows(forward))?;
+        self.note_generation(c, forward);
+        Ok(())
+    }
+
+    /// Keeps the name index equal to the entities `c` wrote.
+    pub(crate) fn note_generation(&mut self, c: &GenerationChange, forward: bool) {
         for e in &c.entities {
             if forward {
                 self.names.set(EntityId(e.id), &e.name);
@@ -158,7 +166,6 @@ impl Project {
                 self.names.remove(EntityId(e.id));
             }
         }
-        Ok(())
     }
 
     /// Outlines of entities on `map`, ordered by entity id.

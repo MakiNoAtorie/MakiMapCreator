@@ -62,7 +62,7 @@ impl ManyEntities {
 
     /// Creates a project with a region map and `count` entities.
     pub fn build(&self, working_copy: &Path) -> (Project, MapId, Vec<EntityId>) {
-        let mut p = Project::create(working_copy, LargeMap::region(self.seed).settings()).unwrap();
+        let mut p = crate::create(working_copy, LargeMap::region(self.seed).settings()).unwrap();
         let map = p.maps()[0].id;
         let mut rng = Rng::new(self.seed);
         let mut ids = Vec::with_capacity(self.count);

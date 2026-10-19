@@ -1,6 +1,6 @@
 //! Summaries, out of date, re-sync and masked regeneration (ADR-0002, ADR-0003, ADR-0022).
 
-use mmc_store::{ChildState, ContextRecord, TileRecord};
+use crate::persist::{ChildState, ContextRecord, TileRecord, Write};
 
 use crate::child::inside;
 use crate::generation::{GenerationChange, decode_outline, encode_outline};
@@ -106,7 +106,7 @@ impl Project {
     /// Always `false` for a root map.
     pub fn is_out_of_date(&self, map: MapId) -> Result<bool> {
         self.map(map)?;
-        Ok(self.store.out_of_date(map.0)?)
+        self.store.out_of_date(map.0)
     }
 
     /// Summaries of `map`'s child maps that their kinds define (ADR-0002).
@@ -168,7 +168,7 @@ impl Project {
                     a != b && in_rect(child, parent.pixel_centre(x, y))
                 });
                 if hit {
-                    self.store.set_out_of_date(child.id.0, true)?;
+                    self.store.write(&[Write::OutOfDate(child.id.0, true)])?;
                 }
             }
         }
@@ -281,9 +281,7 @@ impl Project {
         };
         let mut tiles = vec![];
         for c in all {
-            let Some(layer) = Layer::parse(&c.key.layer) else {
-                continue;
-            };
+            let layer = c.key.layer;
             let at = (layer, c.key.tx, c.key.ty);
             let lock = self.store.tile(&m.tile_key(Layer::Lock, at.1, at.2))?;
             let lock = decode(lock.as_ref())?;
@@ -375,11 +373,16 @@ impl Project {
     }
 
     pub(crate) fn write_resync_change(&mut self, c: &ResyncChange, forward: bool) -> Result<()> {
-        self.write_generation_change(&c.generation, forward)?;
+        let mut rows = c.generation.rows(forward);
+        let id = c.generation.record.map_id;
         if let Some((before, after)) = &c.child {
             let s = if forward { after } else { before };
-            let id = c.generation.record.map_id;
-            self.store.write_child_state(id, s)?;
+            rows.push(Write::ChildState(id, s.clone()));
+        }
+        self.write_rows(&rows)?;
+        self.note_generation(&c.generation, forward);
+        if let Some((before, after)) = &c.child {
+            let s = if forward { after } else { before };
             let outline = decode_outline(&s.outline)?;
             if let Some(m) = self.maps.iter_mut().find(|m| m.id.0 == id) {
                 m.outline = Some(outline);

@@ -1,6 +1,6 @@
 //! Entities: project-level places with kinds, fields and relations (ADR-0009, ADR-0010).
 
-use mmc_store::{EntityRecord, FieldDefRecord, RelationRecord};
+use crate::persist::{EntityRecord, FieldDefRecord, RelationRecord, Write};
 use serde_json::{Map, Value};
 
 use crate::{Error, Project, Result};
@@ -90,6 +90,21 @@ pub enum EntityEdit {
 pub(crate) struct EntityChanges {
     entities: Vec<EntityRow>,
     relations: Vec<(RelationRecord, bool, bool)>,
+}
+
+impl EntityChanges {
+    /// The `after` rows, or the `before` rows when `forward` is false.
+    pub(crate) fn rows(&self, forward: bool) -> Vec<Write> {
+        let entities = self
+            .entities
+            .iter()
+            .map(|(id, b, a)| Write::Entity(*id, if forward { a } else { b }.clone()));
+        let relations = self
+            .relations
+            .iter()
+            .map(|(r, b, a)| Write::Relation(r.clone(), if forward { *a } else { *b }));
+        entities.chain(relations).collect()
+    }
 }
 
 impl FieldType {
@@ -202,14 +217,15 @@ impl Project {
             });
         }
         let (ty, choices) = field_type.to_record();
-        Ok(self.store.insert_field_def(&FieldDefRecord {
+        let def = FieldDefRecord {
             kind: kind.into(),
             key: key.into(),
             label: label.into(),
             field_type: ty.into(),
             choices,
             builtin: false,
-        })?)
+        };
+        self.store.write(&[Write::FieldDef(def, true)])
     }
 
     pub fn next_entity_id(&self) -> Result<EntityId> {
@@ -348,23 +364,18 @@ impl Project {
 
     /// Writes the `after` rows, or the `before` rows when `forward` is false.
     pub(crate) fn write_entity_changes(&mut self, c: &EntityChanges, forward: bool) -> Result<()> {
-        let entities: Vec<_> = c
-            .entities
-            .iter()
-            .map(|(id, b, a)| (*id, if forward { a } else { b }.clone()))
-            .collect();
-        let relations: Vec<_> = c
-            .relations
-            .iter()
-            .map(|(r, b, a)| (r.clone(), if forward { *a } else { *b }))
-            .collect();
-        self.store.write_entities(&entities, &relations)?;
-        for (id, rec) in &entities {
-            match rec {
+        self.store.write(&c.rows(forward))?;
+        self.note_names(c, forward);
+        Ok(())
+    }
+
+    /// Keeps the name index equal to the entity rows `c` wrote.
+    pub(crate) fn note_names(&mut self, c: &EntityChanges, forward: bool) {
+        for (id, b, a) in &c.entities {
+            match if forward { a } else { b } {
                 Some(r) => self.names.set(EntityId(*id), &r.name),
                 None => self.names.remove(EntityId(*id)),
             }
         }
-        Ok(())
     }
 }

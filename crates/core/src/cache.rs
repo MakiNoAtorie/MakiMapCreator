@@ -2,11 +2,10 @@
 //! worker updates pyramid levels above edited tiles, off the edit path (ADR-0014).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use mmc_store::{FileReader, TileConn, TileKey};
+use crate::persist::{TileKey, TileOpener};
 
 use crate::layer::{TILE_LEN, decode};
 use crate::pyramid::upper_levels;
@@ -60,18 +59,18 @@ pub(crate) struct TileCache {
 }
 
 impl TileCache {
-    pub(crate) fn new(working_copy: &Path) -> TileCache {
+    pub(crate) fn new(open: TileOpener) -> TileCache {
         let shared = Arc::new(Shared::default());
         shared.lock().limit = TILE_CACHE_BYTES;
         let n = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
         let mut workers: Vec<_> = (0..n)
             .map(|_| {
-                let (shared, path) = (shared.clone(), working_copy.to_owned());
-                std::thread::spawn(move || work(&shared, path))
+                let (shared, open) = (shared.clone(), open.clone());
+                std::thread::spawn(move || work(&shared, open))
             })
             .collect();
-        let (sh, path) = (shared.clone(), working_copy.to_owned());
-        workers.push(std::thread::spawn(move || build(&sh, path)));
+        let sh = shared.clone();
+        workers.push(std::thread::spawn(move || build(&sh, open)));
         TileCache { shared, workers }
     }
 
@@ -164,7 +163,7 @@ fn evict(s: &mut State) {
     }
 }
 
-fn work(shared: &Shared, path: PathBuf) {
+fn work(shared: &Shared, open: TileOpener) {
     let mut reader = None;
     loop {
         let (key, epoch) = {
@@ -181,7 +180,7 @@ fn work(shared: &Shared, path: PathBuf) {
             }
         };
         if reader.is_none() {
-            reader = FileReader::open(&path).ok();
+            reader = open().ok();
         }
         // ponytail: a failed read is dropped; the next frame's request retries it.
         let tile = reader
@@ -207,7 +206,7 @@ fn work(shared: &Shared, path: PathBuf) {
 }
 
 /// Rebuilds pyramid tiles above dirty level-0 tiles, one batch per map, on its own connection.
-fn build(shared: &Shared, path: PathBuf) {
+fn build(shared: &Shared, open: TileOpener) {
     let mut conn = None;
     loop {
         let (batch, top) = {
@@ -232,7 +231,7 @@ fn build(shared: &Shared, path: PathBuf) {
             }
         };
         if conn.is_none() {
-            conn = TileConn::open(&path).ok();
+            conn = open().ok();
         }
         // ponytail: a failed rebuild is dropped; the next edit nearby rebuilds those levels.
         let built = conn.as_ref().and_then(|c| {
@@ -241,7 +240,7 @@ fn build(shared: &Shared, path: PathBuf) {
                 .map(|k| Ok((k.clone(), decode(c.tile(k)?.as_ref())?)))
                 .collect::<crate::Result<Vec<_>>>()
                 .ok()?;
-            let (writes, put) = upper_levels(changed, top, |k| Ok(c.tile(k)?)).ok()?;
+            let (writes, put) = upper_levels(changed, top, |k| c.tile(k)).ok()?;
             c.write_tiles(&writes).ok()?;
             Some(put)
         });

@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use mmc_core::persist::{MapRecord, TileKey, TileRecord};
 use rusqlite::Connection;
 
-use crate::{MapRecord, Result, TileKey, TileRecord};
+use crate::Result;
 
 /// A read-only connection to a project file or a working copy. Sees committed data only.
 pub struct FileReader {

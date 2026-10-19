@@ -1,6 +1,6 @@
 //! Raster layers stored as square tiles of f32 (ADR-0020), one zstd blob per tile.
 
-use mmc_store::{TileKey, TileRecord};
+use crate::persist::{TileKey, TileRecord};
 
 use crate::{Error, Map, MapId, Project, Result};
 
@@ -23,7 +23,7 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Layer::Height => "height",
             Layer::Slope => "slope",
@@ -33,10 +33,6 @@ impl Layer {
     }
 
     pub(crate) const ALL: [Layer; 4] = [Layer::Height, Layer::Slope, Layer::Land, Layer::Lock];
-
-    pub(crate) fn parse(s: &str) -> Option<Layer> {
-        Layer::ALL.into_iter().find(|l| l.as_str() == s)
-    }
 
     /// Derived layers are written by a pipeline stage, never by commands (ADR-0018).
     pub fn is_derived(self) -> bool {
@@ -61,7 +57,7 @@ impl Map {
     pub(crate) fn tile_key(&self, layer: Layer, tx: u32, ty: u32) -> TileKey {
         TileKey {
             map_id: self.id.0,
-            layer: layer.as_str().to_owned(),
+            layer,
             level: 0,
             tx,
             ty,
@@ -129,7 +125,7 @@ impl Project {
     /// Tiles (tx, ty) of `layer` that the user edited by hand, ordered.
     pub fn edited_tiles(&self, map: MapId, layer: Layer) -> Result<Vec<(u32, u32)>> {
         self.map(map)?;
-        Ok(self.store.edited_tiles(map.0, layer.as_str())?)
+        self.store.edited_tiles(map.0, layer)
     }
 }
 
@@ -142,7 +138,7 @@ mod tests {
             .collect();
         let data = super::encode(&values);
         assert_eq!(&data[..4], &[0x28, 0xB5, 0x2F, 0xFD]);
-        let rec = mmc_store::TileRecord { data, edited: true };
+        let rec = crate::persist::TileRecord { data, edited: true };
         assert_eq!(super::decode(Some(&rec)).unwrap(), values);
     }
 }

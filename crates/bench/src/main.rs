@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use mmc_core::{Layer, Project, TileId, read_overviews};
+use mmc_core::{Layer, TileId};
 use mmc_fixtures::{LargeMap, Rng};
 
 mod search;
@@ -92,18 +92,18 @@ fn measure() -> BTreeMap<String, f64> {
     let open = (0..RUNS)
         .map(|i| {
             let wc = dir.path().join(format!("o{i}"));
-            let (ms, p) = time_ms(|| Project::open(&file, &wc).unwrap());
+            let (ms, p) = time_ms(|| mmc_fixtures::open(&file, &wc).unwrap());
             p.close().unwrap();
             ms
         })
         .collect();
 
     let first_frame = (0..RUNS)
-        .map(|_| time_ms(|| read_overviews(&file, Layer::Height).unwrap()).0)
+        .map(|_| time_ms(|| mmc_fixtures::read_overviews(&file, Layer::Height).unwrap()).0)
         .collect();
 
     // Pan a 1920x1080 view at full resolution to an area no tile of which is loaded.
-    let p = Project::open(&file, &dir.path().join("pan")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("pan")).unwrap();
     let top = p.top_level(map).unwrap();
     let id = |level, tx, ty| TileId {
         map,

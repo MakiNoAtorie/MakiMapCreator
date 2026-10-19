@@ -71,7 +71,7 @@ fn bulk(p: &Project) {
 fn save_during_edits_writes_a_consistent_snapshot_and_keeps_later_edits() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("world.mmc");
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     bulk(&p);
     let before = 5;
@@ -104,7 +104,7 @@ fn save_during_edits_writes_a_consistent_snapshot_and_keeps_later_edits() {
     p.close().unwrap();
 
     // Saved file holds whole edits in order: a prefix 0..k, nothing after, nothing partial.
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     let saved: Vec<Vec<f32>> = (0..n).map(|i| probes(&q, map, i)).collect();
     let k = saved
         .iter()
@@ -131,7 +131,7 @@ fn save_during_edits_writes_a_consistent_snapshot_and_keeps_later_edits() {
 fn a_second_save_overwrites_the_first_with_newer_edits() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("world.mmc");
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke_at(0)).unwrap();
     p.save(&file);
@@ -139,7 +139,7 @@ fn a_second_save_overwrites_the_first_with_newer_edits() {
     p.save(&file);
     p.close().unwrap();
 
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert!(probes(&q, map, 1).iter().all(|h| *h > 0.0));
     q.close().unwrap();
 }
@@ -158,7 +158,7 @@ fn a_leftover_working_copy_restores_unsaved_edits() {
     let dir = tempfile::tempdir().unwrap();
     let wc = dir.path().join("wc.sqlite");
     let crashed = dir.path().join("crashed.sqlite");
-    let mut p = Project::create(&wc, settings()).unwrap();
+    let mut p = mmc_fixtures::create(&wc, settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke_at(3)).unwrap();
     p.wait_for_jobs().unwrap();
@@ -166,7 +166,7 @@ fn a_leftover_working_copy_restores_unsaved_edits() {
     copy_db(&wc, &crashed);
     p.close().unwrap();
 
-    let mut r = Project::restore(&crashed).unwrap();
+    let mut r = mmc_fixtures::restore(&crashed).unwrap();
     assert_eq!(r.maps().len(), 1);
     assert!(probes(&r, map, 3).iter().all(|h| *h > 0.0));
     r.apply(map, stroke_at(4)).unwrap();
@@ -175,7 +175,7 @@ fn a_leftover_working_copy_restores_unsaved_edits() {
     r.close().unwrap();
     assert!(!crashed.exists());
 
-    let q = Project::open(&file, &wc).unwrap();
+    let q = mmc_fixtures::open(&file, &wc).unwrap();
     assert!(probes(&q, map, 4).iter().all(|h| *h > 0.0));
     q.close().unwrap();
 }
@@ -185,13 +185,13 @@ fn a_discarded_working_copy_is_gone() {
     let dir = tempfile::tempdir().unwrap();
     let wc = dir.path().join("wc.sqlite");
     let crashed = dir.path().join("crashed.sqlite");
-    let mut p = Project::create(&wc, settings()).unwrap();
+    let mut p = mmc_fixtures::create(&wc, settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke_at(0)).unwrap();
     p.wait_for_jobs().unwrap();
     copy_db(&wc, &crashed);
     p.close().unwrap();
 
-    Project::discard_working_copy(&crashed).unwrap();
+    mmc_fixtures::discard_working_copy(&crashed).unwrap();
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }

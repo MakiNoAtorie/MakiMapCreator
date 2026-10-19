@@ -69,7 +69,7 @@ fn world_kind_declares_its_layers_tools_generators_and_entity_kinds() {
 #[test]
 fn proof_step_1_paint_land_and_generate_regions() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), world()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
     paint_continent(&mut p, map);
     let kinds = kinds();
@@ -128,7 +128,7 @@ fn proof_step_1_paint_land_and_generate_regions() {
     let file = dir.path().join("world.mmc");
     p.save(&file);
     p.close().unwrap();
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.entities().unwrap(), regions);
     assert_eq!(p.outlines(map).unwrap(), outlines);
     assert_eq!(p.generations(map).unwrap(), g);
@@ -137,7 +137,7 @@ fn proof_step_1_paint_land_and_generate_regions() {
 #[test]
 fn an_all_sea_world_gets_no_regions_and_unknown_generators_are_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let p = Project::create(&dir.path().join("wc.sqlite"), world()).unwrap();
+    let p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
     let Command::Generate(g) = WorldKind.generate(&p, map, "regions", 1).unwrap() else {
         panic!("not a generation");

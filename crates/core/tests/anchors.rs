@@ -8,7 +8,7 @@ fn pt(x: f64, y: f64) -> RootPoint {
 }
 
 fn new_project(dir: &std::path::Path) -> (Project, MapId) {
-    let p = Project::create(
+    let p = mmc_fixtures::create(
         &dir.join("wc.sqlite"),
         MapSettings::default_for(MapKind::Region),
     )
@@ -203,7 +203,7 @@ fn anchors_and_unplaced_state_survive_save_and_open() {
     let file = dir.path().join("a.mmc");
     p.save(&file);
     p.close().unwrap();
-    let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(q.anchors(silver).unwrap(), Some(silver_anchors(1_000.0)));
     assert_eq!(q.unplaced_entities().unwrap(), vec![silver]);
 }

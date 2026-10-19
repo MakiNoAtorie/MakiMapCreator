@@ -5,7 +5,7 @@
 //! history (`undo_project`) when M is a root map. Any other change goes to the history of the
 //! map it was applied on. A deleted map keeps its rows and history until the project reopens.
 
-use mmc_store::ChildLink;
+use crate::persist::{ChildLink, Write};
 
 use crate::entity::EntityChanges;
 use crate::undo::Change;
@@ -103,15 +103,19 @@ impl Project {
     }
 
     pub(crate) fn write_deletion(&mut self, c: &DeletionChange, forward: bool) -> Result<()> {
-        let deleted: Vec<_> = c.deleted.iter().map(|m| (m.id.0, forward)).collect();
-        let links: Vec<_> = c
-            .unlinked
+        let mut rows: Vec<Write> = c
+            .deleted
             .iter()
-            .map(|(m, l)| (m.id.0, (!forward).then(|| l.clone())))
+            .map(|m| Write::MapDeleted(m.id.0, forward))
             .collect();
-        // ponytail: map rows and entity rows are two transactions, as in write_generation_change.
-        self.store.write_map_deletion(&deleted, &links)?;
-        self.write_entity_changes(&c.entities, forward)?;
+        rows.extend(
+            c.unlinked
+                .iter()
+                .map(|(m, l)| Write::ChildLink(m.id.0, (!forward).then(|| l.clone()))),
+        );
+        rows.extend(c.entities.rows(forward));
+        self.store.write(&rows)?;
+        self.note_names(&c.entities, forward);
         if forward {
             self.maps
                 .retain(|m| !c.deleted.iter().any(|d| d.id == m.id));

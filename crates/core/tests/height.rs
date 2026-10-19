@@ -33,7 +33,7 @@ fn height(p: &Project, map: MapId, x: f64, y: f64) -> f32 {
 #[test]
 fn new_map_is_at_sea_level_and_outside_points_have_no_value() {
     let dir = tempfile::tempdir().unwrap();
-    let p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     assert_eq!(height(&p, map, 5000.0, 5000.0), 0.0);
     let outside = p
@@ -53,7 +53,7 @@ fn new_map_is_at_sea_level_and_outside_points_have_no_value() {
 #[test]
 fn brush_raises_height_inside_radius_only_and_scales_with_pressure() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke(2005.0, 2005.0, 10.0)).unwrap();
     let centre = height(&p, map, 2005.0, 2005.0);
@@ -81,7 +81,7 @@ fn brush_raises_height_inside_radius_only_and_scales_with_pressure() {
 #[test]
 fn stroke_across_a_tile_corner_edits_four_tiles() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     let edge = TILE_SIZE as f64 * 10.0;
     p.apply(map, stroke(edge, edge, -5.0)).unwrap();
@@ -96,7 +96,7 @@ fn stroke_across_a_tile_corner_edits_four_tiles() {
 #[test]
 fn undo_and_redo_restore_heights_and_edited_flags() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke(105.0, 105.0, 10.0)).unwrap();
     p.apply(map, stroke(105.0, 105.0, 10.0)).unwrap();
@@ -121,7 +121,7 @@ fn undo_and_redo_restore_heights_and_edited_flags() {
 #[test]
 fn a_new_command_clears_redo() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke(105.0, 105.0, 10.0)).unwrap();
     p.undo(map).unwrap();
@@ -133,7 +133,7 @@ fn a_new_command_clears_redo() {
 #[test]
 fn undo_on_one_map_never_changes_another() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let a = p.maps()[0].id;
     let b = p.add_root_map(settings()).unwrap();
     p.apply(a, stroke(105.0, 105.0, 10.0)).unwrap();
@@ -151,7 +151,7 @@ fn undo_on_one_map_never_changes_another() {
 #[test]
 fn undo_history_is_bounded() {
     let dir = tempfile::tempdir().unwrap();
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     for _ in 0..UNDO_LIMIT + 5 {
         p.apply(map, stroke(105.0, 105.0, 1.0)).unwrap();
@@ -169,7 +169,7 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     let app_data = tempfile::tempdir().unwrap();
     let docs = tempfile::tempdir().unwrap();
     let file = docs.path().join("w.mmc");
-    let mut p = Project::create(&app_data.path().join("a.sqlite"), settings()).unwrap();
+    let mut p = mmc_fixtures::create(&app_data.path().join("a.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply(map, stroke(5005.0, 3005.0, 12.0)).unwrap();
     let h = height(&p, map, 5005.0, 3005.0);
@@ -178,7 +178,7 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     p.save(&file);
     p.close().unwrap();
 
-    let mut p = Project::open(&file, &app_data.path().join("b.sqlite")).unwrap();
+    let mut p = mmc_fixtures::open(&file, &app_data.path().join("b.sqlite")).unwrap();
     assert_eq!(height(&p, map, 5005.0, 3005.0), h);
     assert_eq!(height(&p, map, 105.0, 105.0), 0.0);
     assert_eq!(p.edited_tiles(map, Layer::Height).unwrap(), edited);

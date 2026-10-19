@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
-use mmc_store::TileRecord;
+use crate::persist::TileRecord;
 
 use crate::layer::{Layer, RootPoint, decode, encode, tile_of};
 use crate::undo::{Change, TileChange};

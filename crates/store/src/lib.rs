@@ -3,32 +3,26 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use mmc_core::persist::{MapRecord, Write};
 use rusqlite::{Connection, OpenFlags};
 
 mod assets;
 mod tiles;
-pub use tiles::{LayerTiles, TileConn};
-pub use tiles::{TileKey, TileRecord};
+pub use tiles::TileConn;
 mod reader;
 pub use reader::FileReader;
-mod entities;
-pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
-mod pages;
-pub use pages::PageRecord;
 mod anchors;
-pub use anchors::AnchorRecord;
+mod entities;
+mod pages;
 mod search;
-pub use search::{Reader, TextHit};
-mod generations;
-pub use generations::{GenerationRecord, OutlineRecord};
+pub use search::Reader;
 mod children;
-pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
+mod generations;
 mod save;
 pub use save::save_snapshot;
 mod delete;
-pub use delete::ChildLink;
+mod port;
 mod resync;
-pub use resync::ChildState;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -94,20 +88,19 @@ impl From<std::io::Error> for Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MapRecord {
-    pub id: i64,
-    pub parent_id: Option<i64>,
-    pub kind: String,
-    pub width: u32,
-    pub height: u32,
-    pub metres_per_pixel: f64,
-    /// Root-space position of pixel (0, 0)'s top-left corner, in metres.
-    pub origin_x: f64,
-    pub origin_y: f64,
+impl From<Error> for mmc_core::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::NotAProject => mmc_core::Error::NotAProject,
+            Error::NewerVersion { found, supported } => {
+                mmc_core::Error::NewerVersion { found, supported }
+            }
+            e => mmc_core::Error::Storage(e.to_string()),
+        }
+    }
 }
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// An open project: a working copy in WAL mode that `save` snapshots to the project file.
 pub struct Store {
@@ -193,6 +186,28 @@ impl Store {
     /// All maps, ordered by id.
     pub fn maps(&self) -> Result<Vec<MapRecord>> {
         maps(&self.conn)
+    }
+
+    /// Writes all rows in one transaction.
+    pub fn write(&self, writes: &[Write]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for w in writes {
+            match w {
+                Write::Tile(k, rec) => tiles::write_tile(&tx, k, rec.as_ref())?,
+                Write::Entity(id, rec) => entities::write_entity(&tx, *id, rec.as_ref())?,
+                Write::Relation(r, present) => entities::write_relation(&tx, r, *present)?,
+                Write::Page(p) => pages::write_page(&tx, p)?,
+                Write::Anchor(id, rec) => anchors::write_anchor(&tx, *id, rec.as_ref())?,
+                Write::Generation(g, present) => generations::write_generation(&tx, g, *present)?,
+                Write::Outline(o, present) => generations::write_outline(&tx, o, *present)?,
+                Write::FieldDef(d, present) => entities::write_field_def(&tx, d, *present)?,
+                Write::MapDeleted(id, d) => delete::write_map_deleted(&tx, *id, *d)?,
+                Write::ChildLink(id, link) => delete::write_child_link(&tx, *id, link.as_ref())?,
+                Write::ChildState(id, s) => resync::write_child_state(&tx, *id, s)?,
+                Write::OutOfDate(id, o) => resync::write_out_of_date(&tx, *id, *o)?,
+            }
+        }
+        Ok(tx.commit()?)
     }
 
     /// Path of the working copy, for extra read connections (see `FileReader`).

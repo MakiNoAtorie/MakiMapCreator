@@ -1903,6 +1903,7 @@ dependencies = [
  "mmc-kind-region",
  "mmc-kind-world",
  "mmc-render",
+ "mmc-store",
  "raw-window-handle",
  "rfd",
  "serde_json",
@@ -1924,8 +1925,8 @@ dependencies = [
 name = "mmc-core"
 version = "0.1.0"
 dependencies = [
+ "mmc-fixtures",
  "mmc-page",
- "mmc-store",
  "serde_json",
  "tempfile",
  "zstd",
@@ -1936,6 +1937,7 @@ name = "mmc-fixtures"
 version = "0.1.0"
 dependencies = [
  "mmc-core",
+ "mmc-store",
  "serde_json",
  "tempfile",
 ]
@@ -1955,6 +1957,7 @@ name = "mmc-kind-world"
 version = "0.1.0"
 dependencies = [
  "mmc-core",
+ "mmc-fixtures",
  "tempfile",
 ]
 
@@ -1973,6 +1976,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "mmc-core",
+ "mmc-fixtures",
  "mmc-kind-region",
  "mmc-kind-world",
  "png",
@@ -1986,6 +1990,7 @@ name = "mmc-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "mmc-core",
  "rusqlite",
  "tempfile",
 ]

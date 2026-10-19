@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use mmc_core::{
     BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TILE_SIZE, TileId, read_overviews,
+    TILE_SIZE, TileId,
 };
 
 const T: usize = TILE_SIZE as usize;
@@ -14,7 +14,7 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
         height: 1024,
         metres_per_pixel: 1.0,
     };
-    let mut p = Project::create(&dir.join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), settings).unwrap();
     let map = p.maps()[0].id;
     // Crosses tile and quadrant borders at every level.
     p.apply(
@@ -104,7 +104,7 @@ fn a_coarser_loaded_level_stands_in_until_the_full_tile_arrives() {
     p.save(&file);
     p.wait_for_save().unwrap();
     p.close().unwrap();
-    let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     let top = full(&p, id(map, 2, 0, 0));
 
     let (level, stand_in) = p.cached_tile(id(map, 0, 1, 1)).unwrap().unwrap();
@@ -138,7 +138,7 @@ fn the_saved_file_has_an_overview_per_map_readable_without_opening() {
     p.save(&file);
     p.wait_for_save().unwrap();
 
-    let overviews = read_overviews(&file, Layer::Height).unwrap();
+    let overviews = mmc_fixtures::read_overviews(&file, Layer::Height).unwrap();
     assert_eq!(overviews.len(), 1);
     let o = &overviews[0];
     assert_eq!(o.map, p.maps()[0]);

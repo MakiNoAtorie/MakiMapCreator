@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, channel};
 
-use crate::{EntityId, Error, Project, Result};
+use crate::{EntityId, Project, Result};
 
 /// A name match. Higher `score` is better.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,21 +140,18 @@ impl Project {
     /// Starts a full-text search over names, text fields and pages (every word, the last as prefix).
     /// Sees the edits applied before this call. Results hold at most `limit` entities.
     pub fn search_text(&self, query: &str, limit: usize) -> Result<TextSearch> {
-        let reader = self.store.reader()?;
+        let reader = self.store.text_index()?;
         let query = query.to_owned();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let r = reader
-                .search_text(&query, limit)
-                .map(|hits| {
-                    hits.into_iter()
-                        .map(|h| TextHit {
-                            entity: EntityId(h.entity_id),
-                            snippet: h.snippet,
-                        })
-                        .collect()
-                })
-                .map_err(Error::from);
+            let r = reader.search_text(&query, limit).map(|hits| {
+                hits.into_iter()
+                    .map(|h| TextHit {
+                        entity: EntityId(h.entity_id),
+                        snippet: h.snippet,
+                    })
+                    .collect()
+            });
             let _ = tx.send(r);
         });
         Ok(TextSearch { rx })

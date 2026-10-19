@@ -1,6 +1,6 @@
 //! Entity pages: Markdown with `[[id|label]]` links, templates per kind and backlinks (ADR-0012).
 
-use mmc_store::PageRecord;
+use crate::persist::{PageRecord, Write};
 
 use crate::{Entity, EntityId, Project, Result};
 
@@ -91,8 +91,7 @@ impl Project {
     }
 
     pub(crate) fn write_page_change(&self, c: &PageChange, forward: bool) -> Result<()> {
-        Ok(self
-            .store
-            .write_page(if forward { &c.after } else { &c.before })?)
+        let rec = if forward { &c.after } else { &c.before };
+        self.store.write(&[Write::Page(rec.clone())])
     }
 }

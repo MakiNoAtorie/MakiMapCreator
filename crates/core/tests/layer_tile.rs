@@ -1,5 +1,5 @@
 use mmc_core::{
-    BrushStroke, Command, Layer, MapKind, MapSettings, Project, RootPoint, StrokePoint, TILE_SIZE,
+    BrushStroke, Command, Layer, MapKind, MapSettings, RootPoint, StrokePoint, TILE_SIZE,
 };
 
 #[test]
@@ -11,7 +11,7 @@ fn layer_tile_returns_a_whole_tile_matching_point_reads() {
         height: 512,
         metres_per_pixel: 1.0,
     };
-    let mut p = Project::create(&dir.path().join("wc.sqlite"), settings).unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings).unwrap();
     let map = p.maps()[0].id;
     let at = RootPoint { x: 300.5, y: 40.5 };
     p.apply(
