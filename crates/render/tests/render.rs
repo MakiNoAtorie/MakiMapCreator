@@ -211,3 +211,24 @@ fn the_overview_draws_a_first_frame_before_the_project_opens() {
     let sea = pixel(&img, 290, 10);
     assert!(sea[2] > sea[1] && sea[3] == 255, "sea is blue: {sea:?}");
 }
+
+#[test]
+fn warp_renderers_made_and_used_on_parallel_threads_do_not_crash() {
+    // With one WARP device per renderer, this crashed d3d10warp.dll in most runs.
+    let jobs: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(|| {
+                let dir = tempfile::tempdir().unwrap();
+                let (p, map) = fixture(dir.path());
+                for _ in 0..10 {
+                    let r = renderer();
+                    r.render(&r.scene(&p, view(map, 64, 64)).unwrap(), u32::MAX)
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for j in jobs {
+        j.join().unwrap();
+    }
+}
