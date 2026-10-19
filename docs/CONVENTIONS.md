@@ -73,6 +73,13 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
 - Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
 
+## Map kinds
+
+- A kind crate is `crates/kind-<name>` implementing `MapKindModule`; the caller (app, tests) builds `Kinds`. No runtime plugins.
+- Draw passes live in `mmc-render`, keyed by `Layer`; a kind lists only its `render_layers`.
+- A generator returns one `Command::Generate`; core assigns entity ids and records generator, seed and `APP_VERSION`.
+- A store write that also writes entities calls `write_entity_rows` inside its own transaction; a core path that creates entities updates `names`.
+
 ## Pipeline and jobs
 
 - A derived layer is one a `STAGES` entry in `core/src/pipeline.rs` writes; commands on it return `Error::DerivedLayer`.
