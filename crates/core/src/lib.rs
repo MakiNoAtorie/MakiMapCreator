@@ -11,6 +11,8 @@ mod undo;
 pub use command::{BrushStroke, Command, StrokePoint};
 pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use undo::UNDO_LIMIT;
+mod entity;
+pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -76,6 +78,11 @@ pub enum Error {
     UnknownMapKind(String),
     UnknownMap(MapId),
     CorruptTile,
+    UnknownEntityKind(String),
+    UnknownEntity(EntityId),
+    EntityExists(EntityId),
+    InvalidField { key: String, reason: &'static str },
+    CorruptEntity,
 }
 
 impl fmt::Display for Error {
@@ -85,6 +92,11 @@ impl fmt::Display for Error {
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
             Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
             Error::CorruptTile => write!(f, "the file has a damaged map tile"),
+            Error::UnknownEntityKind(k) => write!(f, "the project has no entity kind {k}"),
+            Error::UnknownEntity(id) => write!(f, "the project has no entity with id {}", id.0),
+            Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
+            Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
+            Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
         }
     }
 }

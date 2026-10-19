@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 
 use mmc_store::{TileKey, TileRecord};
 
+use crate::entity::EntityChanges;
 use crate::{Command, MapId, Project, Result};
 
 /// Commands kept per map; the oldest drops first.
@@ -17,17 +18,24 @@ pub(crate) struct TileChange {
     pub after: Option<TileRecord>,
 }
 
+/// The records one command changed.
+#[derive(Debug, Clone)]
+pub(crate) enum Change {
+    Tiles(Vec<TileChange>),
+    Entities(EntityChanges),
+}
+
 #[derive(Default)]
 pub(crate) struct History {
-    done: VecDeque<Vec<TileChange>>,
-    undone: Vec<Vec<TileChange>>,
+    done: VecDeque<Change>,
+    undone: Vec<Change>,
 }
 
 impl Project {
     /// Applies `cmd` to `map` in the working copy and records it in the map's history.
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
         let changes = self.changes(self.map(map)?, &cmd)?;
-        self.write(&changes, |c| c.after.clone())?;
+        self.write(&changes, true)?;
         let h = self.history.entry(map).or_default();
         h.undone.clear();
         if h.done.len() == UNDO_LIMIT {
@@ -43,7 +51,7 @@ impl Project {
         let Some(changes) = self.history.entry(map).or_default().done.pop_back() else {
             return Ok(false);
         };
-        let res = self.write(&changes, |c| c.before.clone());
+        let res = self.write(&changes, false);
         let h = self.history.get_mut(&map).unwrap();
         match res {
             Ok(()) => h.undone.push(changes),
@@ -58,7 +66,7 @@ impl Project {
         let Some(changes) = self.history.entry(map).or_default().undone.pop() else {
             return Ok(false);
         };
-        let res = self.write(&changes, |c| c.after.clone());
+        let res = self.write(&changes, true);
         let h = self.history.get_mut(&map).unwrap();
         match res {
             Ok(()) => h.done.push_back(changes),
@@ -67,12 +75,22 @@ impl Project {
         res.map(|()| true)
     }
 
-    fn write(
-        &self,
-        changes: &[TileChange],
-        side: impl Fn(&TileChange) -> Option<TileRecord>,
-    ) -> Result<()> {
-        let writes: Vec<_> = changes.iter().map(|c| (c.key.clone(), side(c))).collect();
-        Ok(self.store.write_tiles(&writes)?)
+    /// Writes the after records, or the before records when `forward` is false.
+    fn write(&self, changes: &Change, forward: bool) -> Result<()> {
+        match changes {
+            Change::Tiles(tiles) => {
+                let writes: Vec<_> = tiles
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.key.clone(),
+                            if forward { &c.after } else { &c.before }.clone(),
+                        )
+                    })
+                    .collect();
+                Ok(self.store.write_tiles(&writes)?)
+            }
+            Change::Entities(e) => self.write_entity_changes(e, forward),
+        }
     }
 }

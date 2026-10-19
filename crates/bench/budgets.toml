@@ -1,0 +1,5 @@
+# name = max milliseconds. The gate compares the median of several runs.
+brush_stroke = 16
+open_project = 1000
+# ADR-0014 gives no number for save (background); this is a regression cap.
+save = 2000
