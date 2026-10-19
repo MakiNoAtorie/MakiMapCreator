@@ -1,6 +1,6 @@
 # Features and Phase 0 seams (draft)
 
-Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0017`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
+Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0022`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
 
 ## 1. Roadmap
 
@@ -14,7 +14,9 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 - Generate (from parent context or from a template): height, sea and lakes, rivers, climate, biomes. Major rivers from the parent are path constraints.
 - Edit: height brushes with pen pressure, water level, draw rivers, paint biomes, masked regeneration.
 - Edges: bounded refinement of the parent coastline, root-space noise, ghost overlay of neighbour edges (ADR-0008).
+- Layers: authored (height, water level, biome paint, hand-drawn rivers, lock mask) and derived, recomputed after each edit (drainage rivers, climate, automatic biomes) (ADR-0018).
 - Entities: natural features found by generation (rivers, lakes, ranges, forests) get names and pages; settlement and landmark points.
+- Labels: placed automatically for entities (collision avoidance, along river paths, spaced range names); a dragged offset is saved on the map object.
 - Children: select a settlement point to create a settlement map.
 - Summary to parent: dominant biome, refined coastline (display only).
 
@@ -59,12 +61,14 @@ Build only what is expensive to add later. Each seam gets one real use in the pr
 | Seam | Why now |
 |---|---|
 | Project tree: maps, parent link, area on parent | Every kind and the file format depend on it |
-| Root space: per-map transform; noise sampled in root space | Neighbour seams and parent context depend on it (ADR-0008) |
+| Root space in metres: per-map transform and metres per pixel; f32 height in metres (ADR-0020); noise sampled in root space | Neighbour seams and parent context depend on it (ADR-0008) |
 | Generic layers: tiled raster, map objects with stable ids | Each kind stores different data; retrofitting storage touches everything |
 | Map kind interface: generators, tools, layers, render passes, child creation, summary | Kinds are built independently behind it |
 | Parent context: sample parent layers in an area plus margin, snapshot, out-of-date flag | Hard to add once kinds exist |
 | Entities, relations, field definitions, pages (schema and core API) | Generators create entities; the schema must exist before the first save |
 | Stage pipeline: stages declare read and write layers, dirty flags | v1 full rebuild still runs through it, so incremental work later does not change callers |
+| Authored and derived layers; per-tile edited flag; lock mask (ADR-0018, ADR-0022) | The pipeline, save and re-sync all depend on the split |
+| Ownership: each map owns only its outline; outside is read-only context (ADR-0019) | Tools and save must respect it from the first edit |
 | Commands and undo: every edit is a command; tile deltas for rasters; one history per map and per page (ADR-0016) | Undo can not be added after tools exist |
 | Jobs: background generation, latest request wins, double-buffered results | UI must not block; threading is hard to add later |
 | Hash RNG keyed by (seed, stage, entity id or root-space position) | Determinism under parallel work and masked regeneration |

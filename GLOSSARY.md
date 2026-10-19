@@ -15,7 +15,7 @@ One node in the project tree, at one scale, with one map kind and its own layers
 _Avoid_: Level, sheet, canvas
 
 **Map kind**:
-The type of a map: world, region, settlement or dungeon. It sets the generators, tools and layers the map can use.
+The type of a map: world, region, settlement or dungeon. Each kind is a module built into the app that sets the generators, tools and layers the map can use.
 _Avoid_: Map type, mode
 
 **World map**:
@@ -37,11 +37,15 @@ An interior map of rooms and corridors, as a child of any map or as a root.
 A map created on an area or point of its parent map.
 _Avoid_: Submap, zoom map
 
+**Outline**:
+The area a child map owns, as a shape on its parent. Outside the outline the child map shows read-only context.
+_Avoid_: Bounds, extent
+
 **Root map**:
 A map with no parent. Any map kind can be a root map.
 
 **Root space**:
-The coordinates of a map's root map. Every map has a transform to it, and procedural noise is always sampled in it.
+The coordinates of a map's root map, in metres. Every map has a transform to it, and procedural noise is always sampled in it.
 _Avoid_: World space, global coordinates
 
 ### Flow between maps
@@ -65,6 +69,22 @@ The mode where the user sets parameters and a seed and runs generators on a map.
 
 **Edit mode**:
 The mode where the user changes a map's layers by hand with tools such as brushes.
+
+**Authored layer**:
+A layer the user edits and the project stores as truth, such as height or biome paint.
+
+**Derived layer**:
+A layer recomputed from authored layers after each edit, such as drainage rivers or climate. It is never edited directly.
+_Avoid_: Generated layer (generation also writes authored layers)
+
+**Lock mask**:
+An authored layer that marks areas that masked regeneration and re-sync must not change.
+
+**Edited tile**:
+A tile the user changed by hand at least once. Re-sync never regenerates it.
+
+**Re-sync**:
+Regenerating the unedited, unlocked tiles of an out-of-date child map from its new parent context.
 
 **Masked regeneration**:
 Running a generator again only inside a selection or the unlocked parts of a map.

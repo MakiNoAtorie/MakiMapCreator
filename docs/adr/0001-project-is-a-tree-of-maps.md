@@ -6,6 +6,6 @@ We chose this over one map with zoom levels and over separate apps per scale. Ea
 
 ## Consequences
 
-- Each map kind is a plugin behind one interface: generators, tools, layer types, render passes, and "make a child from parent context". Kinds are built and shipped independently.
+- Each map kind is a module built into the app (one crate per kind) behind one interface; there are no runtime or third-party plugins. The interface covers: generators, tools, layer types, render passes, and "make a child from parent context". Kinds are built and shipped independently.
 - The core stores raster tiles and vector objects generically. Each kind picks the layers it uses.
 - Workspaces adapt to the kind of the active map. Generate and Edit are modes inside a kind, not separate tabs.
