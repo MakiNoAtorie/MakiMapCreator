@@ -74,3 +74,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Render targets are `Rgba8Unorm` (not sRGB), so image bytes are exactly what the shader writes.
 - Each pass shader starts with `VIEW_WGSL` and computes map texels from absolute image pixels, so a tiled render equals a single render.
 - Image hashes are per backend. Recorded hashes are for WARP; render tests use `Renderer::warp()`.
+
+## Pages
+
+- `mmc-page` depends on neither `mmc-core` nor `mmc-store`. Ported code keeps its MIT notice at the top of the crate.
+- Page links are stored only as `[[id|label]]` in page text; the label is never rewritten on rename.
+- Core parses links; store never parses Markdown. The link index is written in the same transaction as the page.
