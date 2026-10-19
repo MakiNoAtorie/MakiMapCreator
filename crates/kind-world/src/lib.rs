@@ -57,6 +57,7 @@ impl MapKindModule for WorldKind {
         &[GeneratorDecl {
             id: "regions",
             params: &[GRID],
+            needs_parent: false,
         }]
     }
 

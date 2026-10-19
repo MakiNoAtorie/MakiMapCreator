@@ -75,6 +75,7 @@ impl MapKindModule for RegionKind {
         &[GeneratorDecl {
             id: "from-parent",
             params: &[AMPLITUDE],
+            needs_parent: true,
         }]
     }
 

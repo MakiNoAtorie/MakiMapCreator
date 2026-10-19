@@ -37,6 +37,11 @@ fn a_default_scale_child_of_a_world_region_fits_the_cap_and_generates() {
     let steps = (s.metres_per_pixel / 10.0).log2();
     assert_eq!(steps, steps.round(), "{}", s.metres_per_pixel);
 
+    let from_parent = RegionKind.generators()[0];
+    let map = |id| p.maps().iter().find(|m| m.id == id).unwrap();
+    assert!(from_parent.runs_on(map(child)) && !from_parent.runs_on(map(w)));
+    assert!(WorldKind.generators()[0].runs_on(map(w)));
+
     let t = Instant::now();
     let cmd = RegionKind
         .generate(&p, child, &GenRun::new("from-parent", 1))

@@ -115,10 +115,7 @@ impl App {
         frame: egui::Frame,
         intents: &mut Vec<Intent>,
     ) {
-        let kinds = self.kinds.clone();
-        let Some(kind) = self.doc.as_ref().and_then(|d| kinds.get(d.settings.kind)) else {
-            return;
-        };
+        let gens = self.generators();
         let (busy, last) = (
             self.job.is_some() || self.regen.is_some(),
             self.snap.last_run.clone(),
@@ -134,7 +131,7 @@ impl App {
                 panels::generate_panel(
                     ui,
                     panels::GenInput {
-                        kind,
+                        gens,
                         generator: &mut self.generator,
                         seed: &mut self.seed,
                         params: &mut self.params,

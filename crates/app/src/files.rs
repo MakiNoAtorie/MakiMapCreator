@@ -195,9 +195,18 @@ impl App {
     }
 
     pub(crate) fn has_generators(&self) -> bool {
-        self.doc
-            .as_ref()
-            .and_then(|d| self.kinds.get(d.settings.kind))
-            .is_some_and(|k| !k.generators().is_empty())
+        !self.generators().is_empty()
+    }
+
+    /// The shown map's generators that can run on it; a root map has none that refine a parent.
+    pub(crate) fn generators(&self) -> Vec<&'static mmc_core::GeneratorDecl> {
+        let Some(d) = &self.doc else { return vec![] };
+        let (Some(k), Some(m)) = (
+            self.kinds.get(d.settings.kind),
+            self.snap.maps.iter().find(|m| m.id == d.map),
+        ) else {
+            return vec![];
+        };
+        k.generators().iter().filter(|g| g.runs_on(m)).collect()
     }
 }

@@ -4,8 +4,8 @@ use std::collections::HashSet;
 
 use eframe::egui::{self, RichText};
 use mmc_core::{
-    Entity, EntityId, FieldDef, FieldType, GenRun, Layer, Map, MapId, MapKindModule, RegenPlan,
-    RootPoint,
+    Entity, EntityId, FieldDef, FieldType, GenRun, GeneratorDecl, Layer, Map, MapId, MapKindModule,
+    RegenPlan, RootPoint,
 };
 use serde_json::Value;
 
@@ -358,7 +358,7 @@ pub fn layers(
 
 /// Generate mode: the kind's generators, the seed, the last run, Generate and Regenerate selection.
 pub struct GenInput<'a> {
-    pub kind: &'a dyn MapKindModule,
+    pub gens: Vec<&'static GeneratorDecl>,
     pub generator: &'a mut usize,
     pub seed: &'a mut u64,
     /// Parameter values by id; missing ones show the default.
@@ -371,7 +371,7 @@ pub struct GenInput<'a> {
 
 pub fn generate_panel(ui: &mut egui::Ui, g: GenInput, t: &Theme, out: &mut Vec<Intent>) {
     header(ui, "panel-generate", t);
-    let gens = g.kind.generators();
+    let gens = g.gens;
     *g.generator = (*g.generator).min(gens.len().saturating_sub(1));
     for (i, d) in gens.iter().enumerate() {
         ui.radio_value(g.generator, i, tr(&format!("generator-{}", d.id)));

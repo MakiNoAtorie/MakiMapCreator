@@ -33,6 +33,15 @@ pub struct Param {
 pub struct GeneratorDecl {
     pub id: &'static str,
     pub params: &'static [Param],
+    /// Refines the parent map's data, so it runs only on child maps.
+    pub needs_parent: bool,
+}
+
+impl GeneratorDecl {
+    /// Whether this generator can run on `map`.
+    pub fn runs_on(&self, map: &crate::Map) -> bool {
+        !self.needs_parent || map.parent.is_some()
+    }
 }
 
 /// One generator run: which generator, its seed and its parameter values (ADR-0021).
