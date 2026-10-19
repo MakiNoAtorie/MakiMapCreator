@@ -126,3 +126,26 @@ fn create_refuses_to_overwrite_a_leftover_working_copy() {
     assert!(matches!(Store::create(&wc), Err(Error::Io(_))));
     assert_eq!(std::fs::read(&wc).unwrap(), b"unsaved");
 }
+
+#[test]
+fn restore_refuses_a_foreign_working_copy_and_leaves_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wc = tmp.path().join("wc.sqlite");
+    std::fs::write(&wc, b"not a database").unwrap();
+    assert!(matches!(Store::restore(&wc), Err(Error::NotAProject)));
+    assert_eq!(std::fs::read(&wc).unwrap(), b"not a database");
+}
+
+#[test]
+fn restore_reopens_a_working_copy_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wc = tmp.path().join("wc.sqlite");
+    let store = Store::create(&wc).unwrap();
+    store.insert_map(None, "region", 100, 50, 2.5).unwrap();
+    drop(store);
+    let store = Store::restore(&wc).unwrap();
+    assert_eq!(store.maps().unwrap().len(), 1);
+    store.close().unwrap();
+    Store::discard(&wc).unwrap(); // nothing left is not an error
+    assert!(dir_names(tmp.path()).is_empty());
+}

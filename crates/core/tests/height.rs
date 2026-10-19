@@ -175,7 +175,7 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     let h = height(&p, map, 5005.0, 3005.0);
     let edited = p.edited_tiles(map, Layer::Height).unwrap();
     assert_eq!(edited, vec![(1, 1)]);
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
 
     let mut p = Project::open(&file, &app_data.path().join("b.sqlite")).unwrap();

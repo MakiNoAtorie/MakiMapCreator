@@ -47,13 +47,10 @@ fn lid(map: MapId, layer: Layer, level: u32, tx: u32, ty: u32) -> TileId {
     }
 }
 
-/// The tile at exactly `level`, waiting for workers when only a stand-in is loaded.
+/// The tile at exactly `level` once loads and pyramid updates are done.
 fn full(p: &Project, id: TileId) -> Arc<[f32]> {
-    if let Some((l, t)) = p.cached_tile(id).unwrap()
-        && l == id.level
-    {
-        return t;
-    }
+    p.wait_tiles();
+    p.cached_tile(id).unwrap();
     p.wait_tiles();
     let (l, t) = p.cached_tile(id).unwrap().expect("loaded after wait");
     assert_eq!(l, id.level);
@@ -102,9 +99,10 @@ fn edits_undo_and_redo_update_every_level_above() {
 #[test]
 fn a_coarser_loaded_level_stands_in_until_the_full_tile_arrives() {
     let dir = tempfile::tempdir().unwrap();
-    let (p, map) = project(dir.path());
+    let (mut p, map) = project(dir.path());
     let file = dir.path().join("p.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
     p.close().unwrap();
     let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     let top = full(&p, id(map, 2, 0, 0));
@@ -135,9 +133,10 @@ fn the_tile_cache_stays_within_its_memory_limit() {
 #[test]
 fn the_saved_file_has_an_overview_per_map_readable_without_opening() {
     let dir = tempfile::tempdir().unwrap();
-    let (p, map) = project(dir.path());
+    let (mut p, map) = project(dir.path());
     let file = dir.path().join("p.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
 
     let overviews = read_overviews(&file, Layer::Height).unwrap();
     assert_eq!(overviews.len(), 1);

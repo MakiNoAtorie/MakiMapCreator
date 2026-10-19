@@ -1,13 +1,15 @@
-//! Tile cache: workers load tiles from the working copy into an LRU bounded by memory (ADR-0014).
+//! Tile cache: workers load tiles from the working copy into an LRU bounded by memory, and one
+//! worker updates pyramid levels above edited tiles, off the edit path (ADR-0014).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use mmc_store::{FileReader, TileKey};
+use mmc_store::{FileReader, TileConn, TileKey};
 
 use crate::layer::{TILE_LEN, decode};
+use crate::pyramid::upper_levels;
 
 /// Default memory limit of the tile cache.
 pub const TILE_CACHE_BYTES: usize = 256 << 20;
@@ -27,7 +29,16 @@ struct State {
     loading: usize,
     /// Bumped by every write, so a load that read older data is dropped.
     epoch: u64,
+    /// Level-0 tiles whose pyramid levels are out of date, with their map's top level.
+    dirty: HashMap<TileKey, u32>,
+    building: bool,
     stop: bool,
+}
+
+impl State {
+    fn idle(&self) -> bool {
+        self.queue.is_empty() && self.loading == 0 && self.dirty.is_empty() && !self.building
+    }
 }
 
 #[derive(Default)]
@@ -53,12 +64,14 @@ impl TileCache {
         let shared = Arc::new(Shared::default());
         shared.lock().limit = TILE_CACHE_BYTES;
         let n = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
-        let workers = (0..n)
+        let mut workers: Vec<_> = (0..n)
             .map(|_| {
                 let (shared, path) = (shared.clone(), working_copy.to_owned());
                 std::thread::spawn(move || work(&shared, path))
             })
             .collect();
+        let (sh, path) = (shared.clone(), working_copy.to_owned());
+        workers.push(std::thread::spawn(move || build(&sh, path)));
         TileCache { shared, workers }
     }
 
@@ -80,7 +93,7 @@ impl TileCache {
             return;
         }
         s.queue.push_front(key);
-        self.shared.work.notify_one();
+        self.shared.work.notify_all();
     }
 
     /// Puts tiles that were just written, so edits show without a reload.
@@ -92,6 +105,13 @@ impl TileCache {
         }
     }
 
+    /// Queues the pyramid levels above level-0 `keys` for update; `top` is their map's top level.
+    pub(crate) fn mark_dirty(&self, keys: impl IntoIterator<Item = TileKey>, top: u32) {
+        let mut s = self.shared.lock();
+        s.dirty.extend(keys.into_iter().map(|k| (k, top)));
+        self.shared.work.notify_all();
+    }
+
     /// Drops loaded tiles that match, so the next request reloads them.
     pub(crate) fn forget(&self, matches: impl Fn(&TileKey) -> bool) {
         let mut s = self.shared.lock();
@@ -101,7 +121,7 @@ impl TileCache {
 
     pub(crate) fn wait_idle(&self) {
         let mut s = self.shared.lock();
-        while !s.queue.is_empty() || s.loading > 0 {
+        while !s.idle() {
             s = self.shared.idle.wait(s).unwrap_or_else(|e| e.into_inner());
         }
     }
@@ -176,11 +196,65 @@ fn work(shared: &Shared, path: PathBuf) {
             Some(_) if !s.tiles.contains_key(&key) => {
                 s.queued.insert(key.clone());
                 s.queue.push_front(key);
-                shared.work.notify_one();
+                shared.work.notify_all();
             }
             _ => {}
         }
-        if s.queue.is_empty() && s.loading == 0 {
+        if s.idle() {
+            shared.idle.notify_all();
+        }
+    }
+}
+
+/// Rebuilds pyramid tiles above dirty level-0 tiles, one batch per map, on its own connection.
+fn build(shared: &Shared, path: PathBuf) {
+    let mut conn = None;
+    loop {
+        let (batch, top) = {
+            let mut s = shared.lock();
+            loop {
+                if s.stop {
+                    return;
+                }
+                if let Some(map) = s.dirty.keys().next().map(|k| k.map_id) {
+                    let keys: Vec<TileKey> = s
+                        .dirty
+                        .keys()
+                        .filter(|k| k.map_id == map)
+                        .cloned()
+                        .collect();
+                    let top = keys.iter().map(|k| s.dirty[k]).max().unwrap_or(0);
+                    s.dirty.retain(|k, _| k.map_id != map);
+                    s.building = true;
+                    break (keys, top);
+                }
+                s = shared.work.wait(s).unwrap_or_else(|e| e.into_inner());
+            }
+        };
+        if conn.is_none() {
+            conn = TileConn::open(&path).ok();
+        }
+        // ponytail: a failed rebuild is dropped; the next edit nearby rebuilds those levels.
+        let built = conn.as_ref().and_then(|c| {
+            let changed = batch
+                .iter()
+                .map(|k| Ok((k.clone(), decode(c.tile(k)?.as_ref())?)))
+                .collect::<crate::Result<Vec<_>>>()
+                .ok()?;
+            let (writes, put) = upper_levels(changed, top, |k| Ok(c.tile(k)?)).ok()?;
+            c.write_tiles(&writes).ok()?;
+            Some(put)
+        });
+        let mut s = shared.lock();
+        s.building = false;
+        if let Some(put) = built {
+            // Loads that started before this write may hold older upper tiles.
+            s.epoch += 1;
+            for (k, t) in put {
+                insert(&mut s, k, t);
+            }
+        }
+        if s.idle() {
             shared.idle.notify_all();
         }
     }

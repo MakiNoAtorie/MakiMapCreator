@@ -126,7 +126,7 @@ fn proof_step_1_paint_land_and_generate_regions() {
     assert_eq!(p.entities().unwrap(), regions);
 
     let file = dir.path().join("world.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
     let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.entities().unwrap(), regions);

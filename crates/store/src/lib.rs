@@ -21,6 +21,8 @@ mod search;
 pub use search::{Reader, TextHit};
 mod generations;
 pub use generations::{GenerationRecord, OutlineRecord};
+mod save;
+pub use save::save_snapshot;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -138,13 +140,7 @@ impl Store {
     /// Writes a snapshot of the working copy over `file`: `VACUUM INTO` a
     /// temporary file in the same folder, then an atomic rename.
     pub fn save(&self, file: &Path) -> Result<()> {
-        let mut tmp = file.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        remove_db_files(&tmp)?;
-        self.conn.execute("VACUUM INTO ?1", [path_str(&tmp)?])?;
-        std::fs::rename(&tmp, file)?;
-        Ok(())
+        save_snapshot(&self.working_copy, file)
     }
 
     /// Closes the project and deletes the working copy.
@@ -200,24 +196,30 @@ pub(crate) fn maps(conn: &Connection) -> Result<Vec<MapRecord>> {
 /// Opens `file` read-only after checking that it is a project this app can read.
 pub(crate) fn open_read_only(file: &Path) -> Result<Connection> {
     let src = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let app_id: i32 = src
+    check_header(&src)?;
+    Ok(src)
+}
+
+fn user_version(conn: &Connection) -> Result<i32> {
+    Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
+
+/// Refuses a file that is not a project or comes from a newer app.
+fn check_header(conn: &Connection) -> Result<()> {
+    let app_id: i32 = conn
         .query_row("PRAGMA application_id", [], |r| r.get(0))
         .map_err(|_| Error::NotAProject)?;
     if app_id != APPLICATION_ID {
         return Err(Error::NotAProject);
     }
-    let found = user_version(&src)?;
+    let found = user_version(conn)?;
     if found > SCHEMA_VERSION {
         return Err(Error::NewerVersion {
             found,
             supported: SCHEMA_VERSION,
         });
     }
-    Ok(src)
-}
-
-fn user_version(conn: &Connection) -> Result<i32> {
-    Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+    Ok(())
 }
 
 fn path_str(path: &Path) -> Result<&str> {

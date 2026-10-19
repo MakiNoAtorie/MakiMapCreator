@@ -146,9 +146,10 @@ fn exports_a_png_larger_than_the_screen_on_a_worker() {
 }
 
 fn reopen(dir: &std::path::Path) -> (Project, MapId) {
-    let (p, map) = fixture(dir);
+    let (mut p, map) = fixture(dir);
     let file = dir.join("p.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
     p.close().unwrap();
     (Project::open(&file, &dir.join("wc2.sqlite")).unwrap(), map)
 }
@@ -194,9 +195,10 @@ fn a_cached_scene_draws_a_stand_in_then_the_full_tiles() {
 #[test]
 fn the_overview_draws_a_first_frame_before_the_project_opens() {
     let dir = tempfile::tempdir().unwrap();
-    let (p, map) = fixture(dir.path());
+    let (mut p, map) = fixture(dir.path());
     let file = dir.path().join("p.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
+    p.wait_for_save().unwrap();
     p.close().unwrap();
 
     let overviews = read_overviews(&file, Layer::Height).unwrap();

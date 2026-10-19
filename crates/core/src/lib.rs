@@ -12,6 +12,7 @@ mod layer;
 mod pipeline;
 mod pyramid;
 pub mod rng;
+mod save;
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint};
@@ -169,6 +170,7 @@ pub struct Project {
     names: search::NameIndex,
     pipeline: pipeline::Pipeline,
     anchors: anchor::State,
+    saves: save::Saves,
     cache: std::sync::OnceLock<cache::TileCache>,
 }
 
@@ -194,13 +196,18 @@ impl Project {
             names: Default::default(),
             pipeline: Default::default(),
             anchors: Default::default(),
+            saves: Default::default(),
             cache: Default::default(),
         })
     }
 
     /// Opens the project `file` into a new working copy at `working_copy`.
     pub fn open(file: &Path, working_copy: &Path) -> Result<Project> {
-        let store = Store::open(file, working_copy)?;
+        Project::load(Store::open(file, working_copy)?)
+    }
+
+    /// A project on `store` with its maps read from the store.
+    fn load(store: Store) -> Result<Project> {
         let maps = store
             .maps()?
             .into_iter()
@@ -213,6 +220,7 @@ impl Project {
             names: Default::default(),
             pipeline: Default::default(),
             anchors: Default::default(),
+            saves: Default::default(),
             cache: Default::default(),
         };
         p.names = p.build_name_index()?;
@@ -237,12 +245,9 @@ impl Project {
         Ok(id)
     }
 
-    pub fn save(&self, file: &Path) -> Result<()> {
-        Ok(self.store.save(file)?)
-    }
-
-    /// Closes the project and deletes its working copy.
+    /// Waits for a running save, then closes the project and deletes its working copy.
     pub fn close(mut self) -> Result<()> {
+        self.wait_for_save()?;
         self.pipeline.shutdown();
         // Tile workers hold read connections to the working copy; stop them first.
         drop(self.cache);

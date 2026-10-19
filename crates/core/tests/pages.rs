@@ -183,7 +183,7 @@ fn pages_and_backlinks_survive_save_and_reload() {
     let text = format!("# A\n\nHome of {}.\n", link_markup(b, "B"));
     write(&mut p, a, &text);
     let file = dir.path().join("world.mmc");
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
 
     let p = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();

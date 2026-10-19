@@ -125,6 +125,10 @@ impl TileConn {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    pub fn tile(&self, key: &TileKey) -> Result<Option<TileRecord>> {
+        tile(&self.conn, key)
+    }
+
     /// As `Store::write_tiles`, on this connection.
     pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
         write_tiles(&self.conn, writes)

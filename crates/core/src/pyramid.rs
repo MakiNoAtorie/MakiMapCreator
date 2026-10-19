@@ -140,7 +140,7 @@ impl Project {
         Ok(None)
     }
 
-    /// Blocks until all queued tile loads are done.
+    /// Blocks until all queued tile loads and pyramid updates after edits are done.
     pub fn wait_tiles(&self) {
         self.tiles().wait_idle();
     }
@@ -162,51 +162,72 @@ impl Project {
         }
     }
 
-    /// Writes level-0 tiles and the pyramid tiles above them in one transaction.
+    /// Writes level-0 tiles; a worker then updates the pyramid levels above them.
     pub(crate) fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
-        let mut all = writes.to_vec();
-        let mut put: Vec<(TileKey, Tile)> = Vec::new();
-        let mut cur: HashMap<TileKey, Vec<f32>> = HashMap::new();
-        for (k, rec) in writes {
-            cur.insert(k.clone(), decode(rec.as_ref())?);
-        }
-        let top = match writes.first() {
-            Some((k, _)) => self.top_level(MapId(k.map_id))?,
-            None => 0,
+        let put = writes
+            .iter()
+            .map(|(k, rec)| Ok((k.clone(), decode(rec.as_ref())?.into())))
+            .collect::<Result<Vec<(TileKey, Tile)>>>()?;
+        self.store.write_tiles(writes)?;
+        let Some((k, _)) = writes.first() else {
+            return Ok(());
         };
-        for level in 1..=top {
-            let mut next: HashMap<TileKey, Vec<f32>> = HashMap::new();
-            for (k, child) in &cur {
-                let pk = TileKey {
-                    level,
-                    tx: k.tx / 2,
-                    ty: k.ty / 2,
-                    ..k.clone()
-                };
-                let parent = match next.entry(pk) {
-                    Entry::Occupied(e) => e.into_mut(),
-                    Entry::Vacant(e) => {
-                        let rec = self.store.tile(e.key())?;
-                        e.insert(decode(rec.as_ref())?)
-                    }
-                };
-                downsample(parent, child, k.tx, k.ty);
-            }
-            for (k, values) in &next {
-                let rec = TileRecord {
-                    data: encode(values),
-                    edited: false,
-                };
-                all.push((k.clone(), Some(rec)));
-            }
-            put.extend(cur.drain().map(|(k, v)| (k, v.into())));
-            cur = next;
-        }
-        put.extend(cur.drain().map(|(k, v)| (k, v.into())));
-        self.store.write_tiles(&all)?;
-        if let Some(cache) = self.cache.get() {
-            cache.put(put);
-        }
+        let top = self.top_level(MapId(k.map_id))?;
+        let cache = self.tiles();
+        cache.put(put);
+        cache.mark_dirty(writes.iter().map(|w| w.0.clone()), top);
         Ok(())
     }
+
+    /// Blocks until pyramid levels above past edits are written; no-op before any edit.
+    pub(crate) fn wait_pyramid(&self) {
+        if let Some(cache) = self.cache.get() {
+            cache.wait_idle();
+        }
+    }
+}
+
+/// Pyramid tiles above `changed` level-0 tiles (with their new values): the records to
+/// write and the decoded tiles. `read` gives the stored parents, for their other quadrants.
+pub(crate) type Upper = (Vec<(TileKey, Option<TileRecord>)>, Vec<(TileKey, Tile)>);
+
+pub(crate) fn upper_levels(
+    changed: Vec<(TileKey, Vec<f32>)>,
+    top: u32,
+    read: impl Fn(&TileKey) -> Result<Option<TileRecord>>,
+) -> Result<Upper> {
+    let (mut writes, mut put) = (Vec::new(), Vec::new());
+    let mut cur: HashMap<TileKey, Vec<f32>> = changed.into_iter().collect();
+    for level in 1..=top {
+        let mut next: HashMap<TileKey, Vec<f32>> = HashMap::new();
+        for (k, child) in &cur {
+            let pk = TileKey {
+                level,
+                tx: k.tx / 2,
+                ty: k.ty / 2,
+                ..k.clone()
+            };
+            let parent = match next.entry(pk) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(e) => {
+                    let rec = read(e.key())?;
+                    e.insert(decode(rec.as_ref())?)
+                }
+            };
+            downsample(parent, child, k.tx, k.ty);
+        }
+        for (k, values) in &next {
+            let rec = TileRecord {
+                data: encode(values),
+                edited: false,
+            };
+            writes.push((k.clone(), Some(rec)));
+        }
+        cur = next;
+        put.extend(
+            cur.iter()
+                .map(|(k, v)| (k.clone(), Tile::from(v.as_slice()))),
+        );
+    }
+    Ok((writes, put))
 }

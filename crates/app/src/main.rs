@@ -199,8 +199,11 @@ impl App {
         }
         let project = self.project.clone();
         self.saving = Some(std::thread::spawn(move || {
-            match project.lock().unwrap().as_ref() {
-                Some(p) => p.save(&file),
+            match project.lock().unwrap().as_mut() {
+                Some(p) => {
+                    p.save(&file);
+                    p.wait_for_save()
+                }
                 None => Ok(()),
             }
         }));
