@@ -19,7 +19,7 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
             .iter()
             .filter_map(|c| Layer::parse(&c.key.layer))
             .collect(),
-        Change::Entities(_) | Change::Page(_) => vec![],
+        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) => vec![],
     }
 }
 
@@ -297,16 +297,24 @@ impl Project {
                 any = true;
             }
         }
+        if any {
+            self.match_anchors()?;
+        }
         Ok(any)
     }
 
     /// Blocks until every requested rebuild has finished.
     pub fn wait_for_jobs(&mut self) -> Result<()> {
+        let mut any = false;
         for st in self.pipeline.maps.values_mut() {
             if let Some(res) = st.jobs.wait() {
                 res?;
                 st.dirty.fill(false);
+                any = true;
             }
+        }
+        if any {
+            self.match_anchors()?;
         }
         Ok(())
     }

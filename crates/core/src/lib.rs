@@ -16,6 +16,10 @@ pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use undo::UNDO_LIMIT;
 mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
+mod anchor;
+pub use anchor::{
+    AnchorEdit, Anchors, DEFAULT_ANCHOR_TOLERANCE, DerivedFeature, FeatureId, FeatureKind,
+};
 mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
 
@@ -89,6 +93,8 @@ pub enum Error {
     EntityExists(EntityId),
     InvalidField { key: String, reason: &'static str },
     CorruptEntity,
+    InvalidAnchor(&'static str),
+    UnknownFeature(FeatureId),
 }
 
 impl fmt::Display for Error {
@@ -110,6 +116,8 @@ impl fmt::Display for Error {
             Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
             Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
             Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
+            Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
+            Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
         }
     }
 }
@@ -130,6 +138,7 @@ pub struct Project {
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
     pipeline: pipeline::Pipeline,
+    anchors: anchor::State,
 }
 
 impl Project {
@@ -152,6 +161,7 @@ impl Project {
             }],
             history: Default::default(),
             pipeline: Default::default(),
+            anchors: Default::default(),
         })
     }
 
@@ -179,6 +189,7 @@ impl Project {
             maps,
             history: Default::default(),
             pipeline: Default::default(),
+            anchors: Default::default(),
         })
     }
 
