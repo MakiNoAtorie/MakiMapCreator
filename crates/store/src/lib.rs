@@ -62,7 +62,12 @@ pub enum Error {
     Sqlite(rusqlite::Error),
     Io(std::io::Error),
     NotAProject,
-    NewerVersion { found: i32, supported: i32 },
+    NewerVersion {
+        found: i32,
+        supported: i32,
+    },
+    /// Another running app holds this working copy.
+    InUse,
 }
 
 impl fmt::Display for Error {
@@ -71,6 +76,7 @@ impl fmt::Display for Error {
             Error::Sqlite(e) => write!(f, "database error: {e}"),
             Error::Io(e) => write!(f, "file error: {e}"),
             Error::NotAProject => write!(f, "the file is not a MakiMapCreator project"),
+            Error::InUse => write!(f, "another window has this work open"),
             Error::NewerVersion { found, supported } => write!(
                 f,
                 "the file was saved by a newer version of the app \
@@ -98,6 +104,7 @@ impl From<Error> for mmc_core::Error {
     fn from(e: Error) -> Self {
         match e {
             Error::NotAProject => mmc_core::Error::NotAProject,
+            Error::InUse => mmc_core::Error::WorkingCopyInUse,
             Error::NewerVersion { found, supported } => {
                 mmc_core::Error::NewerVersion { found, supported }
             }
@@ -132,15 +139,45 @@ pub struct Store {
     conn: Connection,
     working_copy: PathBuf,
     gate: Gate,
+    /// Held while the store is open, so another app instance never restores or discards it.
+    _lock: std::fs::File,
+}
+
+/// The lock file of a working copy, next to it in local app data.
+fn lock_path(working_copy: &Path) -> PathBuf {
+    let mut p = working_copy.as_os_str().to_owned();
+    p.push("-lock");
+    PathBuf::from(p)
+}
+
+/// Takes the exclusive lock of `working_copy`; the OS drops it when the process ends.
+fn lock(working_copy: &Path) -> Result<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path(working_copy))?;
+    match f.try_lock() {
+        Ok(()) => Ok(f),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Error::InUse),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
 }
 
 impl Store {
     /// Creates an empty project at `working_copy`.
     pub fn create(working_copy: &Path) -> Result<Store> {
         refuse_existing(working_copy)?;
+        let lock = lock(working_copy)?;
         let conn = Connection::open(working_copy)?;
         conn.pragma_update(None, "application_id", APPLICATION_ID)?;
-        Store::init(conn, working_copy)
+        Store::init(conn, working_copy, lock)
+    }
+
+    /// Whether a running app holds `working_copy`. A crash leaves it unheld.
+    pub fn in_use(working_copy: &Path) -> bool {
+        matches!(lock(working_copy), Err(Error::InUse))
     }
 
     /// Copies the project `file` to `working_copy` and migrates the copy.
@@ -148,6 +185,7 @@ impl Store {
     pub fn open(file: &Path, working_copy: &Path) -> Result<Store> {
         let src = open_read_only(file)?;
         refuse_existing(working_copy)?;
+        let lock = lock(working_copy)?;
         // A plain copy under a read lock: VACUUM INTO rebuilds every page and fsyncs the
         // copy, 5-10x slower on CI disks. The project file is never in WAL mode (save
         // writes it with VACUUM INTO), so the file alone is the whole database.
@@ -156,10 +194,10 @@ impl Store {
         let mut from = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(file)?);
         std::io::copy(&mut from, &mut std::fs::File::create_new(working_copy)?)?;
         drop(src);
-        Store::init(Connection::open(working_copy)?, working_copy)
+        Store::init(Connection::open(working_copy)?, working_copy, lock)
     }
 
-    fn init(mut conn: Connection, working_copy: &Path) -> Result<Store> {
+    fn init(mut conn: Connection, working_copy: &Path, lock: std::fs::File) -> Result<Store> {
         // No fsync for the switch to WAL: it would flush the whole fresh copy of an opened
         // file. The project file still holds the data until the first edit.
         conn.pragma_update(None, "synchronous", "OFF")?;
@@ -181,6 +219,7 @@ impl Store {
             conn,
             working_copy: working_copy.to_owned(),
             gate: Gate::default(),
+            _lock: lock,
         })
     }
 
@@ -210,8 +249,15 @@ impl Store {
 
     /// Closes the project and deletes the working copy.
     pub fn close(self) -> Result<()> {
-        self.conn.close().map_err(|(_, e)| e)?;
-        remove_db_files(&self.working_copy)
+        let Store {
+            conn,
+            working_copy,
+            _lock,
+            ..
+        } = self;
+        conn.close().map_err(|(_, e)| e)?;
+        drop(_lock);
+        remove_db_files(&working_copy)
     }
 
     pub fn insert_map(
@@ -339,7 +385,7 @@ fn refuse_existing(working_copy: &Path) -> Result<()> {
 
 /// Removes a database file and its WAL and shared-memory files, if present.
 fn remove_db_files(db: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm", "-journal"] {
+    for suffix in ["", "-wal", "-shm", "-journal", "-lock"] {
         let mut p = db.as_os_str().to_owned();
         p.push(suffix);
         match std::fs::remove_file(PathBuf::from(p)) {

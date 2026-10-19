@@ -110,6 +110,8 @@ pub enum Error {
     },
     /// The storage backend failed; the text is its message.
     Storage(String),
+    /// Another running app holds the working copy.
+    WorkingCopyInUse,
     UnknownMapKind(String),
     UnknownMap(MapId),
     CorruptTile,
@@ -143,6 +145,7 @@ impl fmt::Display for Error {
                 "the file was saved by a newer version of the app                  (file version {found}, this app supports up to {supported})"
             ),
             Error::Storage(e) => write!(f, "storage error: {e}"),
+            Error::WorkingCopyInUse => write!(f, "another window has this work open"),
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
             Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
             Error::CorruptTile => write!(f, "the file has a damaged map tile"),

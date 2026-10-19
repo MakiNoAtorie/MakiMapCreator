@@ -25,13 +25,15 @@ pub fn save_snapshot(working_copy: &Path, file: &Path) -> Result<()> {
 impl Store {
     /// Opens a working copy that a crash left behind, in place, with its unsaved edits.
     pub fn restore(working_copy: &Path) -> Result<Store> {
+        let lock = crate::lock(working_copy)?;
         let conn = Connection::open_with_flags(working_copy, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         check_header(&conn)?;
-        Store::init(conn, working_copy)
+        Store::init(conn, working_copy, lock)
     }
 
-    /// Deletes a leftover working copy and its WAL files.
+    /// Deletes a leftover working copy and its WAL files; refuses one a running app holds.
     pub fn discard(working_copy: &Path) -> Result<()> {
+        drop(crate::lock(working_copy)?);
         remove_db_files(working_copy)
     }
 }

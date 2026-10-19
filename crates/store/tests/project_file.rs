@@ -211,3 +211,21 @@ fn restore_reopens_a_working_copy_in_place() {
     Store::discard(&wc).unwrap(); // nothing left is not an error
     assert!(dir_names(tmp.path()).is_empty());
 }
+
+#[test]
+fn a_live_working_copy_is_locked_against_restore_and_discard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wc = tmp.path().join("wc.sqlite");
+    let live = Store::create(&wc).unwrap();
+    assert!(Store::in_use(&wc));
+    assert!(matches!(Store::restore(&wc), Err(Error::InUse)));
+    assert!(matches!(Store::discard(&wc), Err(Error::InUse)));
+    assert!(wc.exists());
+    // A crash releases the lock and leaves the working copy.
+    drop(live);
+    assert!(!Store::in_use(&wc));
+    let restored = Store::restore(&wc).unwrap();
+    assert!(Store::in_use(&wc));
+    restored.close().unwrap();
+    assert!(dir_names(tmp.path()).is_empty());
+}

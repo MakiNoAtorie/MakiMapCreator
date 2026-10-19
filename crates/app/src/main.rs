@@ -884,14 +884,14 @@ fn working_dir() -> PathBuf {
     base.join("MakiMapCreator").join("working")
 }
 
-/// Working copies from earlier runs; a crash left them (ADR-0011).
+/// Working copies a crash left behind (ADR-0011); a running instance holds its own locked.
 fn leftover_working_copies() -> Vec<PathBuf> {
     std::fs::read_dir(working_dir())
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == EXTENSION))
+        .filter(|p| p.extension().is_some_and(|x| x == EXTENSION) && !Store::in_use(p))
         .collect()
 }
 

@@ -36,7 +36,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Save runs on a worker: `Project::save` returns at once; use `poll_save`/`wait_for_save`. Tests that open the file before `close` call `wait_for_save` first. Save reads one WAL snapshot on its own connection and never takes the write lock.
 - The working copy uses `PRAGMA synchronous = NORMAL` (WAL): an app crash loses nothing; a power loss can lose the last edits.
 - Long reads in jobs check cancel per row (`TileConn::layer_tiles_until`).
-- Restore opens a leftover working copy in place; discard deletes it and its WAL files.
+- Restore opens a leftover working copy in place; discard deletes it and its WAL files. An open store holds an OS lock on `<working copy>-lock`; restore, discard and the launch prompt skip a locked (live) working copy.
 
 ## Layers, commands and undo
 
