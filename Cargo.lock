@@ -1945,6 +1945,7 @@ name = "mmc-kind-region"
 version = "0.1.0"
 dependencies = [
  "mmc-core",
+ "mmc-fixtures",
  "mmc-kind-world",
  "tempfile",
 ]

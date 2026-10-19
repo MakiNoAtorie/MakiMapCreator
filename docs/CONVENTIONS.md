@@ -5,7 +5,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Build
 
 - Cargo workspace, `members = ["crates/*"]`. Add a crate by creating `crates/<name>`; package name `mmc-<name>`.
-- Crates: `mmc-core` (headless public API, seam 1), `mmc-store` (SQLite persistence), `mmc-bench` (benchmark gate), `mmc-app` (egui app).
+- Crates: `mmc-core` (headless public API, seam 1), `mmc-store` (SQLite persistence), `mmc-bench` (benchmark gate), `mmc-fixtures` (seeded test and bench data), `mmc-render` (wgpu renderer, seam 2), `mmc-page` (page editing core), `mmc-kind-<name>` (map kinds), `mmc-app` (egui app).
 - Rust stable, edition 2024, target Windows x86_64 MSVC.
 - Local checks before a push, the same as CI (`.github/workflows/ci.yml`, windows-latest):
   - `cargo fmt --all --check`
@@ -56,6 +56,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 ## Tests
 
+- The whole proof slice (steps 1, 2, 4–8) runs in `crates/kind-region/tests/proof_slice.rs`; step 9 in `crates/render/tests/render.rs`. A new proof-relevant feature extends the slice.
+- Timing asserts in tests are loosened 10x in debug builds; the release gate holds the real budgets.
+
 - Test external behaviour through public seams only. Seam 1 tests live in `crates/core/tests/` and use only the `mmc-core` API.
 - Store tests (`crates/store/tests/`) may use `rusqlite` to build fixtures and read pragmas.
 - Fixtures are generated in the test, never committed binaries. Use `tempfile::tempdir()` for every file.
@@ -81,7 +84,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Add a budget: one line `name = max_ms` in `crates/bench/budgets.toml`, and one entry with the same name in `measure()` in `crates/bench/src/main.rs`. A budget with no result fails.
 - Gate on the median of `RUNS` runs, never one run. Budget = the ADR-0014 number; where the ADR gives none, about 10x the measured median. CI runners are noisy: raise a budget only with a reason in the commit.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
-- Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
+- Generators: large map, many entities, long pages (`mmc-fixtures`). Name lookup, link completion and command search share the `name_lookup` budget (`find_names`).
 - App structure: `workspace.rs` holds testable logic; `panels.rs` draws and returns `Intent`s; `App::apply` applies them. The UI reads a `Snapshot` reloaded under `try_lock` when dirty, never the project directly.
 - Slow app work (generate, child creation) runs through `App::spawn` on a worker. Commands applied outside the brush call `note_command` so undo groups stay in step.
 
