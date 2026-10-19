@@ -58,6 +58,28 @@ fn open_leaves_no_files_next_to_the_project() {
 }
 
 #[test]
+fn open_of_a_read_only_file_gives_a_writable_wal_working_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("world.mmc");
+    let store = Store::create(&tmp.path().join("a.sqlite")).unwrap();
+    store.save(&file).unwrap();
+    store.close().unwrap();
+    let mut perm = std::fs::metadata(&file).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&file, perm).unwrap();
+
+    let wc = tmp.path().join("b.sqlite");
+    let store = Store::open(&file, &wc).unwrap();
+    store.insert_map(None, "region", 10, 10, 1.0).unwrap();
+    let mode: String = Connection::open(&wc)
+        .unwrap()
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    store.close().unwrap();
+}
+
+#[test]
 fn close_removes_the_working_copy() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::create(&tmp.path().join("wc.sqlite")).unwrap();

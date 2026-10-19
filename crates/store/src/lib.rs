@@ -129,12 +129,21 @@ impl Store {
     pub fn open(file: &Path, working_copy: &Path) -> Result<Store> {
         let src = open_read_only(file)?;
         refuse_existing(working_copy)?;
-        src.execute("VACUUM INTO ?1", [path_str(working_copy)?])?;
+        // A plain copy under a read lock: VACUUM INTO rebuilds every page and fsyncs the
+        // copy, 5-10x slower on CI disks. The project file is never in WAL mode (save
+        // writes it with VACUUM INTO), so the file alone is the whole database.
+        src.execute_batch("BEGIN; SELECT count(*) FROM sqlite_master;")?;
+        // Not fs::copy: it keeps a read-only attribute on the working copy.
+        let mut from = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(file)?);
+        std::io::copy(&mut from, &mut std::fs::File::create_new(working_copy)?)?;
         drop(src);
         Store::init(Connection::open(working_copy)?, working_copy)
     }
 
     fn init(mut conn: Connection, working_copy: &Path) -> Result<Store> {
+        // No fsync for the switch to WAL: it would flush the whole fresh copy of an opened
+        // file. The project file still holds the data until the first edit.
+        conn.pragma_update(None, "synchronous", "OFF")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         // No fsync per edit: a running save floods the disk and makes each fsync wait.
         // WAL stays consistent after an app crash; power loss may drop the last edits.

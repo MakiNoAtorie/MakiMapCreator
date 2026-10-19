@@ -57,25 +57,36 @@ fn measure() -> BTreeMap<String, f64> {
             time_ms(|| project.apply(map, cmd).unwrap()).0
         })
         .collect();
+    // Save and open time the fixture as built: strokes during a save would grow the file
+    // by an amount that depends on machine speed.
+    project.wait_for_jobs().unwrap();
+    let save = (0..RUNS)
+        .map(|_| {
+            time_ms(|| {
+                project.save(&file);
+                project.wait_for_save().unwrap();
+            })
+            .0
+        })
+        .collect();
     // Editing pause: the median stroke of each save, strokes going on until the save ends.
     // A save that blocks edits makes its first stroke last the whole save.
-    let (mut save, mut pause) = (vec![], vec![]);
-    for _ in 0..RUNS {
-        project.wait_for_jobs().unwrap();
-        let t = Instant::now();
-        project.save(&file);
-        let mut strokes = vec![];
-        loop {
-            let cmd = fixture.stroke(&mut rng);
-            strokes.push(time_ms(|| project.apply(map, cmd).unwrap()).0);
-            if let Some(res) = project.poll_save() {
-                res.unwrap();
-                save.push(t.elapsed().as_secs_f64() * 1000.0);
-                break;
+    let paused = dir.path().join("paused.mmc");
+    let pause = (0..RUNS)
+        .map(|_| {
+            project.wait_for_jobs().unwrap();
+            project.save(&paused);
+            let mut strokes = vec![];
+            loop {
+                let cmd = fixture.stroke(&mut rng);
+                strokes.push(time_ms(|| project.apply(map, cmd).unwrap()).0);
+                if let Some(res) = project.poll_save() {
+                    res.unwrap();
+                    break median(strokes);
+                }
             }
-        }
-        pause.push(median(strokes));
-    }
+        })
+        .collect();
     project.close().unwrap();
 
     let open = (0..RUNS)
