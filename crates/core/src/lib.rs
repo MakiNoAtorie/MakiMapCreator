@@ -33,6 +33,8 @@ mod kind;
 pub use kind::{Kinds, MapKindModule, Summary, Tool};
 mod child;
 pub use child::{CHILD_MARGIN, CHILD_SCALE_FACTOR, ParentContext};
+mod resync;
+pub use resync::{ChildSummary, RegenPlan, TileAt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -113,6 +115,7 @@ pub enum Error {
     UnknownGenerator(String),
     InvalidChild(&'static str),
     OutsideOutline,
+    StalePlan,
 }
 
 impl fmt::Display for Error {
@@ -139,6 +142,7 @@ impl fmt::Display for Error {
             Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
             Error::InvalidChild(why) => write!(f, "child map: {why}"),
             Error::OutsideOutline => write!(f, "the edit is outside the area this map owns"),
+            Error::StalePlan => write!(f, "the map changed after the preview; preview again"),
         }
     }
 }
@@ -162,6 +166,7 @@ pub struct Project {
     pipeline: pipeline::Pipeline,
     anchors: anchor::State,
     saves: save::Saves,
+    resync: resync::State,
 }
 
 impl Project {
@@ -189,6 +194,7 @@ impl Project {
             pipeline: Default::default(),
             anchors: Default::default(),
             saves: Default::default(),
+            resync: Default::default(),
         })
     }
 
@@ -228,6 +234,7 @@ impl Project {
             pipeline: Default::default(),
             anchors: Default::default(),
             saves: Default::default(),
+            resync: Default::default(),
         };
         p.names = p.build_name_index()?;
         p.load_child_outlines()?;

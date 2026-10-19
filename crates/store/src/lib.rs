@@ -23,6 +23,8 @@ mod children;
 pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
 mod save;
 pub use save::save_snapshot;
+mod resync;
+pub use resync::ChildState;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -45,6 +47,7 @@ const MIGRATIONS: &[&str] = &[
     search::MIGRATION,
     generations::MIGRATION,
     children::MIGRATION,
+    resync::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

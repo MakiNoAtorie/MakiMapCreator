@@ -18,6 +18,8 @@ pub enum Layer {
     Slope,
     /// Authored: 1 is land, 0 is sea (world map).
     Land,
+    /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
+    Lock,
 }
 
 impl Layer {
@@ -26,10 +28,11 @@ impl Layer {
             Layer::Height => "height",
             Layer::Slope => "slope",
             Layer::Land => "land",
+            Layer::Lock => "lock",
         }
     }
 
-    pub(crate) const ALL: [Layer; 3] = [Layer::Height, Layer::Slope, Layer::Land];
+    pub(crate) const ALL: [Layer; 4] = [Layer::Height, Layer::Slope, Layer::Land, Layer::Lock];
 
     pub(crate) fn parse(s: &str) -> Option<Layer> {
         Layer::ALL.into_iter().find(|l| l.as_str() == s)

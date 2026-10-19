@@ -26,6 +26,7 @@ pub(crate) enum Change {
     Page(crate::page::PageChange),
     Anchor(crate::anchor::AnchorChange),
     Generation(crate::generation::GenerationChange),
+    Resync(crate::resync::ResyncChange),
 }
 
 #[derive(Default)]
@@ -42,13 +43,18 @@ impl Project {
         Self::refuse_derived(&changes)?;
         self.write(&changes, true)?;
         self.after_write(map, &changes);
+        self.push_history(map, changes);
+        Ok(())
+    }
+
+    /// Records written `changes` as the newest command on `map`.
+    pub(crate) fn push_history(&mut self, map: MapId, changes: Change) {
         let h = self.history.entry(map).or_default();
         h.undone.clear();
         if h.done.len() == UNDO_LIMIT {
             h.done.pop_front();
         }
         h.done.push_back(changes);
-        Ok(())
     }
 
     /// Undoes the last command on `map`; `false` if there is none.
@@ -88,8 +94,8 @@ impl Project {
     }
 
     /// Writes the after records, or the before records when `forward` is false.
-    fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
-        match changes {
+    pub(crate) fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
+        let res = match changes {
             Change::Tiles(tiles) => {
                 let writes: Vec<_> = tiles
                     .iter()
@@ -106,6 +112,9 @@ impl Project {
             Change::Page(p) => self.write_page_change(p, forward),
             Change::Anchor(a) => self.write_anchor_change(a, forward),
             Change::Generation(g) => self.write_generation_change(g, forward),
-        }
+            Change::Resync(r) => self.write_resync_change(r, forward),
+        };
+        res?;
+        self.mark_out_of_date(changes)
     }
 }

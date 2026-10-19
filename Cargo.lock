@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "mmc-core",
+ "mmc-kind-region",
  "mmc-kind-world",
  "png",
  "pollster 1.0.1",

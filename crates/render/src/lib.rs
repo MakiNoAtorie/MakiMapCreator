@@ -11,6 +11,7 @@ mod height;
 pub use height::HeightPass;
 mod kind;
 pub use kind::LandPass;
+mod summary;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -78,6 +79,7 @@ pub struct Scene {
     view: View,
     metres_per_pixel: f64,
     rasters: Vec<(Layer, Raster)>,
+    summaries: Vec<mmc_core::ChildSummary>,
 }
 
 /// What a draw pass gets for one target tile.
@@ -207,6 +209,7 @@ impl Renderer {
             view,
             metres_per_pixel: m,
             rasters,
+            summaries: Vec::new(),
         })
     }
 
@@ -233,6 +236,7 @@ impl Renderer {
                 }
             }
         }
+        summary::tint(scene, &mut img);
         Ok(img)
     }
 

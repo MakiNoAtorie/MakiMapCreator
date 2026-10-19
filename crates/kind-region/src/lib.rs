@@ -3,7 +3,7 @@
 
 use mmc_core::{
     Command, Error, Generation, Layer, MapId, MapKind, MapKindModule, Project, Result, RootPoint,
-    Tool, rng,
+    Summary, TILE_SIZE, Tool, rng,
 };
 
 /// Height step across the parent coast, metres: land 1 maps to +RELIEF/2, sea to -RELIEF/2.
@@ -21,7 +21,7 @@ impl MapKindModule for RegionKind {
     }
 
     fn layers(&self) -> &'static [Layer] {
-        &[Layer::Height, Layer::Slope]
+        &[Layer::Height, Layer::Slope, Layer::Lock]
     }
 
     fn render_layers(&self) -> &'static [Layer] {
@@ -29,10 +29,16 @@ impl MapKindModule for RegionKind {
     }
 
     fn tools(&self) -> &'static [Tool] {
-        &[Tool {
-            id: "brush-height",
-            layer: Layer::Height,
-        }]
+        &[
+            Tool {
+                id: "brush-height",
+                layer: Layer::Height,
+            },
+            Tool {
+                id: "paint-lock",
+                layer: Layer::Lock,
+            },
+        ]
     }
 
     fn generators(&self) -> &'static [&'static str] {
@@ -92,4 +98,53 @@ impl MapKindModule for RegionKind {
     fn entity_kinds(&self) -> &'static [&'static str] {
         &[]
     }
+
+    /// A tint from sea blue to land green by the share of owned ground above sea level.
+    fn summary(&self, project: &Project, map: MapId) -> Result<Option<Summary>> {
+        let m = project
+            .maps()
+            .iter()
+            .find(|m| m.id == map)
+            .ok_or(Error::UnknownMap(map))?;
+        let (s, mpp) = (m.settings, m.settings.metres_per_pixel);
+        let (mut land, mut n) = (0u64, 0u64);
+        // ponytail: reads every tile on each call; cache summaries when large parents redraw slowly.
+        for ty in 0..s.height.div_ceil(TILE_SIZE) {
+            for tx in 0..s.width.div_ceil(TILE_SIZE) {
+                let tile = project.layer_tile(map, Layer::Height, tx, ty)?;
+                for y in (0..TILE_SIZE).step_by(SUMMARY_STEP) {
+                    for x in (0..TILE_SIZE).step_by(SUMMARY_STEP) {
+                        let (px, py) = (tx * TILE_SIZE + x, ty * TILE_SIZE + y);
+                        let at = RootPoint {
+                            x: m.origin.x + (px as f64 + 0.5) * mpp,
+                            y: m.origin.y + (py as f64 + 0.5) * mpp,
+                        };
+                        if px >= s.width || py >= s.height || !project.owns(map, at)? {
+                            continue;
+                        }
+                        n += 1;
+                        land += (tile[(y * TILE_SIZE + x) as usize] > 0.0) as u64;
+                    }
+                }
+            }
+        }
+        if n == 0 {
+            return Ok(None);
+        }
+        let f = land as f32 / n as f32;
+        let mix = |sea: f32, land: f32| (sea + (land - sea) * f).round() as u8;
+        Ok(Some(Summary {
+            tint: [
+                mix(60.0, 90.0),
+                mix(110.0, 170.0),
+                mix(190.0, 70.0),
+                SUMMARY_ALPHA,
+            ],
+        }))
+    }
 }
+
+/// Summary sample spacing in pixels.
+const SUMMARY_STEP: usize = 8;
+/// Summary tint opacity.
+pub const SUMMARY_ALPHA: u8 = 160;
