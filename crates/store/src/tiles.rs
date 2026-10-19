@@ -4,6 +4,22 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{Result, Store};
 
+pub(crate) fn tile(conn: &rusqlite::Connection, key: &TileKey) -> Result<Option<TileRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT data, edited FROM tiles
+             WHERE map_id = ?1 AND layer = ?2 AND level = ?3 AND tx = ?4 AND ty = ?5",
+            params![key.map_id, key.layer, key.level, key.tx, key.ty],
+            |r| {
+                Ok(TileRecord {
+                    data: r.get(0)?,
+                    edited: r.get(1)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 pub(crate) const MIGRATION: &str = "CREATE TABLE tiles (
         map_id INTEGER NOT NULL REFERENCES maps(id),
         layer TEXT NOT NULL,
@@ -32,20 +48,7 @@ pub struct TileRecord {
 
 impl Store {
     pub fn tile(&self, key: &TileKey) -> Result<Option<TileRecord>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT data, edited FROM tiles
-                 WHERE map_id = ?1 AND layer = ?2 AND level = ?3 AND tx = ?4 AND ty = ?5",
-                params![key.map_id, key.layer, key.level, key.tx, key.ty],
-                |r| {
-                    Ok(TileRecord {
-                        data: r.get(0)?,
-                        edited: r.get(1)?,
-                    })
-                },
-            )
-            .optional()?)
+        tile(&self.conn, key)
     }
 
     /// Writes all tiles in one transaction; `None` deletes the tile.

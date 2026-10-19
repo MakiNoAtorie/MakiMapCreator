@@ -7,7 +7,7 @@ use crate::{Error, Map, MapId, Project, Result};
 /// Width and height of a tile in pixels.
 pub const TILE_SIZE: u32 = 256;
 
-const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
+pub(crate) const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
 /// A raster layer of a map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -17,7 +17,7 @@ pub enum Layer {
 }
 
 impl Layer {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Layer::Height => "height",
         }

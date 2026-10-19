@@ -8,6 +8,8 @@ use rusqlite::{Connection, OpenFlags};
 mod assets;
 mod tiles;
 pub use tiles::{TileKey, TileRecord};
+mod reader;
+pub use reader::Reader;
 mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
 
@@ -98,20 +100,7 @@ impl Store {
     /// Copies the project `file` to `working_copy` and migrates the copy.
     /// The project file is only read.
     pub fn open(file: &Path, working_copy: &Path) -> Result<Store> {
-        let src = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let app_id: i32 = src
-            .query_row("PRAGMA application_id", [], |r| r.get(0))
-            .map_err(|_| Error::NotAProject)?;
-        if app_id != APPLICATION_ID {
-            return Err(Error::NotAProject);
-        }
-        let found = user_version(&src)?;
-        if found > SCHEMA_VERSION {
-            return Err(Error::NewerVersion {
-                found,
-                supported: SCHEMA_VERSION,
-            });
-        }
+        let src = open_read_only(file)?;
         refuse_existing(working_copy)?;
         src.execute("VACUUM INTO ?1", [path_str(working_copy)?])?;
         drop(src);
@@ -169,21 +158,49 @@ impl Store {
 
     /// All maps, ordered by id.
     pub fn maps(&self) -> Result<Vec<MapRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, parent_id, kind, width, height, metres_per_pixel FROM maps ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(MapRecord {
-                id: r.get(0)?,
-                parent_id: r.get(1)?,
-                kind: r.get(2)?,
-                width: r.get(3)?,
-                height: r.get(4)?,
-                metres_per_pixel: r.get(5)?,
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        maps(&self.conn)
     }
+
+    /// Path of the working copy, for extra read connections (see `Reader`).
+    pub fn working_copy(&self) -> &Path {
+        &self.working_copy
+    }
+}
+
+pub(crate) fn maps(conn: &Connection) -> Result<Vec<MapRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, parent_id, kind, width, height, metres_per_pixel FROM maps ORDER BY id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(MapRecord {
+            id: r.get(0)?,
+            parent_id: r.get(1)?,
+            kind: r.get(2)?,
+            width: r.get(3)?,
+            height: r.get(4)?,
+            metres_per_pixel: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Opens `file` read-only after checking that it is a project this app can read.
+pub(crate) fn open_read_only(file: &Path) -> Result<Connection> {
+    let src = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let app_id: i32 = src
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(|_| Error::NotAProject)?;
+    if app_id != APPLICATION_ID {
+        return Err(Error::NotAProject);
+    }
+    let found = user_version(&src)?;
+    if found > SCHEMA_VERSION {
+        return Err(Error::NewerVersion {
+            found,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(src)
 }
 
 fn user_version(conn: &Connection) -> Result<i32> {

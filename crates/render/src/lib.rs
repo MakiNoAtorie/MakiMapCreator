@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use mmc_core::{Layer, MapId, Project, RootPoint, TILE_SIZE};
+use mmc_core::{Layer, MapId, Project, RootPoint};
 
 mod height;
+mod levels;
 pub use height::HeightPass;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
@@ -76,6 +77,14 @@ pub struct Scene {
     view: View,
     metres_per_pixel: f64,
     rasters: Vec<(Layer, Raster)>,
+    complete: bool,
+}
+
+impl Scene {
+    /// False while part of the scene is a stand-in from a coarser level.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
 }
 
 /// What a draw pass gets for one target tile.
@@ -150,61 +159,12 @@ impl Renderer {
         self.passes.push((layer, pass));
     }
 
-    /// Reads the layers that registered passes draw, for the area of `view`.
-    // ponytail: reads full-resolution tiles; pyramid levels (#9) cut this for zoomed-out views.
+    /// Reads full-resolution tiles of the layers that registered passes draw, for the area
+    /// of `view`. Blocks on disk; export uses it. The screen uses `scene_cached`.
     pub fn scene(&self, project: &Project, view: View) -> Result<Scene> {
-        let map = project
-            .maps()
-            .iter()
-            .find(|m| m.id == view.map)
-            .ok_or(mmc_core::Error::UnknownMap(view.map))?;
-        let s = map.settings;
-        let m = s.metres_per_pixel;
-        // One pixel of margin for neighbour reads (hillshade).
-        let range = |min: f64, max: f64, size: u32| {
-            let lo = ((min / m).floor() - 1.0).clamp(0.0, size as f64) as u32;
-            let hi = ((max / m).ceil() + 1.0).clamp(0.0, size as f64) as u32;
-            (lo, hi)
-        };
-        let (x0, x1) = range(view.min.x, view.max.x, s.width);
-        let (y0, y1) = range(view.min.y, view.max.y, s.height);
-        if x0 >= x1 || y0 >= y1 || view.width == 0 || view.height == 0 {
-            return Err(Error::OutsideMap);
-        }
-        let mut layers: Vec<Layer> = self.passes.iter().map(|p| p.0).collect();
-        layers.sort();
-        layers.dedup();
-        let mut rasters = Vec::new();
-        for layer in layers {
-            let (w, h) = (x1 - x0, y1 - y0);
-            let mut values = vec![0.0; (w * h) as usize];
-            for ty in y0 / TILE_SIZE..=(y1 - 1) / TILE_SIZE {
-                for tx in x0 / TILE_SIZE..=(x1 - 1) / TILE_SIZE {
-                    let tile = project.layer_tile(view.map, layer, tx, ty)?;
-                    for y in (ty * TILE_SIZE).max(y0)..((ty + 1) * TILE_SIZE).min(y1) {
-                        let (ax, bx) = ((tx * TILE_SIZE).max(x0), ((tx + 1) * TILE_SIZE).min(x1));
-                        let src = ((y % TILE_SIZE) * TILE_SIZE + ax % TILE_SIZE) as usize;
-                        let dst = ((y - y0) * w + ax - x0) as usize;
-                        let n = (bx - ax) as usize;
-                        values[dst..dst + n].copy_from_slice(&tile[src..src + n]);
-                    }
-                }
-            }
-            rasters.push((
-                layer,
-                Raster {
-                    x0,
-                    y0,
-                    w,
-                    h,
-                    values,
-                },
-            ));
-        }
-        Ok(Scene {
-            view,
-            metres_per_pixel: m,
-            rasters,
+        let map = levels::find_map(project, view)?;
+        self.assemble(map, view, 0, |layer, tx, ty| {
+            Ok(Some((0, project.layer_tile(map.id, layer, tx, ty)?.into())))
         })
     }
 

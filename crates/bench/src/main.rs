@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use mmc_core::Project;
+use mmc_core::{Layer, Project, TileId, read_overviews};
 use mmc_fixtures::{LargeMap, Rng};
 
 const BUDGETS: &str = include_str!("../budgets.toml");
@@ -69,9 +69,43 @@ fn measure() -> BTreeMap<String, f64> {
         })
         .collect();
 
+    let first_frame = (0..RUNS)
+        .map(|_| time_ms(|| read_overviews(&file, Layer::Height).unwrap()).0)
+        .collect();
+
+    // Pan a 1920x1080 view at full resolution to an area no tile of which is loaded.
+    let p = Project::open(&file, &dir.path().join("pan")).unwrap();
+    let top = p.top_level(map).unwrap();
+    let id = |level, tx, ty| TileId {
+        map,
+        layer: Layer::Height,
+        level,
+        tx,
+        ty,
+    };
+    p.cached_tile(id(top, 0, 0)).unwrap();
+    p.wait_tiles();
+    let (mut stand_in, mut full) = (Vec::new(), Vec::new());
+    for run in 0..RUNS as u32 {
+        let (x0, y0) = (run % 4 * 8, run / 4 * 5);
+        let t = Instant::now();
+        for ty in y0..y0 + 5 {
+            for tx in x0..x0 + 8 {
+                assert!(p.cached_tile(id(0, tx, ty)).unwrap().is_some());
+            }
+        }
+        stand_in.push(t.elapsed().as_secs_f64() * 1000.0);
+        p.wait_tiles();
+        full.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    p.close().unwrap();
+
     BTreeMap::from([
         ("brush_stroke".into(), median(brush)),
         ("open_project".into(), median(open)),
+        ("open_first_frame".into(), median(first_frame)),
+        ("pan_stand_in".into(), median(stand_in)),
+        ("pan_full_tiles".into(), median(full)),
         ("save".into(), median(save)),
     ])
 }

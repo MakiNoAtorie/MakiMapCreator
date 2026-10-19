@@ -5,11 +5,15 @@ use std::path::Path;
 
 use mmc_store::Store;
 
+mod cache;
 mod command;
 mod layer;
+mod pyramid;
 mod undo;
+pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint};
 pub use layer::{Layer, RootPoint, TILE_SIZE};
+pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;
 mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
@@ -72,6 +76,21 @@ pub struct Map {
     pub settings: MapSettings,
 }
 
+impl Map {
+    fn from_record(r: mmc_store::MapRecord) -> Result<Map> {
+        Ok(Map {
+            id: MapId(r.id),
+            parent: r.parent_id.map(MapId),
+            settings: MapSettings {
+                kind: MapKind::parse(&r.kind).ok_or(Error::UnknownMapKind(r.kind))?,
+                width: r.width,
+                height: r.height,
+                metres_per_pixel: r.metres_per_pixel,
+            },
+        })
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     Store(mmc_store::Error),
@@ -116,6 +135,7 @@ pub struct Project {
     store: Store,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
+    cache: std::sync::OnceLock<cache::TileCache>,
 }
 
 impl Project {
@@ -137,6 +157,7 @@ impl Project {
                 settings: root,
             }],
             history: Default::default(),
+            cache: Default::default(),
         })
     }
 
@@ -146,23 +167,13 @@ impl Project {
         let maps = store
             .maps()?
             .into_iter()
-            .map(|r| {
-                Ok(Map {
-                    id: MapId(r.id),
-                    parent: r.parent_id.map(MapId),
-                    settings: MapSettings {
-                        kind: MapKind::parse(&r.kind).ok_or(Error::UnknownMapKind(r.kind))?,
-                        width: r.width,
-                        height: r.height,
-                        metres_per_pixel: r.metres_per_pixel,
-                    },
-                })
-            })
+            .map(Map::from_record)
             .collect::<Result<_>>()?;
         Ok(Project {
             store,
             maps,
             history: Default::default(),
+            cache: Default::default(),
         })
     }
 
@@ -190,6 +201,8 @@ impl Project {
 
     /// Closes the project and deletes its working copy.
     pub fn close(self) -> Result<()> {
+        // Tile workers hold read connections to the working copy; stop them first.
+        drop(self.cache);
         Ok(self.store.close()?)
     }
 

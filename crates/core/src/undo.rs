@@ -88,7 +88,7 @@ impl Project {
                         )
                     })
                     .collect();
-                Ok(self.store.write_tiles(&writes)?)
+                self.write_tiles(&writes)
             }
             Change::Entities(e) => self.write_entity_changes(e, forward),
         }

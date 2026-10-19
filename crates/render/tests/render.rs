@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use mmc_core::{
     BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
+    TileId, read_overviews,
 };
 use mmc_render::{HeightPass, Image, Renderer, View, export_png};
 
@@ -142,4 +143,69 @@ fn exports_a_png_larger_than_the_screen_on_a_worker() {
     let info = info.info();
     assert_eq!((info.width, info.height), (4096, 2731));
     assert_eq!(info.color_type, png::ColorType::Rgba);
+}
+
+fn reopen(dir: &std::path::Path) -> (Project, MapId) {
+    let (p, map) = fixture(dir);
+    let file = dir.join("p.mmc");
+    p.save(&file).unwrap();
+    p.close().unwrap();
+    (Project::open(&file, &dir.join("wc2.sqlite")).unwrap(), map)
+}
+
+#[test]
+fn a_cached_scene_draws_a_stand_in_then_the_full_tiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let (p, map) = reopen(dir.path());
+    let r = renderer();
+    let top = p.top_level(map).unwrap();
+    p.cached_tile(TileId {
+        map,
+        layer: Layer::Height,
+        level: top,
+        tx: 0,
+        ty: 0,
+    })
+    .unwrap();
+    p.wait_tiles();
+
+    let v = view(map, 300, 200);
+    let stand_in = r.scene_cached(&p, v).unwrap();
+    assert!(!stand_in.is_complete());
+    let img = r.render(&stand_in, u32::MAX).unwrap();
+    assert_eq!(pixel(&img, 290, 10)[3], 255, "the stand-in is drawn");
+
+    p.wait_tiles();
+    let full = r.scene_cached(&p, v).unwrap();
+    assert!(full.is_complete());
+    // 2 map pixels per image pixel: drawn from level 1, not level 0.
+    let level0 = r.render(&r.scene(&p, v).unwrap(), u32::MAX).unwrap();
+    assert_ne!(r.render(&full, u32::MAX).unwrap().rgba, level0.rgba);
+
+    let v = view(map, 600, 400);
+    r.scene_cached(&p, v).unwrap();
+    p.wait_tiles();
+    let full = r.scene_cached(&p, v).unwrap();
+    assert!(full.is_complete());
+    let single = r.render(&r.scene(&p, v).unwrap(), u32::MAX).unwrap();
+    assert!(r.render(&full, 64).unwrap().rgba == single.rgba);
+}
+
+#[test]
+fn the_overview_draws_a_first_frame_before_the_project_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let (p, map) = fixture(dir.path());
+    let file = dir.path().join("p.mmc");
+    p.save(&file).unwrap();
+    p.close().unwrap();
+
+    let overviews = read_overviews(&file, Layer::Height).unwrap();
+    let r = renderer();
+    let scene = r
+        .overview_scene(&overviews[0], view(map, 300, 200))
+        .unwrap();
+    assert!(!scene.is_complete());
+    let img = r.render(&scene, u32::MAX).unwrap();
+    let sea = pixel(&img, 290, 10);
+    assert!(sea[2] > sea[1] && sea[3] == 255, "sea is blue: {sea:?}");
 }
