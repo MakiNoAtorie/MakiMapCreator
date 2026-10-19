@@ -88,10 +88,7 @@ impl Project {
         for m in &self.maps {
             let child_of_deleted = m.parent.is_some_and(|p| maps.contains(&p));
             if (roots.contains(&m.id) || child_of_deleted) && !maps.contains(&m.id) {
-                let link = self
-                    .store
-                    .child_link(m.id.0)?
-                    .ok_or(Error::InvalidChild("the map has no parent link"))?;
+                let link = self.store.child_link(m.id.0)?.ok_or(Error::RootMap(m.id))?;
                 unlinked.push((m.clone(), link));
             }
         }

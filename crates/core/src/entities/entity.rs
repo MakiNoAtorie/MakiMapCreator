@@ -3,7 +3,7 @@
 use crate::persist::{EntityRecord, FieldDefRecord, RelationRecord, Write};
 use serde_json::{Map, Value};
 
-use crate::{Error, Project, Result};
+use crate::{Error, FieldProblem, Project, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EntityId(pub(crate) i64);
@@ -256,14 +256,14 @@ impl Project {
     }
 
     fn check_field(&self, defs: &[FieldDef], key: &str, v: &Value) -> Result<()> {
-        let invalid = |reason| {
+        let invalid = |problem| {
             Err(Error::InvalidField {
                 key: key.into(),
-                reason,
+                problem,
             })
         };
         let Some(def) = defs.iter().find(|d| d.key == key) else {
-            return invalid("the kind has no such field");
+            return invalid(FieldProblem::NoSuchField);
         };
         let ok = match &def.field_type {
             FieldType::Text | FieldType::Markdown => v.is_string(),
@@ -273,7 +273,7 @@ impl Project {
             FieldType::EntityRef => match v.as_i64() {
                 Some(id) => {
                     if self.store.entity(id)?.is_none() {
-                        return invalid("no entity has this id");
+                        return invalid(FieldProblem::NoSuchEntity);
                     }
                     true
                 }
@@ -283,7 +283,7 @@ impl Project {
         if ok {
             Ok(())
         } else {
-            invalid("the value does not match the field type")
+            invalid(FieldProblem::WrongType)
         }
     }
 
@@ -336,7 +336,7 @@ impl Project {
                 if self.field_defs(&d.kind)?.iter().any(|x| x.key == d.key) {
                     return Err(Error::InvalidField {
                         key: d.key.clone(),
-                        reason: "the kind already has this field",
+                        problem: FieldProblem::Duplicate,
                     });
                 }
                 let (ty, choices) = d.field_type.to_record();

@@ -68,7 +68,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 ## Code
 
-- Errors: one `Error` enum per crate with a hand-written `Display`; no error crates.
+- Errors: one `Error` enum per crate with a hand-written `Display` (English, for logs); no error crates. Variants carry data, never English reasons; the app words each variant in `app/src/errors.rs` through Fluent.
 - Comments: rare, one line, objective. State constraints and why.
 
 ## App

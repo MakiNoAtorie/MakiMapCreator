@@ -121,13 +121,28 @@ pub enum Error {
     EntityExists(EntityId),
     InvalidField {
         key: String,
-        reason: &'static str,
+        problem: FieldProblem,
     },
     CorruptEntity,
-    InvalidAnchor(&'static str),
+    InvalidAnchor(AnchorProblem),
     UnknownFeature(FeatureId),
     UnknownGenerator(String),
-    InvalidChild(&'static str),
+    /// Maps of this kind have no child maps.
+    NoChildMaps(MapKind),
+    /// The entity has no outline on the parent map.
+    NoOutline(EntityId),
+    /// Metres per pixel must be a positive number.
+    InvalidScale,
+    /// A child map would be wider or higher than `MAX_CHILD_SIZE`.
+    ChildTooLarge,
+    /// A root map has no parent to re-sync with.
+    RootMap(MapId),
+    /// The map has no generation to run again.
+    NeverGenerated(MapId),
+    /// A generator needs parent context the map does not have.
+    NoParentContext(MapId),
+    /// An outline needs at least three points.
+    InvalidOutline,
     OutsideOutline,
     UnknownObject(ObjectId),
     NotAnObjectLayer(Layer),
@@ -138,48 +153,38 @@ pub enum Error {
     StalePlan,
 }
 
+/// Why a field definition or value was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldProblem {
+    /// The kind already has a field with this key.
+    Duplicate,
+    NoSuchField,
+    /// An entity reference names no entity.
+    NoSuchEntity,
+    WrongType,
+}
+
+/// Why anchors were refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorProblem {
+    /// Only rivers and lakes have anchors.
+    NotAnchored,
+    /// River anchors on a lake or the reverse.
+    WrongShape,
+    /// The derived feature has no geometry.
+    NoGeometry,
+}
+
+/// English text for logs; the app shows its own strings for each variant (ADR-0017).
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::NotAProject => write!(f, "the file is not a MakiMapCreator project"),
-            Error::NewerVersion { found, supported } => write!(
-                f,
-                "the file was saved by a newer version of the app                  (file version {found}, this app supports up to {supported})"
-            ),
+            Error::NewerVersion { found, supported } => {
+                write!(f, "file version {found} is newer than {supported}")
+            }
             Error::Storage(e) => write!(f, "storage error: {e}"),
-            Error::WorkingCopyInUse => write!(f, "another window has this work open"),
-            Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
-            Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
-            Error::CorruptTile => write!(f, "the file has a damaged map tile"),
-            Error::DerivedLayer(l) => {
-                write!(
-                    f,
-                    "the {} layer is computed and can not be edited",
-                    l.as_str()
-                )
-            }
-            Error::UnknownEntityKind(k) => write!(f, "the project has no entity kind {k}"),
-            Error::UnknownEntity(id) => write!(f, "the project has no entity with id {}", id.0),
-            Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
-            Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
-            Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
-            Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
-            Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
-            Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
-            Error::InvalidChild(why) => write!(f, "child map: {why}"),
-            Error::OutsideOutline => write!(f, "the edit is outside the area this map owns"),
-            Error::UnknownObject(id) => write!(f, "the map has no object with id {}", id.0),
-            Error::NotAnObjectLayer(l) => write!(f, "{} is not an object layer", l.as_str()),
-            Error::InvalidObject(id) => write!(f, "object {} has a wrong id or shape", id.0),
-            Error::MapHasChildren(id) => {
-                write!(f, "map {} has child maps; delete them first", id.0)
-            }
-            Error::OwnMapChoice(id) => write!(
-                f,
-                "entity {} has its own map: choose to delete the map or keep it as a root map",
-                id.0
-            ),
-            Error::StalePlan => write!(f, "the map changed after the preview; preview again"),
+            Error::InvalidField { key, problem } => write!(f, "field {key}: {problem:?}"),
+            e => write!(f, "{e:?}"),
         }
     }
 }

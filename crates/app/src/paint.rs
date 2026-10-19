@@ -180,7 +180,10 @@ impl Painter {
                 ),
             };
             if let Err(e) = r {
-                error = Some(tr_args("error-paint", &[("error", &e.to_string())]));
+                error = Some(tr_args(
+                    "error-paint",
+                    &[("error", &crate::errors::text(&e))],
+                ));
             }
         }
         if changed {
@@ -198,7 +201,10 @@ impl Painter {
                 Ok(false) => self.jobs_until = None,
                 Err(e) => {
                     self.jobs_until = None;
-                    error = Some(tr_args("error-paint", &[("error", &e.to_string())]));
+                    error = Some(tr_args(
+                        "error-paint",
+                        &[("error", &crate::errors::text(&e))],
+                    ));
                 }
             }
         }

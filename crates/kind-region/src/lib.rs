@@ -91,7 +91,7 @@ impl MapKindModule for RegionKind {
             .ok_or(Error::UnknownMap(map))?;
         let land = project
             .parent_context(map, PARENT_LAND)?
-            .ok_or(Error::InvalidChild("the map has no parent land to refine"))?;
+            .ok_or(Error::NoParentContext(map))?;
         let s = m.settings;
         let mpp = s.metres_per_pixel;
         // Global pixel indices: neighbours compute the same root-space centres bit for bit.

@@ -166,7 +166,7 @@ impl Canvas {
                     self.error = None;
                 }
                 Err(mmc_render::Error::OutsideMap) => self.shown = None,
-                Err(e) => self.error = Some(e.to_string()),
+                Err(e) => self.error = Some(crate::errors::render_text(&e)),
             }
         }
         // The last render stands in, moved and scaled, until the new one arrives.

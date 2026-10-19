@@ -30,7 +30,7 @@ fn a_default_scale_child_of_a_world_region_fits_the_cap_and_generates() {
 
     // At the declared 10 m/px the region would be far wider than the cap.
     let err = p.create_child_map(w, region, Some(10.0)).unwrap_err();
-    assert!(matches!(err, Error::InvalidChild(_)), "{err}");
+    assert!(matches!(err, Error::ChildTooLarge), "{err}");
     let child = p.create_child_map(w, region, None).unwrap();
     let s = p.maps().iter().find(|m| m.id == child).unwrap().settings;
     assert!(s.width as f64 <= MAX_CHILD_SIZE && s.height as f64 <= MAX_CHILD_SIZE);

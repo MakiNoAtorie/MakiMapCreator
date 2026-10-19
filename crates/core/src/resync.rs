@@ -259,20 +259,12 @@ impl Project {
         outline: Option<Vec<RootPoint>>,
     ) -> Result<RegenPlan> {
         let mut m = self.map(map)?.clone();
-        let parent = self
-            .map(
-                m.parent
-                    .ok_or(Error::InvalidChild("a root map has no parent"))?,
-            )?
-            .clone();
-        let before = self
-            .store
-            .child_state(map.0)?
-            .ok_or(Error::InvalidChild("the map has no outline"))?;
+        let parent = self.map(m.parent.ok_or(Error::RootMap(map))?)?.clone();
+        let before = self.store.child_state(map.0)?.ok_or(Error::RootMap(map))?;
         let old = m.outline.clone().unwrap_or_default();
         let new = outline.unwrap_or_else(|| old.clone());
         if new.len() < 3 {
-            return Err(Error::InvalidChild("an outline needs three points"));
+            return Err(Error::InvalidOutline);
         }
         let resize = grow(&m, &new, CHILD_MARGIN * parent.settings.metres_per_pixel)?;
         let old_map = m.clone();
@@ -284,7 +276,7 @@ impl Project {
         let decl = self
             .kind_of(parent.id)?
             .child()
-            .ok_or(Error::InvalidChild("the parent kind has no child maps"))?;
+            .ok_or(Error::NoChildMaps(parent.settings.kind))?;
         let context = self.snapshot(
             decl.context,
             &parent,
@@ -295,7 +287,7 @@ impl Project {
         let g = self
             .generations(map)?
             .pop()
-            .ok_or(Error::InvalidChild("the map was never generated"))?;
+            .ok_or(Error::NeverGenerated(map))?;
         let kinds = self.kinds.clone();
         let kind = kinds
             .get(m.settings.kind)
@@ -544,7 +536,7 @@ fn grow(m: &Map, outline: &[RootPoint], margin: f64) -> Result<Option<Resize>> {
         ((hi.y - origin.y) / mpp).ceil(),
     );
     if w > MAX_CHILD_SIZE || h > MAX_CHILD_SIZE {
-        return Err(Error::InvalidChild("the child map would be too large"));
+        return Err(Error::ChildTooLarge);
     }
     Ok(Some(Resize {
         before,

@@ -1,5 +1,6 @@
 mod brush;
 mod canvas;
+mod errors;
 mod i18n;
 mod input;
 mod paint;
@@ -120,6 +121,8 @@ impl Snapshot {
 enum Done {
     Generated(MapId),
     Child(MapId),
+    /// The project closed before the work ran.
+    Closed,
 }
 
 type Job = JoinHandle<mmc_core::Result<Done>>;
@@ -144,7 +147,7 @@ struct App {
     search: Search,
     search_names: Vec<(EntityId, String)>,
     panels_hidden: bool,
-    job: Option<Job>,
+    job: Option<(Job, &'static str)>,
     /// A child map to show once the snapshot has it.
     open_after: Option<MapId>,
     /// Intents that found the project busy.
@@ -278,7 +281,7 @@ impl App {
         let (project, file) = match next {
             Ok(n) => n,
             Err(e) => {
-                self.message = Some(tr_args(error, &[("error", &e.to_string())]));
+                self.message = Some(tr_args(error, &[("error", &errors::text(&e))]));
                 return;
             }
         };
@@ -313,7 +316,7 @@ impl App {
     }
 
     fn close(&mut self) {
-        if let Some(j) = self.job.take() {
+        if let Some((j, _)) = self.job.take() {
             let _ = j.join();
         }
         self.pending.clear();
@@ -366,44 +369,39 @@ impl App {
         self.dirty = true;
     }
 
+    /// Runs `work` on a worker; `error` is the UI string id its failure shows with.
     fn spawn(
         &mut self,
+        error: &'static str,
         work: impl FnOnce(&mut Project) -> mmc_core::Result<Done> + Send + 'static,
     ) {
         if self.job.is_some() {
             return;
         }
         let project = self.project.clone();
-        self.job = Some(std::thread::spawn(move || {
-            match project.lock().unwrap().as_mut() {
-                Some(p) => work(p),
-                None => Err(mmc_core::Error::InvalidChild("no project is open")),
-            }
-        }));
+        let job = std::thread::spawn(move || match project.lock().unwrap().as_mut() {
+            Some(p) => work(p),
+            None => Ok(Done::Closed),
+        });
+        self.job = Some((job, error));
     }
 
     fn finish_job(&mut self, now: f64) {
-        if !self.job.as_ref().is_some_and(|j| j.is_finished()) {
+        if !self.job.as_ref().is_some_and(|j| j.0.is_finished()) {
             return;
         }
-        let Some(job) = self.job.take() else {
+        let Some((job, error)) = self.job.take() else {
             return;
         };
         match job.join() {
+            Ok(Ok(Done::Closed)) => {}
             Ok(Ok(Done::Generated(m))) => self.note_command(m, now, true),
             Ok(Ok(Done::Child(c))) => {
                 self.dirty = true;
                 self.open_after = Some(c);
             }
-            Ok(Err(e)) => {
-                let id = if matches!(e, mmc_core::Error::InvalidChild(_)) {
-                    "error-child"
-                } else {
-                    "error-generate"
-                };
-                self.message = Some(tr_args(id, &[("error", &e.to_string())]));
-            }
-            Err(_) => self.message = Some(tr_args("error-generate", &[("error", "panic")])),
+            Ok(Err(e)) => self.message = Some(tr_args(error, &[("error", &errors::text(&e))])),
+            Err(_) => self.message = Some(tr_args(error, &[("error", &tr("error-crashed"))])),
         }
     }
 
@@ -432,14 +430,16 @@ impl App {
         {
             self.saving = false;
             if let Err(e) = r {
-                self.message = Some(tr_args("error-save", &[("error", &e.to_string())]));
+                self.message = Some(tr_args("error-save", &[("error", &errors::text(&e))]));
             }
         }
         if self.dirty {
             self.dirty = false;
             match Snapshot::load(p, map) {
                 Ok(s) => self.snap = s,
-                Err(e) => self.message = Some(tr_args("error-read", &[("error", &e.to_string())])),
+                Err(e) => {
+                    self.message = Some(tr_args("error-read", &[("error", &errors::text(&e))]))
+                }
             }
             if self
                 .selection
@@ -458,7 +458,9 @@ impl App {
         {
             match p.page(id) {
                 Ok(text) => self.page = Some((id, text)),
-                Err(e) => self.message = Some(tr_args("error-read", &[("error", &e.to_string())])),
+                Err(e) => {
+                    self.message = Some(tr_args("error-read", &[("error", &errors::text(&e))]))
+                }
             }
         }
     }
@@ -498,7 +500,8 @@ impl App {
                     match r {
                         Ok(()) => self.note_command(map, now, false),
                         Err(e) => {
-                            self.message = Some(tr_args("error-edit", &[("error", &e.to_string())]))
+                            self.message =
+                                Some(tr_args("error-edit", &[("error", &errors::text(&e))]))
                         }
                     }
                 }
@@ -511,11 +514,13 @@ impl App {
                 }
                 Intent::CloseTab(i) => self.tabs.close(i),
                 Intent::CreateChild(entity) => {
-                    self.spawn(move |p| p.create_child_map(map, entity, None).map(Done::Child));
+                    self.spawn("error-child", move |p| {
+                        p.create_child_map(map, entity, None).map(Done::Child)
+                    });
                 }
                 Intent::Generate(run) => {
                     let kinds = self.kinds.clone();
-                    self.spawn(move |p| {
+                    self.spawn("error-generate", move |p| {
                         let kind = p
                             .maps()
                             .iter()
@@ -1105,7 +1110,8 @@ impl eframe::App for App {
                     .and_then(|s| Project::load(Box::new(s), kinds));
                 self.replace(r.map(|p| (p, None)), "error-restore");
             } else if let Err(e) = Store::discard(&leftover) {
-                self.message = Some(tr_args("error-restore", &[("error", &e.to_string())]));
+                let e = mmc_core::Error::from(e);
+                self.message = Some(tr_args("error-restore", &[("error", &errors::text(&e))]));
             }
         }
         if let Some(a) = action {

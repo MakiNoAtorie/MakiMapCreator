@@ -2,7 +2,7 @@
 
 use crate::persist::{AnchorRecord, Write};
 
-use crate::{EntityId, Error, Project, Result, RootPoint};
+use crate::{AnchorProblem, EntityId, Error, Project, Result, RootPoint};
 
 /// Metres between an anchor and a derived feature for a match.
 pub const DEFAULT_ANCHOR_TOLERANCE: f64 = 500.0;
@@ -169,7 +169,7 @@ fn score(anchors: &Anchors, f: &DerivedFeature, tolerance: f64) -> Option<f64> {
 }
 
 fn anchors_of(f: &DerivedFeature) -> Result<Anchors> {
-    let empty = Error::InvalidAnchor("the feature has no geometry");
+    let empty = Error::InvalidAnchor(AnchorProblem::NoGeometry);
     let g = &f.geometry;
     match f.kind {
         FeatureKind::River => Ok(Anchors::River {
@@ -276,12 +276,10 @@ impl Project {
         let want = match kind.as_str() {
             "river" => FeatureKind::River,
             "lake" => FeatureKind::Lake,
-            _ => return Err(Error::InvalidAnchor("only rivers and lakes have anchors")),
+            _ => return Err(Error::InvalidAnchor(AnchorProblem::NotAnchored)),
         };
         if anchors.kind() != want {
-            return Err(Error::InvalidAnchor(
-                "the anchors do not fit the entity kind",
-            ));
+            return Err(Error::InvalidAnchor(AnchorProblem::WrongShape));
         }
         let mut after = AnchorRecord {
             entity_id: entity.0,

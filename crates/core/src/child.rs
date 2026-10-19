@@ -85,19 +85,17 @@ impl Project {
         let decl = self
             .kind_of(parent)?
             .child()
-            .ok_or(Error::InvalidChild("this map kind has no child maps"))?;
+            .ok_or(Error::NoChildMaps(pm.settings.kind))?;
         let kind = decl.kind;
         let outline = self
             .outlines(parent)?
             .into_iter()
             .find(|o| o.0 == entity)
-            .ok_or(Error::InvalidChild(
-                "the entity has no outline on the parent map",
-            ))?
+            .ok_or(Error::NoOutline(entity))?
             .1;
         let mut mpp = metres_per_pixel.unwrap_or(pm.settings.metres_per_pixel / decl.scale_factor);
         if !(mpp.is_finite() && mpp > 0.0) {
-            return Err(Error::InvalidChild("the scale must be a positive number"));
+            return Err(Error::InvalidScale);
         }
         let margin = CHILD_MARGIN * pm.settings.metres_per_pixel;
         let (mut lo, mut hi) = (
@@ -129,7 +127,7 @@ impl Project {
             ((hi.y - origin.y) / mpp).ceil(),
         );
         if !(w >= 1.0 && h >= 1.0 && w <= MAX_CHILD_SIZE && h <= MAX_CHILD_SIZE) {
-            return Err(Error::InvalidChild("the child map would be too large"));
+            return Err(Error::ChildTooLarge);
         }
         let settings = MapSettings {
             kind,
