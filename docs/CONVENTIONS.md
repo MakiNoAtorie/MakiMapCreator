@@ -88,3 +88,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `mmc-page` depends on neither `mmc-core` nor `mmc-store`. Ported code keeps its MIT notice at the top of the crate.
 - Page links are stored only as `[[id|label]]` in page text; the label is never rewritten on rename.
 - Core parses links; store never parses Markdown. The link index is written in the same transaction as the page.
+
+## Anchors
+
+- Anchor edits are commands (`Change::Anchor`); anchor matching is not undoable, because it follows derived data.
+- A derived stage that outputs features calls `set_derived_features` before its rebuild commits.
+- River geometry runs source to mouth; lake geometry is a polygon ring.
