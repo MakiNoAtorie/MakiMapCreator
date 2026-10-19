@@ -2,9 +2,12 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::time::Duration;
 
 use mmc_core::persist::{MapRecord, Write};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 mod assets;
 mod tiles;
@@ -105,10 +108,30 @@ impl From<Error> for mmc_core::Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Foreground writes waiting or running. Background writers pause between chunks while it
+/// is above 0, so an edit waits for at most one chunk (ADR-0014).
+pub(crate) type Gate = Arc<AtomicUsize>;
+
+/// Retries a locked database every 100 µs for about 5 s. The default handler sleeps up to
+/// 100 ms per retry, longer than a frame.
+fn busy_wait(attempt: i32) -> bool {
+    std::thread::sleep(Duration::from_micros(100));
+    attempt < 50_000
+}
+
+/// Settings of every connection to a working copy.
+pub(crate) fn tune(conn: &Connection) -> Result<()> {
+    conn.busy_handler(Some(busy_wait))?;
+    // No fsync per commit; see `Store::init`.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
+}
+
 /// An open project: a working copy in WAL mode that `save` snapshots to the project file.
 pub struct Store {
     conn: Connection,
     working_copy: PathBuf,
+    gate: Gate,
 }
 
 impl Store {
@@ -143,7 +166,9 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         // No fsync per edit: a running save floods the disk and makes each fsync wait.
         // WAL stays consistent after an app crash; power loss may drop the last edits.
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        tune(&conn)?;
+        // Worker connections checkpoint the WAL; a checkpoint on an edit's commit stalls it.
+        conn.pragma_update(None, "wal_autocheckpoint", 0)?;
         conn.pragma_update(None, "foreign_keys", true)?;
         let tx = conn.transaction()?;
         for sql in &MIGRATIONS[user_version(&tx)? as usize..] {
@@ -155,7 +180,26 @@ impl Store {
         Ok(Store {
             conn,
             working_copy: working_copy.to_owned(),
+            gate: Gate::default(),
         })
+    }
+
+    /// Runs `f` in an IMMEDIATE transaction, ahead of background writers.
+    pub(crate) fn edit<T>(&self, f: impl FnOnce(&Transaction) -> Result<T>) -> Result<T> {
+        self.gate.fetch_add(1, SeqCst);
+        let r = (|| {
+            let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+            let v = f(&tx)?;
+            tx.commit()?;
+            Ok(v)
+        })();
+        self.gate.fetch_sub(1, SeqCst);
+        r
+    }
+
+    /// A worker connection whose writes give way to this store's edits.
+    pub fn tile_conn(&self) -> Result<TileConn> {
+        TileConn::open_gated(&self.working_copy, self.gate.clone())
     }
 
     /// Writes a snapshot of the working copy over `file`: `VACUUM INTO` a
@@ -178,12 +222,14 @@ impl Store {
         height: u32,
         metres_per_pixel: f64,
     ) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO maps (parent_id, kind, width, height, metres_per_pixel)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![parent_id, kind, width, height, metres_per_pixel],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        self.edit(|tx| {
+            tx.execute(
+                "INSERT INTO maps (parent_id, kind, width, height, metres_per_pixel)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![parent_id, kind, width, height, metres_per_pixel],
+            )?;
+            Ok(tx.last_insert_rowid())
+        })
     }
 
     /// All maps, ordered by id.
@@ -193,24 +239,27 @@ impl Store {
 
     /// Writes all rows in one transaction.
     pub fn write(&self, writes: &[Write]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        for w in writes {
-            match w {
-                Write::Tile(k, rec) => tiles::write_tile(&tx, k, rec.as_ref())?,
-                Write::Entity(id, rec) => entities::write_entity(&tx, *id, rec.as_ref())?,
-                Write::Relation(r, present) => entities::write_relation(&tx, r, *present)?,
-                Write::Page(p) => pages::write_page(&tx, p)?,
-                Write::Anchor(id, rec) => anchors::write_anchor(&tx, *id, rec.as_ref())?,
-                Write::Generation(g, present) => generations::write_generation(&tx, g, *present)?,
-                Write::Object(id, rec) => objects::write_object(&tx, *id, rec.as_ref())?,
-                Write::FieldDef(d, present) => entities::write_field_def(&tx, d, *present)?,
-                Write::MapDeleted(id, d) => delete::write_map_deleted(&tx, *id, *d)?,
-                Write::ChildLink(id, link) => delete::write_child_link(&tx, *id, link.as_ref())?,
-                Write::ChildState(id, s) => resync::write_child_state(&tx, *id, s)?,
-                Write::OutOfDate(id, o) => resync::write_out_of_date(&tx, *id, *o)?,
+        self.edit(|tx| {
+            for w in writes {
+                match w {
+                    Write::Tile(k, rec) => tiles::write_tile(tx, k, rec.as_ref())?,
+                    Write::Entity(id, rec) => entities::write_entity(tx, *id, rec.as_ref())?,
+                    Write::Relation(r, present) => entities::write_relation(tx, r, *present)?,
+                    Write::Page(p) => pages::write_page(tx, p)?,
+                    Write::Anchor(id, rec) => anchors::write_anchor(tx, *id, rec.as_ref())?,
+                    Write::Generation(g, present) => {
+                        generations::write_generation(tx, g, *present)?
+                    }
+                    Write::Object(id, rec) => objects::write_object(tx, *id, rec.as_ref())?,
+                    Write::FieldDef(d, present) => entities::write_field_def(tx, d, *present)?,
+                    Write::MapDeleted(id, d) => delete::write_map_deleted(tx, *id, *d)?,
+                    Write::ChildLink(id, link) => delete::write_child_link(tx, *id, link.as_ref())?,
+                    Write::ChildState(id, s) => resync::write_child_state(tx, *id, s)?,
+                    Write::OutOfDate(id, o) => resync::write_out_of_date(tx, *id, *o)?,
+                }
             }
-        }
-        Ok(tx.commit()?)
+            Ok(())
+        })
     }
 
     /// Path of the working copy, for extra read connections (see `FileReader`).

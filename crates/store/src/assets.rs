@@ -19,15 +19,17 @@ impl Store {
     /// Stores `data` under (`pack_id`, `asset_id`); identical content is stored once.
     pub fn add_asset(&self, pack_id: &str, asset_id: &str, data: &[u8]) -> Result<()> {
         let hash = blake3::hash(data);
-        self.conn.execute(
-            "INSERT OR IGNORE INTO asset_blobs (hash, data) VALUES (?1, ?2)",
-            rusqlite::params![hash.as_bytes().as_slice(), data],
-        )?;
-        self.conn.execute(
-            "INSERT OR REPLACE INTO assets (pack_id, asset_id, hash) VALUES (?1, ?2, ?3)",
-            rusqlite::params![pack_id, asset_id, hash.as_bytes().as_slice()],
-        )?;
-        Ok(())
+        self.edit(|tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_blobs (hash, data) VALUES (?1, ?2)",
+                rusqlite::params![hash.as_bytes().as_slice(), data],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO assets (pack_id, asset_id, hash) VALUES (?1, ?2, ?3)",
+                rusqlite::params![pack_id, asset_id, hash.as_bytes().as_slice()],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn asset(&self, pack_id: &str, asset_id: &str) -> Result<Option<Vec<u8>>> {

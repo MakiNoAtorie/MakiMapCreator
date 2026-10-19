@@ -69,17 +69,25 @@ pub(crate) fn write_tile(tx: &Connection, k: &TileKey, rec: Option<&TileRecord>)
     Ok(())
 }
 
+/// Bytes of tile data per background write transaction: an edit waits at most this long.
+const CHUNK_BYTES: usize = 1 << 20;
+
 /// A second connection to the working copy for worker threads. WAL lets it read while the
-/// main connection writes; writes wait for each other up to the busy timeout.
+/// main connection writes. Its writes go in small transactions that give way to edits.
 pub struct TileConn {
     conn: Connection,
+    gate: crate::Gate,
 }
 
 impl TileConn {
     pub fn open(working_copy: &Path) -> Result<TileConn> {
-        Ok(TileConn {
-            conn: Connection::open(working_copy)?,
-        })
+        TileConn::open_gated(working_copy, Default::default())
+    }
+
+    pub(crate) fn open_gated(working_copy: &Path, gate: crate::Gate) -> Result<TileConn> {
+        let conn = Connection::open(working_copy)?;
+        crate::tune(&conn)?;
+        Ok(TileConn { conn, gate })
     }
 
     /// Level-0 tiles of a layer, read in one snapshot.
@@ -125,12 +133,29 @@ impl TileConn {
         tile(&self.conn, key)
     }
 
-    /// Writes all tiles in one transaction; `None` deletes the tile.
+    /// Writes tiles in transactions of about `CHUNK_BYTES`; `None` deletes the tile. Before
+    /// each one it waits while the store has an edit pending, so edits never queue behind it.
     pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        for (k, rec) in writes {
-            write_tile(&tx, k, rec.as_ref())?;
+        let mut rest = writes;
+        while !rest.is_empty() {
+            while self.gate.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            }
+            let (mut n, mut bytes) = (0, 0);
+            while n < rest.len() && (n == 0 || bytes < CHUNK_BYTES) {
+                bytes += rest[n].1.as_ref().map_or(64, |r| r.data.len());
+                n += 1;
+            }
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            for (k, rec) in &rest[..n] {
+                write_tile(&tx, k, rec.as_ref())?;
+            }
+            tx.commit()?;
+            rest = &rest[n..];
         }
-        Ok(tx.commit()?)
+        Ok(())
     }
 }

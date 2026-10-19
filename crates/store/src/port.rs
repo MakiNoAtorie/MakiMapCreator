@@ -21,8 +21,10 @@ impl Storage for Store {
     }
 
     fn tile_opener(&self) -> TileOpener {
-        let wc = self.working_copy.clone();
-        Arc::new(move || Ok(Box::new(TileConn::open(&wc)?) as Box<dyn TileStore>))
+        let (wc, gate) = (self.working_copy.clone(), self.gate.clone());
+        Arc::new(move || {
+            Ok(Box::new(TileConn::open_gated(&wc, gate.clone())?) as Box<dyn TileStore>)
+        })
     }
 
     fn text_index(&self) -> R<Box<dyn TextIndex>> {

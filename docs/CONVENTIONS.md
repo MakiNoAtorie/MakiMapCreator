@@ -105,7 +105,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Pipeline and jobs
 
 - A derived layer is one a `STAGES` entry in `core/src/pipeline.rs` writes; commands on it return `Error::DerivedLayer`.
-- Rebuilds read and write on their own connection (`TileConn`); a commit replaces whole layers in one transaction.
+- Rebuilds and the pyramid worker read and write on their own connection (`TileConn` via `Storage::tile_opener`). Background writes go in transactions of about 1 MiB and wait while an edit is pending (the store gate); edits use `BEGIN IMMEDIATE` and a 100 µs busy handler, so an edit never fails on the lock and waits at most one chunk. The main connection never checkpoints the WAL (`wal_autocheckpoint = 0`); worker connections do.
 - Stage work goes through `par_map` (results in item order), so output does not depend on thread count.
 - Randomness only through `mmc_core::rng` (stateless hash), never stateful RNGs.
 - Tests wait on jobs through the API (`wait_for_jobs`), never sleep.

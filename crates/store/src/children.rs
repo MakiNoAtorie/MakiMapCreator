@@ -32,8 +32,8 @@ pub(crate) const MIGRATION: &str = "
 impl Store {
     /// Inserts a child map with its outline and parent context in one transaction.
     pub fn insert_child_map(&self, m: &NewChildMap) -> Result<i64> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
+        self.edit(|tx| {
+            tx.execute(
             "INSERT INTO maps (parent_id, kind, width, height, metres_per_pixel, origin_x, origin_y)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -46,14 +46,14 @@ impl Store {
                 m.origin_y
             ],
         )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO child_maps (map_id, entity_id, outline) VALUES (?1, ?2, ?3)",
-            params![id, m.entity_id, m.outline],
-        )?;
-        insert_context(&tx, id, &m.context)?;
-        tx.commit()?;
-        Ok(id)
+            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO child_maps (map_id, entity_id, outline) VALUES (?1, ?2, ?3)",
+                params![id, m.entity_id, m.outline],
+            )?;
+            insert_context(tx, id, &m.context)?;
+            Ok(id)
+        })
     }
 
     /// All child map rows, ordered by map id.
