@@ -1900,9 +1900,13 @@ dependencies = [
  "eframe",
  "fluent-bundle",
  "mmc-core",
+ "mmc-kind-region",
+ "mmc-kind-world",
  "mmc-render",
  "raw-window-handle",
  "rfd",
+ "serde_json",
+ "tempfile",
  "unic-langid",
  "windows-sys 0.61.2",
 ]

@@ -50,6 +50,8 @@ pub struct Painter {
     undone: Vec<usize>,
     /// Last known cursor and pressure, for the brush rings.
     cursor: Option<(Pos2, f32)>,
+    /// Bumped when an edit, undo or redo changed the project; the app reloads what it shows.
+    pub version: u64,
 }
 
 impl Painter {
@@ -66,6 +68,18 @@ impl Painter {
             done: vec![],
             undone: vec![],
             cursor: None,
+            version: 0,
+        }
+    }
+
+    /// Records a command applied outside the brush (entity edit, generator) as one undo step.
+    pub fn external_command(&mut self, canvas: &mut Canvas, now: f64, derived: bool) {
+        self.done.push(1);
+        self.undone.clear();
+        self.version += 1;
+        self.await_epoch = Some(canvas.invalidate());
+        if derived {
+            self.jobs_until = Some(now + JOBS_WAIT);
         }
     }
 
@@ -170,6 +184,7 @@ impl Painter {
             }
         }
         if changed {
+            self.version += 1;
             self.await_epoch = Some(canvas.invalidate());
             self.jobs_until = Some(now + JOBS_WAIT);
         }

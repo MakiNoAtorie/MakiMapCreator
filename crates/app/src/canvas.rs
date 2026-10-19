@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions};
 use mmc_core::{Layer, MapId, Project};
-use mmc_render::{HeightPass, Image, Renderer, View};
+use mmc_render::{HeightPass, Image, LandPass, Renderer, View};
 
 use crate::view::MapView;
 
@@ -14,11 +14,30 @@ const RENDER_TILE: u32 = 2048;
 
 pub type SharedProject = Arc<Mutex<Option<Project>>>;
 
+/// What the worker draws: a view and the layers shown, bottom first.
+#[derive(Clone, PartialEq)]
+struct Req {
+    view: View,
+    layers: Vec<Layer>,
+}
+
+fn renderer_for(rs: &eframe::egui_wgpu::RenderState, layers: &[Layer]) -> Renderer {
+    let mut r = Renderer::from_device(rs.device.clone(), rs.queue.clone());
+    for &l in layers {
+        match l {
+            Layer::Height => r.register(l, Box::new(HeightPass::new(&rs.device))),
+            Layer::Land => r.register(l, Box::new(LandPass::new(&rs.device))),
+            Layer::Slope => {}
+        }
+    }
+    r
+}
+
 pub struct Canvas {
-    requests: Sender<(View, u64)>,
-    results: Receiver<(View, u64, mmc_render::Result<Image>)>,
-    requested: Option<View>,
-    shown: Option<(View, TextureHandle)>,
+    requests: Sender<(Req, u64)>,
+    results: Receiver<(Req, u64, mmc_render::Result<Image>)>,
+    requested: Option<Req>,
+    shown: Option<(Req, TextureHandle)>,
     /// Bumped by `invalidate`; a render carries the value it was requested under.
     epoch: u64,
     fresh_epoch: u64,
@@ -31,24 +50,31 @@ impl Canvas {
         project: SharedProject,
         ctx: egui::Context,
     ) -> Canvas {
-        let device = render_state.device.clone();
-        let mut renderer = Renderer::from_device(device.clone(), render_state.queue.clone());
-        renderer.register(Layer::Height, Box::new(HeightPass::new(&device)));
-        let (requests, jobs) = channel::<(View, u64)>();
+        let rs = render_state.clone();
+        let mut renderers: Vec<(Vec<Layer>, Renderer)> = vec![];
+        let (requests, jobs) = channel::<(Req, u64)>();
         let (done, results) = channel();
         std::thread::spawn(move || {
-            while let Ok((mut view, mut epoch)) = jobs.recv() {
+            while let Ok((mut req, mut epoch)) = jobs.recv() {
                 // A newer request replaces older ones (ADR-0014).
                 while let Ok((v, e)) = jobs.try_recv() {
-                    (view, epoch) = (v, e);
+                    (req, epoch) = (v, e);
                 }
                 // ponytail: scene reads full-resolution tiles under the project lock; pyramid levels (#9) cut this when zoomed out.
+                let at = match renderers.iter().position(|r| r.0 == req.layers) {
+                    Some(i) => i,
+                    None => {
+                        renderers.push((req.layers.clone(), renderer_for(&rs, &req.layers)));
+                        renderers.len() - 1
+                    }
+                };
+                let renderer = &renderers[at].1;
                 let scene = match project.lock().unwrap().as_ref() {
-                    Some(p) => renderer.scene(p, view),
+                    Some(p) => renderer.scene(p, req.view),
                     None => continue,
                 };
                 let result = scene.and_then(|s| renderer.render(&s, RENDER_TILE));
-                if done.send((view, epoch, result)).is_err() {
+                if done.send((req, epoch, result)).is_err() {
                     break;
                 }
                 ctx.request_repaint();
@@ -85,7 +111,14 @@ impl Canvas {
     }
 
     /// Requests `view` when it changed, takes finished renders and paints the latest into `rect`.
-    pub fn show(&mut self, ui: &egui::Ui, rect: Rect, map: MapId, map_view: &MapView) {
+    pub fn show(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        map: MapId,
+        layers: Vec<Layer>,
+        map_view: &MapView,
+    ) {
         let ppp = ui.ctx().pixels_per_point();
         let (min, max) = map_view.visible(rect);
         let view = View {
@@ -95,12 +128,22 @@ impl Canvas {
             width: (rect.width() * ppp).round() as u32,
             height: (rect.height() * ppp).round() as u32,
         };
-        if self.requested != Some(view) && view.width > 0 && view.height > 0 {
-            self.requested = Some(view);
-            let _ = self.requests.send((view, self.epoch));
+        if layers.is_empty() {
+            self.requested = None;
+            self.shown = None;
+            return;
+        }
+        let req = Req { view, layers };
+        if self.requested.as_ref() != Some(&req) && view.width > 0 && view.height > 0 {
+            self.requested = Some(req.clone());
+            let _ = self.requests.send((req.clone(), self.epoch));
         }
         while let Ok((v, epoch, result)) = self.results.try_recv() {
             self.fresh_epoch = self.fresh_epoch.max(epoch);
+            // A render for another map or layer set is out of date.
+            if v.view.map != req.view.map || v.layers != req.layers {
+                continue;
+            }
             match result {
                 Ok(img) => {
                     let pixels = ColorImage::from_rgba_unmultiplied(
@@ -124,8 +167,8 @@ impl Canvas {
         // The last render stands in, moved and scaled, until the new one arrives.
         if let Some((v, tex)) = &self.shown {
             let r = Rect::from_min_max(
-                map_view.screen_at(rect, v.min),
-                map_view.screen_at(rect, v.max),
+                map_view.screen_at(rect, v.view.min),
+                map_view.screen_at(rect, v.view.max),
             );
             let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter_at(rect).image(tex.id(), r, uv, Color32::WHITE);
