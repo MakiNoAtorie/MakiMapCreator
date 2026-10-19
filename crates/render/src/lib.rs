@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 
 use mmc_core::{Layer, MapId, Project, RootPoint};
@@ -128,19 +128,28 @@ pub struct Renderer {
 
 impl Renderer {
     /// A renderer on the WARP software adapter (DirectX 12); needs no GPU.
+    /// All WARP renderers share one device: several WARP devices used on parallel threads
+    /// crash inside d3d10warp.dll (access violation).
     pub fn warp() -> Result<Renderer> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::DX12,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            force_fallback_adapter: true,
-            ..Default::default()
-        }))
-        .map_err(|e| Error::Gpu(e.to_string()))?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(|e| Error::Gpu(e.to_string()))?;
+        static WARP: OnceLock<std::result::Result<(wgpu::Device, wgpu::Queue), String>> =
+            OnceLock::new();
+        let (device, queue) = WARP
+            .get_or_init(|| {
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                    backends: wgpu::Backends::DX12,
+                    ..wgpu::InstanceDescriptor::new_without_display_handle()
+                });
+                let adapter =
+                    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                        force_fallback_adapter: true,
+                        ..Default::default()
+                    }))
+                    .map_err(|e| e.to_string())?;
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                    .map_err(|e| e.to_string())
+            })
+            .clone()
+            .map_err(Error::Gpu)?;
         Ok(Renderer::from_device(device, queue))
     }
 

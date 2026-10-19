@@ -116,6 +116,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Render targets are `Rgba8Unorm` (not sRGB), so image bytes are exactly what the shader writes.
 - Each pass shader starts with `VIEW_WGSL` and computes map texels from absolute image pixels, so a tiled render equals a single render.
 - Image hashes are per backend. Recorded hashes are for WARP; render tests use `Renderer::warp()`.
+- `Renderer::warp()` shares one WARP device per process; never create another WARP device (parallel WARP devices crash d3d10warp.dll).
 
 ## Pages
 
