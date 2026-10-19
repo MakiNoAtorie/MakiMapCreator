@@ -55,9 +55,25 @@ fn measure() -> BTreeMap<String, f64> {
             time_ms(|| project.apply(map, cmd).unwrap()).0
         })
         .collect();
-    let save = (0..RUNS)
-        .map(|_| time_ms(|| project.save(&file).unwrap()).0)
-        .collect();
+    // Editing pause: the median stroke of each save, strokes going on until the save ends.
+    // A save that blocks edits makes its first stroke last the whole save.
+    let (mut save, mut pause) = (vec![], vec![]);
+    for _ in 0..RUNS {
+        project.wait_for_jobs().unwrap();
+        let t = Instant::now();
+        project.save(&file);
+        let mut strokes = vec![];
+        loop {
+            let cmd = fixture.stroke(&mut rng);
+            strokes.push(time_ms(|| project.apply(map, cmd).unwrap()).0);
+            if let Some(res) = project.poll_save() {
+                res.unwrap();
+                save.push(t.elapsed().as_secs_f64() * 1000.0);
+                break;
+            }
+        }
+        pause.push(median(strokes));
+    }
     project.close().unwrap();
 
     let open = (0..RUNS)
@@ -93,6 +109,7 @@ fn measure() -> BTreeMap<String, f64> {
         ("brush_stroke".into(), median(brush)),
         ("open_project".into(), median(open)),
         ("save".into(), median(save)),
+        ("save_edit_pause".into(), median(pause)),
     ])
 }
 

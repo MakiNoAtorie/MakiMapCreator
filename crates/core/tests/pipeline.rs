@@ -104,7 +104,7 @@ fn derived_tiles_are_saved_so_open_does_not_rebuild() {
         .unwrap();
     p.wait_for_jobs().unwrap();
     let flank = slope(&p, map, 2105.0, 2005.0);
-    p.save(&file).unwrap();
+    p.save(&file);
     p.close().unwrap();
 
     let q = Project::open(&file, &dir.path().join("wc2.sqlite")).unwrap();

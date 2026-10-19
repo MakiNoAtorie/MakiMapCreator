@@ -13,6 +13,8 @@ mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
 mod pages;
 pub use pages::PageRecord;
+mod save;
+pub use save::save_snapshot;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -103,19 +105,7 @@ impl Store {
     /// The project file is only read.
     pub fn open(file: &Path, working_copy: &Path) -> Result<Store> {
         let src = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let app_id: i32 = src
-            .query_row("PRAGMA application_id", [], |r| r.get(0))
-            .map_err(|_| Error::NotAProject)?;
-        if app_id != APPLICATION_ID {
-            return Err(Error::NotAProject);
-        }
-        let found = user_version(&src)?;
-        if found > SCHEMA_VERSION {
-            return Err(Error::NewerVersion {
-                found,
-                supported: SCHEMA_VERSION,
-            });
-        }
+        check_header(&src)?;
         refuse_existing(working_copy)?;
         src.execute("VACUUM INTO ?1", [path_str(working_copy)?])?;
         drop(src);
@@ -140,13 +130,7 @@ impl Store {
     /// Writes a snapshot of the working copy over `file`: `VACUUM INTO` a
     /// temporary file in the same folder, then an atomic rename.
     pub fn save(&self, file: &Path) -> Result<()> {
-        let mut tmp = file.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        remove_db_files(&tmp)?;
-        self.conn.execute("VACUUM INTO ?1", [path_str(&tmp)?])?;
-        std::fs::rename(&tmp, file)?;
-        Ok(())
+        save_snapshot(&self.working_copy, file)
     }
 
     /// Closes the project and deletes the working copy.
@@ -192,6 +176,24 @@ impl Store {
 
 fn user_version(conn: &Connection) -> Result<i32> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
+
+/// Refuses a file that is not a project or comes from a newer app.
+fn check_header(conn: &Connection) -> Result<()> {
+    let app_id: i32 = conn
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(|_| Error::NotAProject)?;
+    if app_id != APPLICATION_ID {
+        return Err(Error::NotAProject);
+    }
+    let found = user_version(conn)?;
+    if found > SCHEMA_VERSION {
+        return Err(Error::NewerVersion {
+            found,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(())
 }
 
 fn path_str(path: &Path) -> Result<&str> {
