@@ -105,6 +105,19 @@ impl TileConn {
 
     /// Level-0 tiles of a layer, read in one snapshot.
     pub fn layer_tiles(&self, map_id: i64, layer: &str) -> Result<LayerTiles> {
+        Ok(self
+            .layer_tiles_until(map_id, layer, &|| false)?
+            .unwrap_or_default())
+    }
+
+    /// As `layer_tiles`, but gives `None` as soon as `stop` returns true, so a superseded
+    /// rebuild frees the CPU and disk at once.
+    pub fn layer_tiles_until(
+        &self,
+        map_id: i64,
+        layer: &str,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Option<LayerTiles>> {
         let mut stmt = self.conn.prepare(
             "SELECT tx, ty, data, edited FROM tiles
              WHERE map_id = ?1 AND layer = ?2 AND level = 0
@@ -119,7 +132,14 @@ impl TileConn {
                 },
             ))
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut out = vec![];
+        for row in rows {
+            if stop() {
+                return Ok(None);
+            }
+            out.push(row?);
+        }
+        Ok(Some(out))
     }
 
     /// As `Store::write_tiles`, on this connection.
