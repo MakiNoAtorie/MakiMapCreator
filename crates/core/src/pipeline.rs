@@ -424,6 +424,11 @@ impl Project {
 }
 
 impl Pipeline {
+    /// Cancels and joins the jobs of `map` and drops what it knows of its derived tiles.
+    pub(crate) fn forget(&mut self, map: MapId) {
+        self.maps.remove(&map);
+    }
+
     /// Cancels and joins all jobs.
     pub(crate) fn shutdown(&mut self) {
         self.maps.clear();

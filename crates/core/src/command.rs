@@ -61,7 +61,11 @@ impl Project {
             Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
             Command::Paint(s) => Ok(Change::Tiles(self.paint(map, s)?)),
-            Command::Generate(g) => Ok(Change::Generation(self.generation_change(map, g)?)),
+            Command::Generate(g) => Ok(Change::Generation(self.generation_change(
+                map,
+                g,
+                (0, 0),
+            )?)),
             Command::Object(e) => Ok(Change::Objects(self.object_change(map.id, e)?)),
         }
     }

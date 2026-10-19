@@ -105,7 +105,14 @@ impl GenerationChange {
 }
 
 impl Project {
-    pub(crate) fn generation_change(&self, map: &Map, g: &Generation) -> Result<GenerationChange> {
+    /// The rows of `g` on `map`. `shift` is how many tiles the map's stored tiles move right and
+    /// down before this writes, when a re-sync grows the map (0 otherwise).
+    pub(crate) fn generation_change(
+        &self,
+        map: &Map,
+        g: &Generation,
+        shift: (u32, u32),
+    ) -> Result<GenerationChange> {
         let kinds = self.entity_kinds()?;
         let first = self.next_entity_id()?.0;
         let mut c = GenerationChange {
@@ -135,7 +142,7 @@ impl Project {
                     }
                     let key = map.tile_key(*layer, tx, ty);
                     c.tiles.push(TileChange {
-                        before: self.store.tile(&key)?,
+                        before: self.tile_at(&key, shift)?,
                         key,
                         after: Some(TileRecord {
                             data: encode(&tile),

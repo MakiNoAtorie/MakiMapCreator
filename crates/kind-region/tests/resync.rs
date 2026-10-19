@@ -266,7 +266,7 @@ fn masked_regeneration_runs_only_inside_the_selection_or_the_unlocked_area() {
 }
 
 #[test]
-fn a_moved_outline_generates_gained_ground_and_deletes_lost_ground_only_on_confirm() {
+fn a_moved_outline_generates_gained_ground_and_clears_lost_ground_only_on_confirm() {
     let dir = tempfile::tempdir().unwrap();
     let _kinds = kinds();
     let (mut p, w, west, _) = setup(dir.path());
@@ -284,6 +284,10 @@ fn a_moved_outline_generates_gained_ground_and_deletes_lost_ground_only_on_confi
     let moved = rect(3.0, 4.0, 11.0, 12.0);
     let plan = p.preview_resync(west, Some(moved.clone())).unwrap();
     assert_eq!(plan.lost_edited, vec![(Layer::HEIGHT, 1, 0)]);
+    assert!(plan.lost_ground.contains(&(Layer::HEIGHT, 1, 1)));
+    assert!(plan.resize.is_none());
+    // Unedited lost ground stays too until confirmed.
+    let unedited_lost = height(&p, west, 11.5, 11.0);
     assert!(plan.regenerate.contains(&(Layer::HEIGHT, 0, 1)));
     p.apply_plan(plan, false).unwrap();
     let m = p.maps().iter().find(|m| m.id == west).unwrap();
@@ -295,22 +299,68 @@ fn a_moved_outline_generates_gained_ground_and_deletes_lost_ground_only_on_confi
         "gained ground is generated"
     );
     assert_eq!(height(&p, west, 11.5, 8.0), edited, "kept without confirm");
+    assert_eq!(height(&p, west, 11.5, 11.0), unedited_lost);
 
-    // With confirm, edits on lost ground are deleted.
+    // With confirm, data on lost ground is cleared: the parent context shows there.
     assert!(p.undo(west).unwrap());
     let plan = p.preview_resync(west, Some(moved)).unwrap();
     p.apply_plan(plan, true).unwrap();
-    assert_eq!(height(&p, west, 11.5, 8.0), generated);
+    assert_eq!(height(&p, west, 11.5, 8.0), 0.0);
+    assert_eq!(height(&p, west, 11.5, 11.0), 0.0);
+    assert_ne!(generated, 0.0);
     assert!(
         p.edited_tiles(west, Layer::HEIGHT)
             .unwrap()
             .contains(&(0, 1))
     );
-    // An outline that leaves the child map is refused.
-    let err = p
+}
+
+#[test]
+fn an_outline_past_the_child_map_grows_the_map_and_undo_shrinks_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, _, west, _) = setup(dir.path());
+    p.apply(west, brush(at(6.0, 6.0))).unwrap();
+    let edited = height(&p, west, 6.0, 6.0);
+    let generated = height(&p, west, 10.0, 10.0);
+    let before = p.maps().iter().find(|m| m.id == west).unwrap().clone();
+
+    // Two km further west than the map reaches.
+    let plan = p
         .preview_resync(west, Some(rect(1.0, 4.0, 11.0, 12.0)))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidChild(_)), "{err}");
+        .unwrap();
+    let (origin, w, _) = plan.resize.unwrap();
+    assert!(origin.x < before.origin.x && w > before.settings.width);
+    p.apply_plan(plan, false).unwrap();
+    let m = p.maps().iter().find(|m| m.id == west).unwrap().clone();
+    assert_eq!(m.origin, origin);
+    assert!(p.owns(west, at(1.5, 8.0)).unwrap());
+    assert!(
+        p.layer_value(west, Layer::HEIGHT, at(1.5, 8.0))
+            .unwrap()
+            .is_some()
+    );
+    // Stored data keeps its root-space place.
+    assert_eq!(height(&p, west, 6.0, 6.0), edited);
+    assert_eq!(height(&p, west, 10.0, 10.0), generated);
+    p.wait_for_jobs().unwrap();
+
+    assert!(p.undo(west).unwrap());
+    let back = p.maps().iter().find(|m| m.id == west).unwrap().clone();
+    assert_eq!(back, before);
+    assert_eq!(height(&p, west, 6.0, 6.0), edited);
+    assert!(p.redo(west).unwrap());
+    assert_eq!(height(&p, west, 6.0, 6.0), edited);
+    p.wait_for_jobs().unwrap();
+    p.wait_tiles();
+
+    // The grown map survives save and reopen.
+    let file = dir.path().join("grown.mmc");
+    p.save(&file);
+    p.close().unwrap();
+    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let r = q.maps().iter().find(|m| m.id == west).unwrap();
+    assert_eq!(r.origin, origin);
+    assert_eq!(height(&q, west, 6.0, 6.0), edited);
 }
 
 #[test]

@@ -1,12 +1,15 @@
 //! Summaries, out of date, re-sync and masked regeneration (ADR-0002, ADR-0003, ADR-0022).
 
-use crate::persist::{ChildState, ContextRecord, TileRecord, Write};
+use crate::persist::{ChildState, ContextRecord, TileKey, TileRecord, Write};
 
 use crate::child::inside;
 use crate::generation::{GenerationChange, decode_outline, encode_outline};
 use crate::layer::{TILE_LEN, TILE_SIZE, decode, encode};
 use crate::undo::{Change, TileChange};
-use crate::{Command, Error, GenRun, Layer, Map, MapId, Project, Result, RootPoint, Summary};
+use crate::{
+    CHILD_MARGIN, Command, Error, GenRun, Layer, MAX_CHILD_SIZE, Map, MapId, Project, Result,
+    RootPoint, Summary,
+};
 
 /// A level-0 tile: (layer, tx, ty).
 pub type TileAt = (Layer, u32, u32);
@@ -43,10 +46,51 @@ pub struct RegenPlan {
     pub kept_edited: Vec<TileAt>,
     /// Tiles with locked pixels. Those pixels are kept.
     pub kept_locked: Vec<TileAt>,
-    /// Edited tiles on ground the new outline loses. Overwritten only on confirm.
+    /// Tiles with ground the new outline loses. That ground stays as read-only context; its
+    /// data is cleared only on confirm.
+    pub lost_ground: Vec<TileAt>,
+    /// The edited tiles among `lost_ground`.
     pub lost_edited: Vec<TileAt>,
+    /// The map's new rectangle when the outline grows past it: (origin, width, height).
+    pub resize: Option<(RootPoint, u32, u32)>,
     change: ResyncChange,
     lost: Vec<TileChange>,
+}
+
+/// A map's rectangle: root-space origin and size in pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Rect {
+    origin: RootPoint,
+    width: u32,
+    height: u32,
+}
+
+impl Rect {
+    fn of(m: &Map) -> Rect {
+        Rect {
+            origin: m.origin,
+            width: m.settings.width,
+            height: m.settings.height,
+        }
+    }
+
+    fn write(&self, id: MapId) -> Write {
+        Write::MapRect {
+            id: id.0,
+            origin_x: self.origin.x,
+            origin_y: self.origin.y,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
+/// A re-sync that grows the map: its rectangle before and after, and the tile shift.
+#[derive(Debug, Clone)]
+struct Resize {
+    before: Rect,
+    after: Rect,
+    shift: (u32, u32),
 }
 
 /// The records one re-sync or masked regeneration changes.
@@ -55,6 +99,7 @@ pub(crate) struct ResyncChange {
     generation: GenerationChange,
     /// Child state before and after; `None` when only tiles change.
     child: Option<(ChildState, ChildState)>,
+    resize: Option<Resize>,
 }
 
 impl ResyncChange {
@@ -186,18 +231,33 @@ impl Project {
         selection: Option<&[RootPoint]>,
     ) -> Result<RegenPlan> {
         let cmd = self.kind_of(map)?.generate(self, map, run)?;
-        self.plan(map, cmd, selection, None, None)
+        let m = self.map(map)?.clone();
+        self.plan(&m, cmd, selection, None, None)
+    }
+
+    /// A stored level-0 tile at `key` of a map whose tiles move by `shift` tiles first.
+    pub(crate) fn tile_at(&self, key: &TileKey, shift: (u32, u32)) -> Result<Option<TileRecord>> {
+        if key.tx < shift.0 || key.ty < shift.1 {
+            return Ok(None);
+        }
+        let old = TileKey {
+            tx: key.tx - shift.0,
+            ty: key.ty - shift.1,
+            ..key.clone()
+        };
+        self.store.tile(&old)
     }
 
     /// Previews re-syncing child `map` with its parent: a new parent snapshot, then the map's
-    /// last generator and seed on unedited, unlocked tiles. `outline` moves the outline
-    /// (root space); ground gained is generated, ground lost becomes context. Writes nothing.
+    /// last generator run on unedited, unlocked tiles. `outline` moves the outline (root
+    /// space): gained ground is generated; lost ground stays as read-only context and is
+    /// cleared only on confirm. An outline past the map's rectangle grows the map. Writes nothing.
     pub fn preview_resync(
         &mut self,
         map: MapId,
         outline: Option<Vec<RootPoint>>,
     ) -> Result<RegenPlan> {
-        let m = self.map(map)?.clone();
+        let mut m = self.map(map)?.clone();
         let parent = self
             .map(
                 m.parent
@@ -210,11 +270,14 @@ impl Project {
             .ok_or(Error::InvalidChild("the map has no outline"))?;
         let old = m.outline.clone().unwrap_or_default();
         let new = outline.unwrap_or_else(|| old.clone());
-        // ponytail: the child's rectangle stays; resize the map when outlines move further.
-        if new.len() < 3 || !new.iter().all(|&q| in_rect(&m, q)) {
-            return Err(Error::InvalidChild(
-                "the outline must stay inside the child map",
-            ));
+        if new.len() < 3 {
+            return Err(Error::InvalidChild("an outline needs three points"));
+        }
+        let resize = grow(&m, &new, CHILD_MARGIN * parent.settings.metres_per_pixel)?;
+        let old_map = m.clone();
+        if let Some(r) = &resize {
+            (m.origin, m.settings.width, m.settings.height) =
+                (r.after.origin, r.after.width, r.after.height);
         }
         let s = m.settings;
         let decl = self
@@ -236,43 +299,62 @@ impl Project {
         let kind = kinds
             .get(m.settings.kind)
             .ok_or_else(|| Error::UnknownMapKind(m.settings.kind.as_str().into()))?;
+        // The generator sees the grown map and the new snapshot; both are put back after.
         self.resync.context = Some((map, context.clone()));
+        self.set_map(m.clone());
         let cmd = kind.generate(self, map, &g.run);
+        self.set_map(old_map.clone());
         self.resync.context = None;
         let after = ChildState {
             outline: encode_outline(&new),
             context,
             out_of_date: false,
         };
-        self.plan(map, cmd?, None, Some((&old, &new)), Some((before, after)))
+        let outlines = (old.as_slice(), new.as_slice(), &old_map);
+        let mut plan = self.plan(&m, cmd?, None, Some(outlines), resize)?;
+        plan.change.child = Some((before, after));
+        Ok(plan)
     }
 
+    /// Replaces the in-memory map with the same id.
+    fn set_map(&mut self, m: Map) {
+        if let Some(x) = self.maps.iter_mut().find(|x| x.id == m.id) {
+            *x = m;
+        }
+    }
+
+    /// The tiles `cmd` would rewrite on `m`. `outlines` is (old, new, map before a resize)
+    /// for a re-sync that moves the outline.
     fn plan(
         &self,
-        map: MapId,
+        m: &Map,
         cmd: Command,
         selection: Option<&[RootPoint]>,
-        outlines: Option<(&[RootPoint], &[RootPoint])>,
-        child: Option<(ChildState, ChildState)>,
+        outlines: Option<(&[RootPoint], &[RootPoint], &Map)>,
+        resize: Option<Resize>,
     ) -> Result<RegenPlan> {
         let Command::Generate(mut g) = cmd else {
             return Err(Error::UnknownGenerator("not a generator".into()));
         };
         // ponytail: rasters only; entities stay as they are until a kind needs them regenerated.
         g.entities.clear();
-        let m = self.map(map)?;
-        let mut gc = self.generation_change(m, &g)?;
-        let (old, new) = (outlines.map(|o| o.0), outlines.map(|o| o.1));
+        let shift = resize.as_ref().map_or((0, 0), |r| r.shift);
+        let mut gc = self.generation_change(m, &g, shift)?;
         let all = std::mem::take(&mut gc.tiles);
         let mut plan = RegenPlan {
-            map,
+            map: m.id,
             regenerate: vec![],
             kept_edited: vec![],
             kept_locked: vec![],
+            lost_ground: vec![],
             lost_edited: vec![],
+            resize: resize
+                .as_ref()
+                .map(|r| (r.after.origin, r.after.width, r.after.height)),
             change: ResyncChange {
                 generation: gc,
-                child,
+                child: None,
+                resize,
             },
             lost: vec![],
         };
@@ -280,21 +362,23 @@ impl Project {
         for c in all {
             let layer = c.key.layer;
             let at = (layer, c.key.tx, c.key.ty);
-            let lock = self.store.tile(&m.tile_key(Layer::LOCK, at.1, at.2))?;
+            let lock = self.tile_at(&m.tile_key(Layer::LOCK, at.1, at.2), shift)?;
             let lock = decode(lock.as_ref())?;
             let before = decode(c.before.as_ref())?;
             let generated = decode(c.after.as_ref())?;
             let edited = c.before.as_ref().is_some_and(|r| r.edited);
-            // Values without and with the confirm to delete lost ground.
+            // Values without and with the confirm to clear lost ground.
             let (mut keep, mut lose) = (before.clone(), before.clone());
             let (mut locked, mut lost_any, mut owned) = (false, false, false);
             for i in 0..TILE_LEN {
                 let (x, y) = pixel(at.1, at.2, i);
                 let p = m.pixel_centre(x, y);
-                let (was, now) = (
-                    old.is_none_or(|o| inside(o, p)),
-                    new.is_none_or(|o| inside(o, p)),
-                );
+                let (was, now) = match outlines {
+                    Some((old, new, before)) => {
+                        (in_rect(before, p) && inside(old, p), inside(new, p))
+                    }
+                    None => (true, true),
+                };
                 owned |= now;
                 if lock[i] > 0.5 {
                     locked = true;
@@ -303,12 +387,12 @@ impl Project {
                 if selection.is_some_and(|s| !inside(s, p)) {
                     continue;
                 }
-                if !edited || (!was && now) {
+                if was && !now {
+                    lose[i] = 0.0;
+                    lost_any = true;
+                } else if !edited || (now && !was) {
                     keep[i] = generated[i];
                     lose[i] = generated[i];
-                } else if was && !now {
-                    lose[i] = generated[i];
-                    lost_any = true;
                 }
             }
             if locked {
@@ -329,17 +413,20 @@ impl Project {
                 plan.regenerate.push(at);
                 tiles.push(change(&keep, edited));
             }
-            if edited && lost_any {
-                plan.lost_edited.push(at);
-                plan.lost.push(change(&lose, owned));
+            if lost_any {
+                plan.lost_ground.push(at);
+                if edited {
+                    plan.lost_edited.push(at);
+                }
+                plan.lost.push(change(&lose, edited && owned));
             }
         }
         plan.change.generation.tiles = tiles;
         Ok(plan)
     }
 
-    /// Writes a previewed plan as one undoable command on its map. Edited tiles on lost ground
-    /// are overwritten only when `confirm_lost` is true. Refuses a plan the map has changed under.
+    /// Writes a previewed plan as one undoable command on its map. Lost ground is cleared only
+    /// when `confirm_lost` is true. Refuses a plan the map has changed under.
     pub fn apply_plan(&mut self, plan: RegenPlan, confirm_lost: bool) -> Result<()> {
         let RegenPlan {
             map,
@@ -353,10 +440,16 @@ impl Project {
             tiles.retain(|c| !lost.iter().any(|l| l.key == c.key));
             tiles.extend(lost);
         }
+        let shift = change.resize.as_ref().map_or((0, 0), |r| r.shift);
         for c in &change.generation.tiles {
-            if self.store.tile(&c.key)? != c.before {
+            if self.tile_at(&c.key, shift)? != c.before {
                 return Err(Error::StalePlan);
             }
+        }
+        if let Some(r) = &change.resize
+            && Rect::of(self.map(map)?) != r.before
+        {
+            return Err(Error::StalePlan);
         }
         if change.generation.record.id != self.store.next_generation_id()? {
             return Err(Error::StalePlan);
@@ -370,14 +463,43 @@ impl Project {
     }
 
     pub(crate) fn write_resync_change(&mut self, c: &ResyncChange, forward: bool) -> Result<()> {
-        let mut rows = c.generation.rows(forward);
         let id = c.generation.record.map_id;
+        // Forward: move the old tiles, then write; back: write the old values, then move back.
+        let mut rows = vec![];
+        let shift_rows = |r: &Resize, forward: bool| {
+            let (dx, dy) = (r.shift.0 as i64, r.shift.1 as i64);
+            let (dx, dy, rect) = if forward {
+                (dx, dy, r.after)
+            } else {
+                (-dx, -dy, r.before)
+            };
+            let mut v = vec![rect.write(MapId(id))];
+            if (dx, dy) != (0, 0) {
+                v.push(Write::ShiftTiles { map_id: id, dx, dy });
+            }
+            v
+        };
+        if forward && let Some(r) = &c.resize {
+            rows.extend(shift_rows(r, true));
+        }
+        rows.extend(c.generation.rows(forward));
+        if !forward && let Some(r) = &c.resize {
+            rows.extend(shift_rows(r, false));
+        }
         if let Some((before, after)) = &c.child {
             let s = if forward { after } else { before };
             rows.push(Write::ChildState(id, s.clone()));
         }
         self.write_rows(&rows)?;
         self.note_generation(&c.generation, forward);
+        if let Some(r) = &c.resize {
+            let rect = if forward { r.after } else { r.before };
+            if let Some(m) = self.maps.iter_mut().find(|m| m.id.0 == id) {
+                (m.origin, m.settings.width, m.settings.height) =
+                    (rect.origin, rect.width, rect.height);
+            }
+            self.after_resize(MapId(id))?;
+        }
         if let Some((before, after)) = &c.child {
             let s = if forward { after } else { before };
             let outline = decode_outline(&s.outline)?;
@@ -387,4 +509,49 @@ impl Project {
         }
         Ok(())
     }
+}
+
+/// The rectangle a child map needs for `outline` plus `margin` metres: its own rectangle grown
+/// by whole tiles to the left and top, so stored tiles only move by whole tiles. `None` when
+/// the outline fits.
+fn grow(m: &Map, outline: &[RootPoint], margin: f64) -> Result<Option<Resize>> {
+    let mpp = m.settings.metres_per_pixel;
+    let tile = TILE_SIZE as f64 * mpp;
+    let before = Rect::of(m);
+    let (mut lo, mut hi) = (
+        m.origin,
+        RootPoint {
+            x: m.origin.x + before.width as f64 * mpp,
+            y: m.origin.y + before.height as f64 * mpp,
+        },
+    );
+    if outline.iter().all(|&q| in_rect(m, q)) {
+        return Ok(None);
+    }
+    for q in outline {
+        (lo.x, lo.y) = (lo.x.min(q.x - margin), lo.y.min(q.y - margin));
+        (hi.x, hi.y) = (hi.x.max(q.x + margin), hi.y.max(q.y + margin));
+    }
+    let kx = ((m.origin.x - lo.x) / tile).ceil().max(0.0);
+    let ky = ((m.origin.y - lo.y) / tile).ceil().max(0.0);
+    let origin = RootPoint {
+        x: m.origin.x - kx * tile,
+        y: m.origin.y - ky * tile,
+    };
+    let (w, h) = (
+        ((hi.x - origin.x) / mpp).ceil(),
+        ((hi.y - origin.y) / mpp).ceil(),
+    );
+    if w > MAX_CHILD_SIZE || h > MAX_CHILD_SIZE {
+        return Err(Error::InvalidChild("the child map would be too large"));
+    }
+    Ok(Some(Resize {
+        before,
+        after: Rect {
+            origin,
+            width: w as u32,
+            height: h as u32,
+        },
+        shift: (kx as u32, ky as u32),
+    }))
 }

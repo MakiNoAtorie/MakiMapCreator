@@ -188,6 +188,31 @@ impl Project {
         Ok(())
     }
 
+    /// After a map's tiles moved: drops its cached tiles, rebuilds its pyramid and derived layers.
+    pub(crate) fn after_resize(&mut self, map: MapId) -> Result<()> {
+        let s = self.map(map)?.settings;
+        let top = top_level(&s);
+        if let Some(cache) = self.cache.get() {
+            cache.forget(|k| k.map_id == map.0);
+        }
+        let layers = self.kind_of(map)?.layers();
+        let cache = self.tiles();
+        for &layer in layers {
+            let keys = (0..s.height.div_ceil(TILE_SIZE)).flat_map(|ty| {
+                (0..s.width.div_ceil(TILE_SIZE)).map(move |tx| TileKey {
+                    map_id: map.0,
+                    layer,
+                    level: 0,
+                    tx,
+                    ty,
+                })
+            });
+            cache.mark_dirty(keys, top);
+        }
+        self.pipeline.forget(map);
+        self.rebuild_derived(map)
+    }
+
     /// Blocks until pyramid levels above past edits are written; no-op before any edit.
     pub(crate) fn wait_pyramid(&self) {
         if let Some(cache) = self.cache.get() {

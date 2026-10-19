@@ -51,6 +51,24 @@ impl Store {
     }
 }
 
+/// Moves level-0 tiles of a map by (`dx`, `dy`) tiles and drops its upper levels, inside the
+/// caller's transaction. Keys go through negative values so no update hits another row.
+pub(crate) fn shift_tiles(tx: &Connection, map_id: i64, dx: i64, dy: i64) -> Result<()> {
+    tx.execute(
+        "DELETE FROM tiles WHERE map_id = ?1 AND level > 0",
+        [map_id],
+    )?;
+    tx.execute(
+        "UPDATE tiles SET tx = -(tx + ?2) - 1, ty = -(ty + ?3) - 1 WHERE map_id = ?1",
+        params![map_id, dx, dy],
+    )?;
+    tx.execute(
+        "UPDATE tiles SET tx = -tx - 1, ty = -ty - 1 WHERE map_id = ?1",
+        [map_id],
+    )?;
+    Ok(())
+}
+
 /// Writes one tile inside the caller's transaction; `None` deletes it.
 pub(crate) fn write_tile(tx: &Connection, k: &TileKey, rec: Option<&TileRecord>) -> Result<()> {
     let layer = k.layer.as_str();

@@ -101,7 +101,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Generated tiles have `edited = false`. Child-map store code lives in `store/src/children.rs`.
 - A kind's seam tests go in `crates/kind-<name>/tests/`; dev-dependencies include the parent kind.
 - Out-of-date marking runs in `Project::write`, so every tile write flags the child maps it touches.
-- Regeneration and re-sync are preview (a `RegenPlan`, no writes) then `apply_plan` (one command). A plan whose `before` records changed is refused with `StalePlan`. Edited tiles and locked pixels (`Layer::Lock` > 0.5) are never overwritten.
+- Regeneration and re-sync are preview (a `RegenPlan`, no writes) then `apply_plan` (one command). A plan whose `before` records changed is refused with `StalePlan`. Edited tiles and locked pixels (`Layer::LOCK` > 0.5) are never overwritten. Lost ground (a moved outline) keeps its data until confirmed, then clears to 0. An outline past the map grows it by whole tiles to the left and top (`Write::ShiftTiles`), so tile keys move by whole tiles only.
 
 ## Pipeline and jobs
 

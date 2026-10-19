@@ -204,6 +204,20 @@ pub enum Write {
     /// Replaces the outline, parent context and flag of a child map.
     ChildState(i64, ChildState),
     OutOfDate(i64, bool),
+    /// Sets a map's rectangle: root-space origin and size in pixels.
+    MapRect {
+        id: i64,
+        origin_x: f64,
+        origin_y: f64,
+        width: u32,
+        height: u32,
+    },
+    /// Moves a map's level-0 tiles by whole tiles and drops its upper pyramid levels.
+    ShiftTiles {
+        map_id: i64,
+        dx: i64,
+        dy: i64,
+    },
 }
 
 /// Writes a snapshot of the project to a file; runs on a worker.

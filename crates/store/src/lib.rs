@@ -302,6 +302,22 @@ impl Store {
                     Write::ChildLink(id, link) => delete::write_child_link(tx, *id, link.as_ref())?,
                     Write::ChildState(id, s) => resync::write_child_state(tx, *id, s)?,
                     Write::OutOfDate(id, o) => resync::write_out_of_date(tx, *id, *o)?,
+                    Write::MapRect {
+                        id,
+                        origin_x,
+                        origin_y,
+                        width,
+                        height,
+                    } => {
+                        tx.execute(
+                            "UPDATE maps SET origin_x = ?2, origin_y = ?3, width = ?4, height = ?5
+                         WHERE id = ?1",
+                            rusqlite::params![id, origin_x, origin_y, width, height],
+                        )?;
+                    }
+                    Write::ShiftTiles { map_id, dx, dy } => {
+                        tiles::shift_tiles(tx, *map_id, *dx, *dy)?
+                    }
                 }
             }
             Ok(())
