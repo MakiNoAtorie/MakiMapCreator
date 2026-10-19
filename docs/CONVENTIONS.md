@@ -76,6 +76,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Gate on the median of `RUNS` runs, never one run. Budget = the ADR-0014 number; where the ADR gives none, about 10x the measured median. CI runners are noisy: raise a budget only with a reason in the commit.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
 - Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
+- App structure: `workspace.rs` holds testable logic; `panels.rs` draws and returns `Intent`s; `App::apply` applies them. The UI reads a `Snapshot` reloaded under `try_lock` when dirty, never the project directly.
+- Slow app work (generate, child creation) runs through `App::spawn` on a worker. Commands applied outside the brush call `note_command` so undo groups stay in step.
 
 ## Map kinds
 
