@@ -108,3 +108,13 @@ _Avoid_: Description, notes, article
 
 **Page template**:
 The default sections that a new page of an entity kind starts with.
+
+### Assets
+
+**Asset pack**:
+A folder of symbols or textures with one metadata file, installed on the user's machine.
+_Avoid_: Library, bundle
+
+**Asset**:
+One symbol or texture from an asset pack. A project stores a copy of each asset it uses.
+_Avoid_: Stamp, sprite

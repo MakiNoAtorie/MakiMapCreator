@@ -1,6 +1,6 @@
 # Features and Phase 0 seams (draft)
 
-Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0013`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
+Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0017`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
 
 ## 1. Roadmap
 
@@ -65,12 +65,17 @@ Build only what is expensive to add later. Each seam gets one real use in the pr
 | Parent context: sample parent layers in an area plus margin, snapshot, out-of-date flag | Hard to add once kinds exist |
 | Entities, relations, field definitions, pages (schema and core API) | Generators create entities; the schema must exist before the first save |
 | Stage pipeline: stages declare read and write layers, dirty flags | v1 full rebuild still runs through it, so incremental work later does not change callers |
-| Commands and undo: every edit is a command; tile deltas for rasters | Undo can not be added after tools exist |
+| Commands and undo: every edit is a command; tile deltas for rasters; one history per map and per page (ADR-0016) | Undo can not be added after tools exist |
 | Jobs: background generation, latest request wins, double-buffered results | UI must not block; threading is hard to add later |
 | Hash RNG keyed by (seed, stage, entity id or root-space position) | Determinism under parallel work and masked regeneration |
-| Project file: SQLite working copy, save by `VACUUM INTO`, migrations (ADR-0011) | Format v1 must be readable forever |
+| Project file: SQLite working copy (WAL), background save by `VACUUM INTO`, migrations (ADR-0011) | Format v1 must be readable forever |
+| Tile pyramid: per-layer levels, async load, LRU cache, stored map overview; user-set map size (default 8192²) | Large maps and fast open depend on it (ADR-0014) |
+| Search: FTS5 index in the same transaction as each change; in-memory name index | Lookups must never wait (ADR-0014) |
+| Embedded assets: table keyed by pack, asset and hash (ADR-0015) | Part of the file schema |
+| Benchmark gate: fixtures and budgets from ADR-0014, run in CI | Budgets hold only if every change is measured |
+| String lookup (Fluent) for all UI text (ADR-0017) | Retrofitting touches every widget |
 | Workspace shell: panel and tool registry per kind and mode, pen and mouse input | Kinds plug UI in without touching the shell |
-| Renderer: wgpu, layer draw passes from attribute buffers | Kinds add passes without touching each other |
+| Renderer: wgpu, layer draw passes from attribute buffers; draws to any target, tile by tile, with no window | Kinds add passes independently; export (PDF, large images) needs offscreen tiled rendering |
 
 Not in Phase 0: real generators, rivers, biomes, political algorithms, styling, export, the page editor UI.
 
@@ -80,8 +85,10 @@ Not in Phase 0: real generators, rivers, biomes, political algorithms, styling, 
 3. Paint height on the child with pen pressure. Undo and redo.
 4. World map shows the child's summary as a tint.
 5. Give the region a page with one link to another entity; rename the target; the link still resolves.
-6. Save, close, reload; the tree, layers, entities and pages match what was saved.
-7. Edit the world inside the region's area; the child shows as out of date.
+6. Save while painting; close, reload; the tree, layers, entities and pages match what was saved.
+7. Search a place name from the command search; results appear within the ADR-0014 budget on a fixture with 10 000 entities.
+8. Edit the world inside the region's area; the child shows as out of date.
+9. Export the region map offscreen to a PNG larger than the screen.
 
 ## 6. Open questions
 - eframe or our own winit loop (ADR-0013): decided by the WinTab test in Phase 0.
