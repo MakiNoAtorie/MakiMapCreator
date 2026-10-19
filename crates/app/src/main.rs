@@ -1,6 +1,8 @@
+mod brush;
 mod canvas;
 mod i18n;
 mod input;
+mod paint;
 #[cfg(windows)]
 mod pen_win;
 mod status;
@@ -16,6 +18,7 @@ use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, Sense, TextStyle};
 use i18n::{tr, tr_args};
 use input::{DuplicatePressFilter, PenApi, PenEvent, Phase};
 use mmc_core::{Layer, MapId, MapKind, MapSettings, Project, RootPoint};
+use paint::Painter;
 use theme::Theme;
 use view::MapView;
 
@@ -80,6 +83,12 @@ struct App {
     elevation: Option<f32>,
     pen_api: String,
     pen_filter: DuplicatePressFilter,
+    painter: Option<Painter>,
+    /// Pen events of this frame, taken by the canvas.
+    pen_events: Vec<PenEvent>,
+    /// A pen stroke is running (it began on the canvas).
+    pen_down: bool,
+    mouse_down: bool,
 }
 
 impl App {
@@ -104,6 +113,10 @@ impl App {
             elevation: None,
             pen_api: start_pen(cc, setting),
             pen_filter: DuplicatePressFilter::new(DUPLICATE_PRESS_WINDOW),
+            painter: None,
+            pen_events: Vec::new(),
+            pen_down: false,
+            mouse_down: false,
         }
     }
 
@@ -152,6 +165,7 @@ impl App {
             return;
         };
         self.close();
+        self.painter = Some(Painter::new(map.settings.metres_per_pixel));
         *self.project.lock().unwrap() = Some(project);
         self.doc = Some(Doc {
             file,
@@ -175,6 +189,7 @@ impl App {
             eprintln!("{e}");
         }
         self.doc = None;
+        self.painter = None;
     }
 
     /// Saves on a worker so the UI keeps running (ADR-0014).
@@ -274,9 +289,90 @@ impl App {
                 view.zoom_at(rect, p, ZOOM_PER_POINT.powf(scroll as f64));
             }
         }
+        let (now, ppp) = ui.input(|i| (i.time, i.pixels_per_point));
         let cursor = pen_hover
             .or(response.hover_pos())
             .filter(|p| rect.contains(*p));
+        if let Some(painter) = &mut self.painter {
+            let mut sent = false;
+            for e in std::mem::take(&mut self.pen_events) {
+                let pos = egui::pos2(e.pos[0], e.pos[1]) / ppp;
+                match e.phase {
+                    Phase::Down => self.pen_down = rect.contains(pos),
+                    Phase::Up if !self.pen_down => continue,
+                    Phase::Move if !self.pen_down => continue,
+                    _ => {}
+                }
+                let phase = if e.phase == Phase::Up {
+                    Phase::Up
+                } else {
+                    e.phase
+                };
+                painter.input(
+                    &paint::Input {
+                        pos,
+                        pressure: e.pressure,
+                        phase,
+                    },
+                    view,
+                    rect,
+                );
+                sent = true;
+                if e.phase == Phase::Up {
+                    self.pen_down = false;
+                }
+            }
+            if !space {
+                let pos = response.interact_pointer_pos().or(cursor);
+                if response.drag_started_by(egui::PointerButton::Primary)
+                    && self.pen_filter.accept_mouse_press(now)
+                {
+                    self.mouse_down = true;
+                    if let Some(pos) = pos {
+                        painter.input(
+                            &paint::Input {
+                                pos,
+                                pressure: 1.0,
+                                phase: Phase::Down,
+                            },
+                            view,
+                            rect,
+                        );
+                        sent = true;
+                    }
+                } else if self.mouse_down
+                    && let Some(pos) = pos
+                {
+                    let stopped = response.drag_stopped();
+                    let phase = if stopped { Phase::Up } else { Phase::Move };
+                    painter.input(
+                        &paint::Input {
+                            pos,
+                            pressure: 1.0,
+                            phase,
+                        },
+                        view,
+                        rect,
+                    );
+                    sent = true;
+                    self.mouse_down = !stopped;
+                }
+            }
+            if !sent {
+                match cursor {
+                    Some(pos) => painter.input(
+                        &paint::Input {
+                            pos,
+                            pressure: 0.0,
+                            phase: Phase::Hover,
+                        },
+                        view,
+                        rect,
+                    ),
+                    None => painter.hide_cursor(),
+                }
+            }
+        }
         self.hover = cursor.map(|p| view.root_at(rect, p));
         // Keep the last value while a worker holds the project (ADR-0014).
         if let Ok(guard) = self.project.try_lock()
@@ -286,11 +382,19 @@ impl App {
                 .hover
                 .and_then(|r| p.layer_value(doc.map, Layer::Height, r).ok().flatten());
         }
+        if let (Some(p), Some(c)) = (&mut self.painter, &mut self.canvas)
+            && let Some(m) = p.flush(&self.project, doc.map, c, ui.ctx(), now)
+        {
+            self.message = Some(m);
+        }
         if let Some(c) = &mut self.canvas {
             c.show(ui, rect, doc.map, view);
             if let Some(e) = &c.error {
                 self.message = Some(tr_args("error-render", &[("error", e)]));
             }
+        }
+        if let Some(p) = &self.painter {
+            p.draw(ui, rect, view, &Theme::new(self.dark));
         }
     }
 }
@@ -342,9 +446,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let t = Theme::new(self.dark);
         let (now, ppp) = ui.input(|i| (i.time, i.pixels_per_point));
-        // Pen events go to painting (#20); here the hovering pen only moves the status cursor.
         let mut pen_hover = None;
         for e in drain_pen() {
+            self.pen_events.push(e);
             self.pen_filter.pen_seen(now);
             pen_hover = (e.phase != Phase::Up).then(|| egui::pos2(e.pos[0], e.pos[1]) / ppp);
         }
@@ -355,6 +459,25 @@ impl eframe::App for App {
             self.message = Some(tr_args("error-save", &[("error", &e.to_string())]));
         }
 
+        if !ui.ctx().egui_wants_keyboard_input() {
+            let edits: Vec<_> = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } => brush::route(*key, *modifiers),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            if let Some(p) = &mut self.painter {
+                edits.into_iter().for_each(|e| p.edit(e));
+            }
+        }
         let mut action = ui.input_mut(|i| {
             [
                 (SAVE_AS, Action::SaveAs),
@@ -375,6 +498,16 @@ impl eframe::App for App {
         egui::Panel::top("menu").frame(bar(6, 2)).show(ui, |ui| {
             action = self.menu_bar(ui).or(action);
         });
+        if self.doc.is_some()
+            && let Some(p) = &mut self.painter
+        {
+            egui::Panel::top("options")
+                .frame(bar(8, 3))
+                .show(ui, |ui| p.options_bar(ui));
+            egui::Panel::left("tools")
+                .frame(bar(4, 4))
+                .show(ui, |ui| p.tool_strip(ui, &t));
+        }
         egui::Panel::bottom("status")
             .frame(bar(8, 3))
             .show(ui, |ui| self.status_bar(ui));
