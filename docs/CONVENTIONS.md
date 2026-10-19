@@ -41,6 +41,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Every edit is a `Command`. A command produces before/after records; undo writes the before records, redo the after records, each in one transaction.
 - A new raster layer adds a `Layer` variant. Command and undo types never name a layer.
 - Undo is per map, in memory, bounded by `UNDO_LIMIT`.
+- Deleting map M goes to the history of M's parent; for a root map, to the project history (`undo_project`, key `MapId(0)`). A `Change` variant that deletes maps is handled in `delete::history_key`.
+- Deleted maps are flagged, not removed, until the project is next opened. A new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`.
 - Every edit returns one `undo::Change`; `write(change, forward)` writes the after or before records.
 - Entity ids come from the AUTOINCREMENT sequence and are never reused, so redo stays safe across maps.
 - Seed data (kinds, built-in fields) goes in migrations, not code constants.
