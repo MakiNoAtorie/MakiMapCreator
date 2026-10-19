@@ -4,3 +4,6 @@ open_project = 1000
 # ADR-0014 gives no number for save (background); this is a regression cap.
 save = 2000
 full_rebuild = 1000
+# 10 000 entities; ADR-0014 numbers.
+name_lookup = 16
+full_text_first_results = 50

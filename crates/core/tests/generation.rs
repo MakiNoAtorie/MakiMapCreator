@@ -74,7 +74,12 @@ fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
         ("regions", 42, APP_VERSION)
     );
 
+    assert_eq!(p.find_names("nort", 5)[0].name, "North");
+    let hits = p.search_text("south", 5).unwrap().wait().unwrap();
+    assert_eq!(hits.len(), 1);
+
     p.undo(map).unwrap();
+    assert!(p.find_names("nort", 5).is_empty());
     assert!(p.entities().unwrap().is_empty());
     assert!(p.outlines(map).unwrap().is_empty());
     assert!(p.generations(map).unwrap().is_empty());

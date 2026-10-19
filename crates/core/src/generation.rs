@@ -102,13 +102,20 @@ impl Project {
     }
 
     pub(crate) fn write_generation_change(
-        &self,
+        &mut self,
         c: &GenerationChange,
         forward: bool,
     ) -> Result<()> {
-        Ok(self
-            .store
-            .write_generation(&c.record, &c.entities, &c.outlines, forward)?)
+        self.store
+            .write_generation(&c.record, &c.entities, &c.outlines, forward)?;
+        for e in &c.entities {
+            if forward {
+                self.names.set(EntityId(e.id), &e.name);
+            } else {
+                self.names.remove(EntityId(e.id));
+            }
+        }
+        Ok(())
     }
 
     /// Outlines of entities on `map`, ordered by entity id.

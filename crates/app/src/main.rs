@@ -1,65 +1,331 @@
+mod canvas;
+mod i18n;
 mod input;
 #[cfg(windows)]
 mod pen_win;
+mod status;
+mod theme;
+mod view;
 
-use eframe::egui::{self, Color32, FontId, Pos2, Sense};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+
+use canvas::{Canvas, SharedProject};
+use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, Sense, TextStyle};
+use i18n::{tr, tr_args};
 use input::{DuplicatePressFilter, PenApi, PenEvent, Phase};
-use std::collections::HashSet;
+use mmc_core::{Layer, MapId, MapKind, MapSettings, Project, RootPoint};
+use theme::Theme;
+use view::MapView;
 
 /// Pen API setting. No settings UI yet; `cargo run -p mmc-app -- ink` overrides it.
 const PEN_API: PenApi = PenApi::WinTab;
 /// Seconds after a pen event during which a mouse press counts as the pen's duplicate.
 const DUPLICATE_PRESS_WINDOW: f64 = 1.0;
+/// Project file extension.
+const EXTENSION: &str = "mmc";
+/// Zoom factor per scroll point.
+const ZOOM_PER_POINT: f64 = 1.002;
+
+const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
+const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+const SAVE_AS: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
+const FIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::Home);
 
 fn main() -> eframe::Result {
     let setting = match std::env::args().nth(1).as_deref() {
         Some("ink") => PenApi::Ink,
         _ => PEN_API,
     };
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1440.0, 880.0]),
+        ..Default::default()
+    };
     eframe::run_native(
-        "MakiMapCreator",
-        eframe::NativeOptions::default(),
+        &tr("app-title"),
+        options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, setting)))),
     )
 }
 
+/// The open project's file and shown map. The project itself is in `App::project`.
+struct Doc {
+    file: Option<PathBuf>,
+    map: MapId,
+    settings: MapSettings,
+}
+
+#[derive(Clone, Copy)]
+enum Action {
+    New,
+    Open,
+    Save,
+    SaveAs,
+    Fit,
+}
+
 struct App {
-    api: String,
-    last: Option<PenEvent>,
-    levels: HashSet<u32>,
-    dots: Vec<(Pos2, f32, Color32)>,
-    filter: DuplicatePressFilter,
-    mouse_accepted: u32,
-    mouse_dropped: u32,
+    dark: bool,
+    project: SharedProject,
+    doc: Option<Doc>,
+    /// `None` fits the map on the next frame.
+    view: Option<MapView>,
+    canvas: Option<Canvas>,
+    saving: Option<JoinHandle<mmc_core::Result<()>>>,
+    message: Option<String>,
+    hover: Option<RootPoint>,
+    elevation: Option<f32>,
+    pen_api: String,
+    pen_filter: DuplicatePressFilter,
 }
 
 impl App {
     fn new(cc: &eframe::CreationContext, setting: PenApi) -> Self {
+        let dark = cc.egui_ctx.system_theme() != Some(egui::Theme::Light);
+        theme::install_fonts(&cc.egui_ctx);
+        Theme::new(dark).apply(&cc.egui_ctx, dark);
+        let project: SharedProject = Arc::new(Mutex::new(None));
+        let canvas = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|rs| Canvas::new(rs, project.clone(), cc.egui_ctx.clone()));
         Self {
-            api: start_pen(cc, setting),
-            last: None,
-            levels: HashSet::new(),
-            dots: Vec::new(),
-            filter: DuplicatePressFilter::new(DUPLICATE_PRESS_WINDOW),
-            mouse_accepted: 0,
-            mouse_dropped: 0,
+            dark,
+            project,
+            doc: None,
+            view: None,
+            canvas,
+            saving: None,
+            message: None,
+            hover: None,
+            elevation: None,
+            pen_api: start_pen(cc, setting),
+            pen_filter: DuplicatePressFilter::new(DUPLICATE_PRESS_WINDOW),
         }
     }
+
+    fn run(&mut self, action: Action) {
+        match action {
+            Action::New => {
+                let r = Project::create(&working_copy(), MapSettings::default_for(MapKind::Region));
+                self.replace(r.map(|p| (p, None)), "error-new");
+            }
+            Action::Open => {
+                if let Some(file) = file_dialog().pick_file() {
+                    let r = Project::open(&file, &working_copy());
+                    self.replace(r.map(|p| (p, Some(file))), "error-open");
+                }
+            }
+            Action::Save => match self.doc.as_ref().map(|d| d.file.clone()) {
+                Some(Some(file)) => self.save(file),
+                Some(None) => self.run(Action::SaveAs),
+                None => {}
+            },
+            Action::SaveAs => {
+                if self.doc.is_some()
+                    && let Some(file) = file_dialog().save_file()
+                {
+                    let file = file.with_extension(EXTENSION);
+                    if let Some(d) = &mut self.doc {
+                        d.file = Some(file.clone());
+                    }
+                    self.save(file);
+                }
+            }
+            Action::Fit => self.view = None,
+        }
+    }
+
+    /// Closes the open project and shows `next`, or reports its error.
+    fn replace(&mut self, next: mmc_core::Result<(Project, Option<PathBuf>)>, error: &str) {
+        let (project, file) = match next {
+            Ok(n) => n,
+            Err(e) => {
+                self.message = Some(tr_args(error, &[("error", &e.to_string())]));
+                return;
+            }
+        };
+        let Some(map) = project.maps().first().cloned() else {
+            return;
+        };
+        self.close();
+        *self.project.lock().unwrap() = Some(project);
+        self.doc = Some(Doc {
+            file,
+            map: map.id,
+            settings: map.settings,
+        });
+        self.view = None;
+        self.message = None;
+        if let Some(c) = &mut self.canvas {
+            c.clear();
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(h) = self.saving.take() {
+            let _ = h.join();
+        }
+        if let Some(p) = self.project.lock().unwrap().take()
+            && let Err(e) = p.close()
+        {
+            eprintln!("{e}");
+        }
+        self.doc = None;
+    }
+
+    /// Saves on a worker so the UI keeps running (ADR-0014).
+    fn save(&mut self, file: PathBuf) {
+        if self.saving.is_some() {
+            return;
+        }
+        let project = self.project.clone();
+        self.saving = Some(std::thread::spawn(move || {
+            match project.lock().unwrap().as_ref() {
+                Some(p) => p.save(&file),
+                None => Ok(()),
+            }
+        }));
+    }
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) -> Option<Action> {
+        let mut action = None;
+        let item = |ui: &mut egui::Ui,
+                    id: &str,
+                    s: &KeyboardShortcut,
+                    a: Action,
+                    act: &mut Option<Action>| {
+            let b = egui::Button::new(tr(id)).shortcut_text(ui.ctx().format_shortcut(s));
+            if ui.add(b).clicked() {
+                *act = Some(a);
+            }
+        };
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button(tr("menu-file"), |ui| {
+                item(ui, "menu-file-new", &NEW, Action::New, &mut action);
+                item(ui, "menu-file-open", &OPEN, Action::Open, &mut action);
+                item(ui, "menu-file-save", &SAVE, Action::Save, &mut action);
+                item(
+                    ui,
+                    "menu-file-save-as",
+                    &SAVE_AS,
+                    Action::SaveAs,
+                    &mut action,
+                );
+            });
+            ui.menu_button(tr("menu-view"), |ui| {
+                item(ui, "menu-view-fit", &FIT, Action::Fit, &mut action);
+                if ui.checkbox(&mut self.dark, tr("menu-view-dark")).changed() {
+                    Theme::new(self.dark).apply(ui.ctx(), self.dark);
+                }
+            });
+            if let Some(d) = &self.doc {
+                ui.separator();
+                if let Some(name) = d.file.as_ref().and_then(|f| f.file_stem()) {
+                    ui.strong(name.to_string_lossy());
+                }
+                ui.weak(status::map_kind(d.settings.kind));
+            }
+        });
+        action
+    }
+
+    fn status_bar(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.style_mut().override_text_style = Some(TextStyle::Small);
+            if let Some(d) = &self.doc {
+                ui.monospace(status::cursor(self.hover));
+                ui.separator();
+                ui.monospace(status::elevation(self.elevation));
+                ui.separator();
+                // Hook: entity under the cursor comes with anchors (#18).
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.weak(tr_args("status-pen", &[("api", &self.pen_api)]));
+                    ui.separator();
+                    ui.weak(status::map(&d.settings));
+                });
+            }
+        });
+    }
+
+    fn map_canvas(&mut self, ui: &mut egui::Ui, pen_hover: Option<egui::Pos2>) {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let Some(doc) = &self.doc else {
+            return;
+        };
+        let s = doc.settings;
+        let view = self.view.get_or_insert_with(|| {
+            let m = s.metres_per_pixel;
+            MapView::fit(s.width as f64 * m, s.height as f64 * m, rect.shrink(16.0))
+        });
+        // Pan: middle drag, or Space and primary drag. Zoom: scroll wheel at the cursor.
+        let space = ui.input(|i| i.key_down(Key::Space));
+        if response.dragged_by(egui::PointerButton::Middle)
+            || (space && response.dragged_by(egui::PointerButton::Primary))
+        {
+            view.pan(response.drag_delta());
+        }
+        if let Some(p) = response.hover_pos() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                view.zoom_at(rect, p, ZOOM_PER_POINT.powf(scroll as f64));
+            }
+        }
+        let cursor = pen_hover
+            .or(response.hover_pos())
+            .filter(|p| rect.contains(*p));
+        self.hover = cursor.map(|p| view.root_at(rect, p));
+        // Keep the last value while a worker holds the project (ADR-0014).
+        if let Ok(guard) = self.project.try_lock()
+            && let Some(p) = guard.as_ref()
+        {
+            self.elevation = self
+                .hover
+                .and_then(|r| p.layer_value(doc.map, Layer::Height, r).ok().flatten());
+        }
+        if let Some(c) = &mut self.canvas {
+            c.show(ui, rect, doc.map, view);
+            if let Some(e) = &c.error {
+                self.message = Some(tr_args("error-render", &[("error", e)]));
+            }
+        }
+    }
+}
+
+/// A new, unused working-copy path in local app data.
+fn working_copy() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("MakiMapCreator").join("working");
+    let _ = std::fs::create_dir_all(&dir);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    dir.join(format!("{}-{nanos}.{EXTENSION}", std::process::id()))
+}
+
+fn file_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new().add_filter(tr("file-filter"), &[EXTENSION])
 }
 
 #[cfg(windows)]
 fn start_pen(cc: &eframe::CreationContext, setting: PenApi) -> String {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let Ok(RawWindowHandle::Win32(h)) = cc.window_handle().map(|h| h.as_raw()) else {
-        return "none (no Win32 window handle)".into();
+        return String::new();
     };
     let s = pen_win::install(h.hwnd.get(), setting, cc.egui_ctx.clone());
-    format!("{:?} (setting {setting:?}; WinTab: {})", s.api, s.wintab)
+    format!("{:?} · {}", s.api, s.wintab)
 }
 
 #[cfg(not(windows))]
 fn start_pen(_: &eframe::CreationContext, _: PenApi) -> String {
-    "none (pen input is Windows only)".into()
+    String::new()
 }
 
 #[cfg(windows)]
@@ -73,80 +339,69 @@ fn drain_pen() -> Vec<PenEvent> {
 }
 
 impl eframe::App for App {
-    // ponytail: debug overlay strings are literal; they move to the string lookup (ADR-0017) with the real canvas.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let t = Theme::new(self.dark);
         let (now, ppp) = ui.input(|i| (i.time, i.pixels_per_point));
-        let pen = drain_pen();
-        if !pen.is_empty() {
-            self.filter.pen_seen(now);
+        // Pen events go to painting (#20); here the hovering pen only moves the status cursor.
+        let mut pen_hover = None;
+        for e in drain_pen() {
+            self.pen_filter.pen_seen(now);
+            pen_hover = (e.phase != Phase::Up).then(|| egui::pos2(e.pos[0], e.pos[1]) / ppp);
         }
-        for e in pen {
-            self.levels.insert(e.pressure.to_bits());
-            if matches!(e.phase, Phase::Down | Phase::Move) {
-                let color = if e.eraser {
-                    Color32::RED
-                } else {
-                    Color32::from_rgb(40, 40, 40)
-                };
-                self.dots
-                    .push((Pos2::new(e.pos[0], e.pos[1]) / ppp, e.pressure, color));
-            }
-            self.last = Some(e);
+        if let Some(h) = &self.saving
+            && h.is_finished()
+            && let Some(Err(e)) = self.saving.take().and_then(|h| h.join().ok())
+        {
+            self.message = Some(tr_args("error-save", &[("error", &e.to_string())]));
         }
 
-        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        let presses: Vec<Pos2> = ui.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        ..
-                    } => Some(*pos),
-                    _ => None,
-                })
-                .collect()
+        let mut action = ui.input_mut(|i| {
+            [
+                (SAVE_AS, Action::SaveAs),
+                (NEW, Action::New),
+                (OPEN, Action::Open),
+                (SAVE, Action::Save),
+                (FIT, Action::Fit),
+            ]
+            .into_iter()
+            .find(|(s, _)| i.consume_shortcut(s))
+            .map(|(_, a)| a)
         });
-        for pos in presses.into_iter().filter(|p| rect.contains(*p)) {
-            if self.filter.accept_mouse_press(now) {
-                self.mouse_accepted += 1;
-                self.dots.push((pos, 1.0, Color32::BLUE));
-            } else {
-                self.mouse_dropped += 1;
-            }
-        }
-
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_rgb(236, 232, 224));
-        for (p, pressure, color) in &self.dots {
-            painter.circle_filled(*p, 1.0 + pressure * 12.0, *color);
-        }
-        let pen = match &self.last {
-            Some(e) => format!(
-                "pressure {:.4}  eraser {}  tilt {:.1}, {:.1}  barrel {}  phase {:?}",
-                e.pressure, e.eraser, e.tilt[0], e.tilt[1], e.barrel, e.phase
-            ),
-            None => "no pen event yet".into(),
+        let bar = |m: i8, n: i8| {
+            egui::Frame::new()
+                .fill(t.panel)
+                .inner_margin(egui::Margin::symmetric(m, n))
         };
-        let text = format!(
-            "API: {}\n{pen}\ndistinct pressure levels seen: {}\nmouse presses on canvas: {} drawn (blue), {} dropped as pen duplicates\nright-click clears",
-            self.api,
-            self.levels.len(),
-            self.mouse_accepted,
-            self.mouse_dropped
-        );
-        painter.text(
-            rect.min + egui::vec2(8.0, 8.0),
-            egui::Align2::LEFT_TOP,
-            text,
-            FontId::monospace(13.0),
-            Color32::BLACK,
-        );
-        if ui.input(|i| i.pointer.secondary_clicked()) {
-            self.dots.clear();
-            self.levels.clear();
+        egui::Panel::top("menu").frame(bar(6, 2)).show(ui, |ui| {
+            action = self.menu_bar(ui).or(action);
+        });
+        egui::Panel::bottom("status")
+            .frame(bar(8, 3))
+            .show(ui, |ui| self.status_bar(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(t.canvas))
+            .show(ui, |ui| {
+                if let Some(m) = &self.message {
+                    ui.colored_label(ui.visuals().error_fg_color, m);
+                }
+                if self.doc.is_none() {
+                    ui.centered_and_justified(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(tr("empty-text"));
+                            if ui.button(tr("menu-file-new")).clicked() {
+                                action = Some(Action::New);
+                            }
+                        });
+                    });
+                }
+                self.map_canvas(ui, pen_hover);
+            });
+        if let Some(a) = action {
+            self.run(a);
         }
+    }
+
+    fn on_exit(&mut self) {
+        self.close();
     }
 }

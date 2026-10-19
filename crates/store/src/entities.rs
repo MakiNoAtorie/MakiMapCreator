@@ -197,30 +197,30 @@ impl Store {
 
 /// Entity and relation writes inside the caller's transaction.
 pub(crate) fn write_entity_rows(
-    tx: &rusqlite::Connection,
+    tx: &rusqlite::Transaction,
     entities: &[(i64, Option<EntityRecord>)],
     relations: &[(RelationRecord, bool)],
 ) -> Result<()> {
-    {
-        for (id, rec) in entities {
-            match rec {
-                Some(e) => tx.execute(
-                    "INSERT INTO entities (id, kind, name, fields) VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT (id) DO UPDATE
-                     SET kind = excluded.kind, name = excluded.name, fields = excluded.fields",
-                    params![e.id, e.kind, e.name, e.fields],
-                )?,
-                None => tx.execute("DELETE FROM entities WHERE id = ?1", [id])?,
-            };
-        }
-        for (r, present) in relations {
-            let sql = if *present {
-                "INSERT OR IGNORE INTO relations (from_id, to_id, type) VALUES (?1, ?2, ?3)"
-            } else {
-                "DELETE FROM relations WHERE from_id = ?1 AND to_id = ?2 AND type = ?3"
-            };
-            tx.execute(sql, params![r.from_id, r.to_id, r.rel_type])?;
-        }
-        Ok(())
+    for (id, rec) in entities {
+        match rec {
+            Some(e) => tx.execute(
+                "INSERT INTO entities (id, kind, name, fields) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (id) DO UPDATE
+                 SET kind = excluded.kind, name = excluded.name, fields = excluded.fields",
+                params![e.id, e.kind, e.name, e.fields],
+            )?,
+            None => tx.execute("DELETE FROM entities WHERE id = ?1", [id])?,
+        };
+        let rec = rec.as_ref().map(|e| (e.name.as_str(), e.fields.as_str()));
+        crate::search::index_entity(tx, *id, rec)?;
     }
+    for (r, present) in relations {
+        let sql = if *present {
+            "INSERT OR IGNORE INTO relations (from_id, to_id, type) VALUES (?1, ?2, ?3)"
+        } else {
+            "DELETE FROM relations WHERE from_id = ?1 AND to_id = ?2 AND type = ?3"
+        };
+        tx.execute(sql, params![r.from_id, r.to_id, r.rel_type])?;
+    }
+    Ok(())
 }

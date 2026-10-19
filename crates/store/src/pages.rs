@@ -78,6 +78,7 @@ impl Store {
             )?,
             None => tx.execute("DELETE FROM pages WHERE entity_id = ?1", [p.entity_id])?,
         };
+        crate::search::index_page(&tx, p.entity_id, p.body.as_deref())?;
         tx.execute("DELETE FROM page_links WHERE from_id = ?1", [p.entity_id])?;
         for to in &p.links {
             tx.execute(
