@@ -101,6 +101,12 @@ impl Project {
         Ok(Some(decode(rec.as_ref())?[i]))
     }
 
+    /// All `TILE_SIZE`² values of tile (`tx`, `ty`) of `layer`, row by row.
+    pub fn layer_tile(&self, map: MapId, layer: Layer, tx: u32, ty: u32) -> Result<Vec<f32>> {
+        let map = self.map(map)?;
+        decode(self.store.tile(&map.tile_key(layer, tx, ty))?.as_ref())
+    }
+
     /// Tiles (tx, ty) of `layer` that the user edited by hand, ordered.
     pub fn edited_tiles(&self, map: MapId, layer: Layer) -> Result<Vec<(u32, u32)>> {
         self.map(map)?;
