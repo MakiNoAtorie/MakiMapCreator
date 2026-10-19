@@ -25,6 +25,8 @@ mod save;
 pub use save::save_snapshot;
 mod delete;
 pub use delete::ChildLink;
+mod resync;
+pub use resync::ChildState;
 
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
@@ -48,6 +50,7 @@ const MIGRATIONS: &[&str] = &[
     generations::MIGRATION,
     children::MIGRATION,
     delete::MIGRATION,
+    resync::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

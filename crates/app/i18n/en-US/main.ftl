@@ -64,6 +64,7 @@ field-invalid = Not valid for this field.
 layer-height = Height
 layer-slope = Slope
 layer-land = Land
+layer-lock = Lock mask
 layer-derived = (derived)
 page-empty = This page is empty.
 

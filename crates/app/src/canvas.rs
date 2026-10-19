@@ -27,7 +27,7 @@ fn renderer_for(rs: &eframe::egui_wgpu::RenderState, layers: &[Layer]) -> Render
         match l {
             Layer::Height => r.register(l, Box::new(HeightPass::new(&rs.device))),
             Layer::Land => r.register(l, Box::new(LandPass::new(&rs.device))),
-            Layer::Slope => {}
+            Layer::Slope | Layer::Lock => {}
         }
     }
     r

@@ -27,6 +27,7 @@ pub(crate) enum Change {
     Anchor(crate::anchor::AnchorChange),
     Generation(crate::generation::GenerationChange),
     Deletion(crate::delete::DeletionChange),
+    Resync(crate::resync::ResyncChange),
 }
 
 #[derive(Default)]
@@ -94,7 +95,7 @@ impl Project {
     }
     /// Writes the after records, or the before records when `forward` is false.
     fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
-        match changes {
+        let res = match changes {
             Change::Tiles(tiles) => {
                 let writes: Vec<_> = tiles
                     .iter()
@@ -112,6 +113,9 @@ impl Project {
             Change::Anchor(a) => self.write_anchor_change(a, forward),
             Change::Generation(g) => self.write_generation_change(g, forward),
             Change::Deletion(d) => self.write_deletion(d, forward),
-        }
+            Change::Resync(r) => self.write_resync_change(r, forward),
+        };
+        res?;
+        self.mark_out_of_date(changes)
     }
 }

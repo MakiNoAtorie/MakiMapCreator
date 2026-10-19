@@ -35,6 +35,8 @@ mod child;
 pub use child::{CHILD_MARGIN, CHILD_SCALE_FACTOR, ParentContext};
 mod delete;
 pub use delete::OwnMap;
+mod resync;
+pub use resync::{ChildSummary, RegenPlan, TileAt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -116,6 +118,7 @@ pub enum Error {
     InvalidChild(&'static str),
     OutsideOutline,
     OwnMapChoice(EntityId),
+    StalePlan,
 }
 
 impl fmt::Display for Error {
@@ -147,6 +150,7 @@ impl fmt::Display for Error {
                 "entity {} has its own map: choose to delete the map or keep it as a root map",
                 id.0
             ),
+            Error::StalePlan => write!(f, "the map changed after the preview; preview again"),
         }
     }
 }
@@ -170,6 +174,7 @@ pub struct Project {
     pipeline: pipeline::Pipeline,
     anchors: anchor::State,
     saves: save::Saves,
+    resync: resync::State,
 }
 
 impl Project {
@@ -197,6 +202,7 @@ impl Project {
             pipeline: Default::default(),
             anchors: Default::default(),
             saves: Default::default(),
+            resync: Default::default(),
         })
     }
 
@@ -236,6 +242,7 @@ impl Project {
             pipeline: Default::default(),
             anchors: Default::default(),
             saves: Default::default(),
+            resync: Default::default(),
         };
         p.names = p.build_name_index()?;
         p.load_child_outlines()?;

@@ -26,6 +26,11 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
             .iter()
             .filter_map(|c| Layer::parse(&c.key.layer))
             .collect(),
+        Change::Resync(r) => r
+            .tiles()
+            .iter()
+            .filter_map(|c| Layer::parse(&c.key.layer))
+            .collect(),
         Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => vec![],
     }
 }

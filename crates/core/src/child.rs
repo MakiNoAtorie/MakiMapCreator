@@ -51,7 +51,7 @@ impl ParentContext {
 }
 
 /// Even-odd point in polygon.
-fn inside(poly: &[RootPoint], p: RootPoint) -> bool {
+pub(crate) fn inside(poly: &[RootPoint], p: RootPoint) -> bool {
     let mut odd = false;
     for (a, b) in poly.iter().zip(poly.iter().cycle().skip(1)) {
         if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
@@ -63,7 +63,7 @@ fn inside(poly: &[RootPoint], p: RootPoint) -> bool {
 
 impl Map {
     /// Root-space centre of pixel (`x`, `y`).
-    fn pixel_centre(&self, x: u32, y: u32) -> RootPoint {
+    pub(crate) fn pixel_centre(&self, x: u32, y: u32) -> RootPoint {
         let m = self.settings.metres_per_pixel;
         RootPoint {
             x: self.origin.x + (x as f64 + 0.5) * m,
@@ -137,49 +137,7 @@ impl Project {
             metres_per_pixel: mpp,
         };
 
-        // Parent pixels under the child plus one for interpolation, clipped to the parent.
-        let (px0, py0) = pm.to_pixels(origin);
-        let (px1, py1) = pm.to_pixels(RootPoint {
-            x: origin.x + w * mpp,
-            y: origin.y + h * mpp,
-        });
-        let clip = |v: f64, n: u32| v.clamp(0.0, n as f64) as u32;
-        let (x0, x1) = (
-            clip(px0.floor() - 1.0, pm.settings.width),
-            clip(px1.ceil() + 1.0, pm.settings.width),
-        );
-        let (y0, y1) = (
-            clip(py0.floor() - 1.0, pm.settings.height),
-            clip(py1.ceil() + 1.0, pm.settings.height),
-        );
-        let mut context = vec![];
-        for &layer in pk.layers().iter().filter(|l| !l.is_derived()) {
-            if x0 == x1 || y0 == y1 {
-                break;
-            }
-            let mut values = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
-            let mut tile = None;
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let (t, i) = tile_of(x, y);
-                    if tile.as_ref().is_none_or(|(k, _)| *k != t) {
-                        tile = Some((t, self.layer_tile(parent, layer, t.0, t.1)?));
-                    }
-                    values.push(tile.as_ref().unwrap().1[i]);
-                }
-            }
-            context.push(ContextRecord {
-                layer: layer.as_str().into(),
-                origin_x: pm.origin.x,
-                origin_y: pm.origin.y,
-                metres_per_pixel: pm.settings.metres_per_pixel,
-                x0,
-                y0,
-                width: x1 - x0,
-                height: y1 - y0,
-                data: encode(&values),
-            });
-        }
+        let context = self.snapshot(pk.layers(), &pm, origin, w * mpp, h * mpp)?;
 
         let id = MapId(self.store.insert_child_map(&NewChildMap {
             parent_id: parent.0,
@@ -203,11 +161,71 @@ impl Project {
         Ok(id)
     }
 
+    /// A snapshot of `pm`'s authored `layers` under a child area at `origin`, plus one parent
+    /// pixel for interpolation, clipped to the parent.
+    pub(crate) fn snapshot(
+        &self,
+        layers: &[Layer],
+        pm: &Map,
+        origin: RootPoint,
+        width_m: f64,
+        height_m: f64,
+    ) -> Result<Vec<ContextRecord>> {
+        // Parent pixels under the child plus one for interpolation, clipped to the parent.
+        let (px0, py0) = pm.to_pixels(origin);
+        let (px1, py1) = pm.to_pixels(RootPoint {
+            x: origin.x + width_m,
+            y: origin.y + height_m,
+        });
+        let clip = |v: f64, n: u32| v.clamp(0.0, n as f64) as u32;
+        let (x0, x1) = (
+            clip(px0.floor() - 1.0, pm.settings.width),
+            clip(px1.ceil() + 1.0, pm.settings.width),
+        );
+        let (y0, y1) = (
+            clip(py0.floor() - 1.0, pm.settings.height),
+            clip(py1.ceil() + 1.0, pm.settings.height),
+        );
+        let mut context = vec![];
+        for &layer in layers.iter().filter(|l| !l.is_derived()) {
+            if x0 == x1 || y0 == y1 {
+                break;
+            }
+            let mut values = Vec::with_capacity(((x1 - x0) * (y1 - y0)) as usize);
+            let mut tile = None;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (t, i) = tile_of(x, y);
+                    if tile.as_ref().is_none_or(|(k, _)| *k != t) {
+                        tile = Some((t, self.layer_tile(pm.id, layer, t.0, t.1)?));
+                    }
+                    values.push(tile.as_ref().unwrap().1[i]);
+                }
+            }
+            context.push(ContextRecord {
+                layer: layer.as_str().into(),
+                origin_x: pm.origin.x,
+                origin_y: pm.origin.y,
+                metres_per_pixel: pm.settings.metres_per_pixel,
+                x0,
+                y0,
+                width: x1 - x0,
+                height: y1 - y0,
+                data: encode(&values),
+            });
+        }
+        Ok(context)
+    }
+
     /// The snapshot of the parent's `layer` kept with `map`; `None` for a root map.
     pub fn parent_context(&self, map: MapId, layer: Layer) -> Result<Option<ParentContext>> {
         self.map(map)?;
-        let Some(r) = self.store.parent_context(map.0, layer.as_str())? else {
-            return Ok(None);
+        let r = match self.context_override(map, layer) {
+            Some(r) => r,
+            None => match self.store.parent_context(map.0, layer.as_str())? {
+                Some(r) => r,
+                None => return Ok(None),
+            },
         };
         let bytes = zstd::decode_all(r.data.as_slice()).map_err(|_| Error::CorruptTile)?;
         let values: Vec<f32> = bytes

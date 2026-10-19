@@ -42,7 +42,7 @@ pub struct GenerationInfo {
 /// The rows one generation adds.
 #[derive(Debug, Clone)]
 pub(crate) struct GenerationChange {
-    record: GenerationRecord,
+    pub(crate) record: GenerationRecord,
     entities: Vec<EntityRecord>,
     outlines: Vec<OutlineRecord>,
     pub(crate) tiles: Vec<TileChange>,

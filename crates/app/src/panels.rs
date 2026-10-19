@@ -352,6 +352,7 @@ fn layer_id(l: Layer) -> &'static str {
         Layer::Height => "layer-height",
         Layer::Slope => "layer-slope",
         Layer::Land => "layer-land",
+        Layer::Lock => "layer-lock",
     }
 }
 
