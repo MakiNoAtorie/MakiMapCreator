@@ -67,3 +67,10 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Gate on the median of `RUNS` runs, never one run. Budget = the ADR-0014 number; where the ADR gives none, about 10x the measured median. CI runners are noisy: raise a budget only with a reason in the commit.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
 - Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
+
+## Render
+
+- `mmc-render` uses the wgpu version eframe uses; the app shares one device through `Renderer::from_device`.
+- Render targets are `Rgba8Unorm` (not sRGB), so image bytes are exactly what the shader writes.
+- Each pass shader starts with `VIEW_WGSL` and computes map texels from absolute image pixels, so a tiled render equals a single render.
+- Image hashes are per backend. Recorded hashes are for WARP; render tests use `Renderer::warp()`.
