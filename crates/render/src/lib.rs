@@ -7,11 +7,10 @@ use std::thread::JoinHandle;
 
 use mmc_core::{Layer, MapId, Project, RootPoint};
 
-mod height;
 mod levels;
-pub use height::HeightPass;
+mod pass;
+pub use pass::ShaderPass;
 mod kind;
-pub use kind::LandPass;
 mod summary;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.

@@ -5,7 +5,7 @@ use crate::persist::{EntityRecord, GenerationRecord, OutlineRecord, TileRecord, 
 
 use crate::layer::{TILE_LEN, TILE_SIZE, encode};
 use crate::undo::TileChange;
-use crate::{EntityId, Error, Layer, Map, MapId, Project, Result, RootPoint};
+use crate::{EntityId, Error, GenRun, Layer, Map, MapId, Project, Result, RootPoint};
 
 /// The version of the app that runs generators.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -13,8 +13,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The output of one generator run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Generation {
-    pub generator: String,
-    pub seed: u64,
+    pub run: GenRun,
     /// Created in order, with consecutive new ids.
     pub entities: Vec<NewEntity>,
     /// Whole-map values per layer, row by row (width × height). Written as unedited tiles.
@@ -32,11 +31,28 @@ pub struct NewEntity {
 }
 
 /// A recorded generator run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GenerationInfo {
-    pub generator: String,
-    pub seed: u64,
+    pub run: GenRun,
     pub app_version: String,
+}
+
+/// Parameter values as a JSON object, for the generation record.
+fn encode_params(params: &[(String, f64)]) -> String {
+    let m: serde_json::Map<String, serde_json::Value> = params
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::from(*v)))
+        .collect();
+    serde_json::Value::Object(m).to_string()
+}
+
+fn decode_params(s: &str) -> Result<Vec<(String, f64)>> {
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_str(s) else {
+        return Err(Error::CorruptEntity);
+    };
+    m.into_iter()
+        .map(|(k, v)| Ok((k, v.as_f64().ok_or(Error::CorruptEntity)?)))
+        .collect()
 }
 
 /// The rows one generation adds.
@@ -96,8 +112,9 @@ impl Project {
             record: GenerationRecord {
                 id: self.store.next_generation_id()?,
                 map_id: map.id.0,
-                generator: g.generator.clone(),
-                seed: g.seed as i64,
+                generator: g.run.generator.clone(),
+                seed: g.run.seed as i64,
+                params: encode_params(&g.run.params),
                 app_version: APP_VERSION.into(),
             },
             entities: vec![],
@@ -181,16 +198,20 @@ impl Project {
     /// Generator runs on `map`, oldest first.
     pub fn generations(&self, map: MapId) -> Result<Vec<GenerationInfo>> {
         self.map(map)?;
-        Ok(self
-            .store
+        self.store
             .generations(map.0)?
             .into_iter()
-            .map(|r| GenerationInfo {
-                generator: r.generator,
-                seed: r.seed as u64,
-                app_version: r.app_version,
+            .map(|r| {
+                Ok(GenerationInfo {
+                    run: GenRun {
+                        generator: r.generator,
+                        seed: r.seed as u64,
+                        params: decode_params(&r.params)?,
+                    },
+                    app_version: r.app_version,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 

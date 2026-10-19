@@ -1,11 +1,12 @@
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TILE_SIZE, UNDO_LIMIT,
+    BrushStroke, Command, Layer, MapId, MapSettings, Project, RootPoint, StrokePoint, TILE_SIZE,
+    UNDO_LIMIT,
 };
+use mmc_kind_region::REGION;
 
 fn settings() -> MapSettings {
     MapSettings {
-        kind: MapKind::Region,
+        kind: REGION,
         width: 1024,
         height: 768,
         metres_per_pixel: 10.0,
@@ -14,7 +15,7 @@ fn settings() -> MapSettings {
 
 fn stroke(x: f64, y: f64, strength: f32) -> Command {
     Command::Brush(BrushStroke {
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         points: vec![StrokePoint {
             at: RootPoint { x, y },
             pressure: 1.0,
@@ -25,7 +26,7 @@ fn stroke(x: f64, y: f64, strength: f32) -> Command {
 }
 
 fn height(p: &Project, map: MapId, x: f64, y: f64) -> f32 {
-    p.layer_value(map, Layer::Height, RootPoint { x, y })
+    p.layer_value(map, Layer::HEIGHT, RootPoint { x, y })
         .unwrap()
         .unwrap()
 }
@@ -39,7 +40,7 @@ fn new_map_is_at_sea_level_and_outside_points_have_no_value() {
     let outside = p
         .layer_value(
             map,
-            Layer::Height,
+            Layer::HEIGHT,
             RootPoint {
                 x: 5000.0,
                 y: 7690.0,
@@ -47,7 +48,7 @@ fn new_map_is_at_sea_level_and_outside_points_have_no_value() {
         )
         .unwrap();
     assert_eq!(outside, None);
-    assert!(p.edited_tiles(map, Layer::Height).unwrap().is_empty());
+    assert!(p.edited_tiles(map, Layer::HEIGHT).unwrap().is_empty());
 }
 
 #[test]
@@ -63,7 +64,7 @@ fn brush_raises_height_inside_radius_only_and_scales_with_pressure() {
     assert_eq!(height(&p, map, 2065.0, 2005.0), 0.0);
 
     let half = Command::Brush(BrushStroke {
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         points: vec![StrokePoint {
             at: RootPoint {
                 x: 6005.0,
@@ -88,7 +89,7 @@ fn stroke_across_a_tile_corner_edits_four_tiles() {
     assert!(height(&p, map, edge - 5.0, edge - 5.0) < 0.0);
     assert!(height(&p, map, edge + 5.0, edge + 5.0) < 0.0);
     assert_eq!(
-        p.edited_tiles(map, Layer::Height).unwrap(),
+        p.edited_tiles(map, Layer::HEIGHT).unwrap(),
         vec![(0, 0), (0, 1), (1, 0), (1, 1)]
     );
 }
@@ -107,12 +108,12 @@ fn undo_and_redo_restore_heights_and_edited_flags() {
     assert!((once - twice / 2.0).abs() < 1e-4);
     assert!(p.undo(map).unwrap());
     assert_eq!(height(&p, map, 105.0, 105.0), 0.0);
-    assert!(p.edited_tiles(map, Layer::Height).unwrap().is_empty());
+    assert!(p.edited_tiles(map, Layer::HEIGHT).unwrap().is_empty());
     assert!(!p.undo(map).unwrap());
 
     assert!(p.redo(map).unwrap());
     assert_eq!(height(&p, map, 105.0, 105.0), once);
-    assert_eq!(p.edited_tiles(map, Layer::Height).unwrap(), vec![(0, 0)]);
+    assert_eq!(p.edited_tiles(map, Layer::HEIGHT).unwrap(), vec![(0, 0)]);
     assert!(p.redo(map).unwrap());
     assert_eq!(height(&p, map, 105.0, 105.0), twice);
     assert!(!p.redo(map).unwrap());
@@ -173,7 +174,7 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     let map = p.maps()[0].id;
     p.apply(map, stroke(5005.0, 3005.0, 12.0)).unwrap();
     let h = height(&p, map, 5005.0, 3005.0);
-    let edited = p.edited_tiles(map, Layer::Height).unwrap();
+    let edited = p.edited_tiles(map, Layer::HEIGHT).unwrap();
     assert_eq!(edited, vec![(1, 1)]);
     p.save(&file);
     p.close().unwrap();
@@ -181,7 +182,7 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     let mut p = mmc_fixtures::open(&file, &app_data.path().join("b.sqlite")).unwrap();
     assert_eq!(height(&p, map, 5005.0, 3005.0), h);
     assert_eq!(height(&p, map, 105.0, 105.0), 0.0);
-    assert_eq!(p.edited_tiles(map, Layer::Height).unwrap(), edited);
+    assert_eq!(p.edited_tiles(map, Layer::HEIGHT).unwrap(), edited);
     assert!(!p.undo(map).unwrap());
     p.close().unwrap();
 }

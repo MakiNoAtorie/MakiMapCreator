@@ -1,49 +1,71 @@
 //! Crude world map kind (Phase 0): paint land and sea, split land into Voronoi regions.
 
 use mmc_core::{
-    Command, Error, Generation, Layer, MapId, MapKind, MapKindModule, NewEntity, Project, Result,
-    RootPoint, Tool, rng,
+    ChildDecl, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind,
+    MapKindModule, MapSettings, NewEntity, Param, Project, RenderPass, Result, RootPoint, Tool,
+    ToolAction, rng,
 };
 
+pub const WORLD: MapKind = MapKind::new("world");
+/// Authored: 1 is land, 0 is sea.
+pub const LAND: Layer = Layer::new("land");
+
 /// Region sites per map side.
-const GRID: u32 = 8;
+const GRID: Param = Param {
+    id: "sites-per-side",
+    default: 8.0,
+    min: 2.0,
+    max: 32.0,
+};
 
 pub struct WorldKind;
 
 impl MapKindModule for WorldKind {
     fn kind(&self) -> MapKind {
-        MapKind::World
+        WORLD
+    }
+
+    fn default_settings(&self) -> MapSettings {
+        MapSettings {
+            kind: WORLD,
+            width: 4096,
+            height: 4096,
+            metres_per_pixel: 1000.0,
+        }
     }
 
     fn layers(&self) -> &'static [Layer] {
-        &[Layer::Land]
+        &[LAND]
     }
 
-    fn render_layers(&self) -> &'static [Layer] {
-        &[Layer::Land]
+    fn render_passes(&self) -> &'static [RenderPass] {
+        &[RenderPass {
+            layer: LAND,
+            shader: include_str!("land.wgsl"),
+        }]
     }
 
     fn tools(&self) -> &'static [Tool] {
         &[Tool {
             id: "paint-land",
-            layer: Layer::Land,
+            layer: LAND,
+            action: ToolAction::Paint { on: 1.0, off: 0.0 },
         }]
     }
 
-    fn generators(&self) -> &'static [&'static str] {
-        &["regions"]
+    fn generators(&self) -> &'static [GeneratorDecl] {
+        &[GeneratorDecl {
+            id: "regions",
+            params: &[GRID],
+        }]
     }
 
-    fn generate(
-        &self,
-        project: &Project,
-        map: MapId,
-        generator: &str,
-        seed: u64,
-    ) -> Result<Command> {
-        if generator != "regions" {
-            return Err(Error::UnknownGenerator(generator.into()));
+    fn generate(&self, project: &Project, map: MapId, run: &GenRun) -> Result<Command> {
+        if run.generator != "regions" {
+            return Err(Error::UnknownGenerator(run.generator.clone()));
         }
+        let seed = run.seed;
+        let grid = run.param(&GRID).round() as u32;
         let s = project
             .maps()
             .iter()
@@ -56,18 +78,18 @@ impl MapKindModule for WorldKind {
         );
         // One site per grid cell, jittered; only sites on land make regions.
         let mut sites = vec![];
-        for j in 0..GRID {
-            for i in 0..GRID {
+        for j in 0..grid {
+            for i in 0..grid {
                 let cell = RootPoint {
-                    x: i as f64 * w / GRID as f64,
-                    y: j as f64 * h / GRID as f64,
+                    x: i as f64 * w / grid as f64,
+                    y: j as f64 * h / grid as f64,
                 };
                 let key = rng::Key::At(cell);
                 let p = RootPoint {
-                    x: cell.x + rng::unit(seed, "world.regions.x", key) * w / GRID as f64,
-                    y: cell.y + rng::unit(seed, "world.regions.y", key) * h / GRID as f64,
+                    x: cell.x + rng::unit(seed, "world.regions.x", key) * w / grid as f64,
+                    y: cell.y + rng::unit(seed, "world.regions.y", key) * h / grid as f64,
                 };
-                if project.layer_value(map, Layer::Land, p)? > Some(0.5) {
+                if project.layer_value(map, LAND, p)? > Some(0.5) {
                     sites.push(p);
                 }
             }
@@ -92,8 +114,7 @@ impl MapKindModule for WorldKind {
             })
             .collect();
         Ok(Command::Generate(Generation {
-            generator: generator.into(),
-            seed,
+            run: run.clone(),
             entities,
             rasters: vec![],
         }))
@@ -103,8 +124,12 @@ impl MapKindModule for WorldKind {
         &["region"]
     }
 
-    fn child_kind(&self) -> Option<MapKind> {
-        Some(MapKind::Region)
+    fn child(&self) -> Option<ChildDecl> {
+        Some(ChildDecl {
+            kind: MapKind::new("region"),
+            scale_factor: 100.0,
+            context: &[LAND],
+        })
     }
 }
 

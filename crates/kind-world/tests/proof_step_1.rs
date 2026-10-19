@@ -1,16 +1,16 @@
 //! Proof step 1 (seam 1): a root world map, paint land and sea, generate crude regions as entities.
 
 use mmc_core::{
-    APP_VERSION, Command, Error, Kinds, Layer, MapId, MapKind, MapKindModule, MapSettings,
+    APP_VERSION, Command, Error, GenRun, Kinds, MapId, MapKind, MapKindModule, MapSettings,
     PaintStroke, Project, RootPoint,
 };
-use mmc_kind_world::WorldKind;
+use mmc_kind_world::{LAND, WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
 
 fn world() -> MapSettings {
     MapSettings {
-        kind: MapKind::World,
+        kind: WORLD,
         width: 512,
         height: 512,
         metres_per_pixel: KM,
@@ -26,7 +26,7 @@ fn at(x: f64, y: f64) -> RootPoint {
 
 fn paint(c: RootPoint, radius_km: f64, value: f32) -> Command {
     Command::Paint(PaintStroke {
-        layer: Layer::Land,
+        layer: LAND,
         points: vec![c],
         radius: radius_km * KM,
         value,
@@ -56,14 +56,15 @@ fn kinds() -> Kinds {
 #[test]
 fn world_kind_declares_its_layers_tools_generators_and_entity_kinds() {
     let kinds = kinds();
-    let w = kinds.get(MapKind::World).unwrap();
-    assert!(kinds.get(MapKind::Settlement).is_none());
-    assert!(w.layers().contains(&Layer::Land));
-    assert!(w.render_layers().contains(&Layer::Land));
-    assert!(w.tools().iter().any(|t| t.layer == Layer::Land));
-    assert_eq!(w.generators(), ["regions"]);
+    let w = kinds.get(WORLD).unwrap();
+    assert!(kinds.get(MapKind::new("settlement")).is_none());
+    assert!(w.layers().contains(&LAND));
+    assert!(w.render_passes().iter().any(|p| p.layer == LAND));
+    assert!(w.tools().iter().any(|t| t.layer == LAND));
+    let gens: Vec<_> = w.generators().iter().map(|g| g.id).collect();
+    assert_eq!(gens, ["regions"]);
     assert_eq!(w.entity_kinds(), ["region"]);
-    assert_eq!(w.child_kind(), Some(MapKind::Region));
+    assert_eq!(w.child().map(|c| c.kind), Some(MapKind::new("region")));
 }
 
 #[test]
@@ -73,11 +74,17 @@ fn proof_step_1_paint_land_and_generate_regions() {
     let map = p.maps()[0].id;
     paint_continent(&mut p, map);
     let kinds = kinds();
-    let w = kinds.get(MapKind::World).unwrap();
+    let w = kinds.get(WORLD).unwrap();
 
-    let cmd = w.generate(&p, map, "regions", 7).unwrap();
-    assert_eq!(cmd, w.generate(&p, map, "regions", 7).unwrap());
-    assert_ne!(cmd, w.generate(&p, map, "regions", 8).unwrap());
+    let cmd = w.generate(&p, map, &GenRun::new("regions", 7)).unwrap();
+    assert_eq!(
+        cmd,
+        w.generate(&p, map, &GenRun::new("regions", 7)).unwrap()
+    );
+    assert_ne!(
+        cmd,
+        w.generate(&p, map, &GenRun::new("regions", 8)).unwrap()
+    );
     p.apply(map, cmd).unwrap();
 
     let regions = p.entities().unwrap();
@@ -106,8 +113,8 @@ fn proof_step_1_paint_land_and_generate_regions() {
     assert_eq!(g.len(), 1);
     assert_eq!(
         (
-            g[0].generator.as_str(),
-            g[0].seed,
+            g[0].run.generator.as_str(),
+            g[0].run.seed,
             g[0].app_version.as_str()
         ),
         ("regions", 7, APP_VERSION)
@@ -139,10 +146,15 @@ fn an_all_sea_world_gets_no_regions_and_unknown_generators_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world()).unwrap();
     let map = p.maps()[0].id;
-    let Command::Generate(g) = WorldKind.generate(&p, map, "regions", 1).unwrap() else {
+    let Command::Generate(g) = WorldKind
+        .generate(&p, map, &GenRun::new("regions", 1))
+        .unwrap()
+    else {
         panic!("not a generation");
     };
     assert!(g.entities.is_empty());
-    let err = WorldKind.generate(&p, map, "rivers", 1).unwrap_err();
+    let err = WorldKind
+        .generate(&p, map, &GenRun::new("rivers", 1))
+        .unwrap_err();
     assert!(matches!(err, Error::UnknownGenerator(_)), "{err}");
 }

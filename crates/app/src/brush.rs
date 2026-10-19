@@ -103,7 +103,7 @@ pub fn plan(tool: Tool, o: &Options, mpp: f64, path: &[Sample]) -> Vec<BrushStro
                 o.size
             };
             out.push(BrushStroke {
-                layer: Layer::Height,
+                layer: Layer::HEIGHT,
                 points: vec![],
                 radius,
                 strength,

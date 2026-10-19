@@ -47,6 +47,7 @@ const MIGRATIONS: &[&str] = &[
     children::MIGRATION,
     delete::MIGRATION,
     resync::MIGRATION,
+    generations::PARAMS_MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

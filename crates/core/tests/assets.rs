@@ -1,11 +1,8 @@
-use mmc_core::{MapKind, MapSettings, Project};
+use mmc_core::{MapKindModule, Project};
+use mmc_kind_world::WorldKind;
 
 fn new_project(dir: &std::path::Path) -> Project {
-    mmc_fixtures::create(
-        &dir.join("wc.sqlite"),
-        MapSettings::default_for(MapKind::World),
-    )
-    .unwrap()
+    mmc_fixtures::create(&dir.join("wc.sqlite"), WorldKind.default_settings()).unwrap()
 }
 
 #[test]

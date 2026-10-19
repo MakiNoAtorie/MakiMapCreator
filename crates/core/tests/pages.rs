@@ -1,14 +1,11 @@
 use mmc_core::{
-    Command, Document, Entity, EntityEdit, EntityId, Error, MapKind, MapSettings, PageEdit,
-    Project, link_markup,
+    Command, Document, Entity, EntityEdit, EntityId, Error, MapKindModule, PageEdit, Project,
+    link_markup,
 };
+use mmc_kind_region::RegionKind;
 
 fn new_project(dir: &std::path::Path) -> Project {
-    mmc_fixtures::create(
-        &dir.join("wc.sqlite"),
-        MapSettings::default_for(MapKind::Region),
-    )
-    .unwrap()
+    mmc_fixtures::create(&dir.join("wc.sqlite"), RegionKind.default_settings()).unwrap()
 }
 
 fn create(p: &mut Project, kind: &str, name: &str) -> EntityId {

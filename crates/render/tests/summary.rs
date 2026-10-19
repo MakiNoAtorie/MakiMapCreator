@@ -1,11 +1,11 @@
 //! Proof step 4 (seam 2): the world map draws each child's summary inside its outline.
 
 use mmc_core::{
-    Command, Generation, Kinds, Layer, MapKind, MapKindModule, MapSettings, NewEntity, PaintStroke,
+    Command, GenRun, Generation, Kinds, MapKindModule, MapSettings, NewEntity, PaintStroke,
     RootPoint,
 };
 use mmc_kind_region::RegionKind;
-use mmc_kind_world::WorldKind;
+use mmc_kind_world::{LAND, WORLD, WorldKind};
 use mmc_render::{Renderer, View};
 
 const KM: f64 = 1000.0;
@@ -20,9 +20,9 @@ fn at(x: f64, y: f64) -> RootPoint {
 #[test]
 fn the_world_render_tints_each_child_outline_with_its_summary() {
     let dir = tempfile::tempdir().unwrap();
-    let kinds = Kinds::new(vec![Box::new(WorldKind), Box::new(RegionKind)]);
+    let _kinds = Kinds::new(vec![Box::new(WorldKind), Box::new(RegionKind)]);
     let settings = MapSettings {
-        kind: MapKind::World,
+        kind: WORLD,
         width: 64,
         height: 64,
         metres_per_pixel: KM,
@@ -32,7 +32,7 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
     p.apply(
         w,
         Command::Paint(PaintStroke {
-            layer: Layer::Land,
+            layer: LAND,
             points: vec![at(20.0, 20.0)],
             radius: 15.0 * KM,
             value: 1.0,
@@ -42,8 +42,7 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
     p.apply(
         w,
         Command::Generate(Generation {
-            generator: "test".into(),
-            seed: 1,
+            run: GenRun::new("test", 1),
             entities: vec![NewEntity {
                 kind: "region".into(),
                 name: "Middle".into(),
@@ -59,10 +58,12 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
     )
     .unwrap();
     let e = p.outlines(w).unwrap()[0].0;
-    let child = p.create_child_map(&kinds, w, e, Some(500.0)).unwrap();
-    let cmd = RegionKind.generate(&p, child, "from-parent", 3).unwrap();
+    let child = p.create_child_map(w, e, Some(500.0)).unwrap();
+    let cmd = RegionKind
+        .generate(&p, child, &GenRun::new("from-parent", 3))
+        .unwrap();
     p.apply(child, cmd).unwrap();
-    let tint = p.child_summaries(&kinds, w).unwrap()[0].summary.tint;
+    let tint = p.child_summaries(w).unwrap()[0].summary.tint;
 
     let mut r = Renderer::warp().unwrap();
     r.register_kind(&WorldKind);
@@ -74,11 +75,7 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
         height: 64,
     };
     let plain = r.render(&r.scene(&p, view).unwrap(), 64).unwrap();
-    let scene = r
-        .scene(&p, view)
-        .unwrap()
-        .with_summaries(&p, &kinds)
-        .unwrap();
+    let scene = r.scene(&p, view).unwrap().with_summaries(&p).unwrap();
     let img = r.render(&scene, 64).unwrap();
     let px = |img: &mmc_render::Image, x: u32, y: u32| {
         let i = ((y * img.width + x) * 4) as usize;
@@ -101,6 +98,6 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
     p.wait_tiles();
     let cached = r.scene_cached(&p, view).unwrap();
     assert!(cached.is_complete());
-    let cached = cached.with_summaries(&p, &kinds).unwrap();
+    let cached = cached.with_summaries(&p).unwrap();
     assert_eq!(r.render(&cached, 64).unwrap(), img);
 }

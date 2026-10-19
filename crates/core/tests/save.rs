@@ -1,15 +1,15 @@
 use std::path::Path;
 
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TILE_SIZE,
+    BrushStroke, Command, Layer, MapId, MapSettings, Project, RootPoint, StrokePoint, TILE_SIZE,
 };
+use mmc_kind_region::REGION;
 
 const MPP: f64 = 10.0;
 
 fn settings() -> MapSettings {
     MapSettings {
-        kind: MapKind::Region,
+        kind: REGION,
         width: 8192,
         height: 8192,
         metres_per_pixel: MPP,
@@ -25,7 +25,7 @@ fn corner(i: usize) -> (f64, f64) {
 fn stroke_at(i: usize) -> Command {
     let (x, y) = corner(i);
     Command::Brush(BrushStroke {
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         points: vec![StrokePoint {
             at: RootPoint { x, y },
             pressure: 1.0,
@@ -43,7 +43,7 @@ fn probes(p: &Project, map: MapId, i: usize) -> Vec<f32> {
         .map(|(dx, dy)| {
             p.layer_value(
                 map,
-                Layer::Height,
+                Layer::HEIGHT,
                 RootPoint {
                     x: x + dx,
                     y: y + dy,

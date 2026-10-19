@@ -4,26 +4,44 @@ mod search;
 pub use search::{LongPages, ManyEntities, word};
 
 use std::path::Path;
+use std::sync::Arc;
 
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Overview, Project, Result, RootPoint,
+    BrushStroke, Command, Kinds, Layer, MapId, MapSettings, Overview, Project, Result, RootPoint,
     StrokePoint,
 };
+use mmc_kind_region::{REGION, RegionKind};
+use mmc_kind_world::WorldKind;
 use mmc_store::{FileReader, Store};
+
+/// The kinds the app ships.
+pub fn kinds() -> Arc<Kinds> {
+    Arc::new(Kinds::new(vec![Box::new(WorldKind), Box::new(RegionKind)]))
+}
 
 /// A new project with its working copy at `working_copy`, on the SQLite store.
 pub fn create(working_copy: &Path, root: MapSettings) -> Result<Project> {
-    Project::create(Box::new(Store::create(working_copy)?), root)
+    create_with(working_copy, kinds(), root)
+}
+
+/// As `create`, with other map kinds.
+pub fn create_with(working_copy: &Path, kinds: Arc<Kinds>, root: MapSettings) -> Result<Project> {
+    Project::create(Box::new(Store::create(working_copy)?), kinds, root)
 }
 
 /// Opens the project `file` into a new working copy.
 pub fn open(file: &Path, working_copy: &Path) -> Result<Project> {
-    Project::load(Box::new(Store::open(file, working_copy)?))
+    open_with(file, working_copy, kinds())
+}
+
+/// As `open`, with other map kinds.
+pub fn open_with(file: &Path, working_copy: &Path, kinds: Arc<Kinds>) -> Result<Project> {
+    Project::load(Box::new(Store::open(file, working_copy)?), kinds)
 }
 
 /// Opens a working copy a crash left behind, in place.
 pub fn restore(working_copy: &Path) -> Result<Project> {
-    Project::load(Box::new(Store::restore(working_copy)?))
+    Project::load(Box::new(Store::restore(working_copy)?), kinds())
 }
 
 pub fn discard_working_copy(working_copy: &Path) -> Result<()> {
@@ -32,7 +50,7 @@ pub fn discard_working_copy(working_copy: &Path) -> Result<()> {
 
 /// The overviews of `layer` in the project `file`, read without opening it.
 pub fn read_overviews(file: &Path, layer: Layer) -> Result<Vec<Overview>> {
-    mmc_core::read_overviews(&FileReader::open(file)?, layer)
+    mmc_core::read_overviews(&FileReader::open(file)?, &kinds(), layer)
 }
 
 /// Splitmix64: small, seeded and stable across platforms.
@@ -85,7 +103,7 @@ impl LargeMap {
 
     pub fn settings(&self) -> MapSettings {
         MapSettings {
-            kind: MapKind::Region,
+            kind: REGION,
             width: self.size,
             height: self.size,
             metres_per_pixel: self.metres_per_pixel,
@@ -108,7 +126,7 @@ impl LargeMap {
             })
             .collect();
         Command::Brush(BrushStroke {
-            layer: Layer::Height,
+            layer: Layer::HEIGHT,
             points,
             radius: self.radius,
             strength: (rng.unit() * 40.0 - 20.0) as f32,
@@ -141,7 +159,7 @@ mod tests {
         };
         let tiles = |name: &str, seed| {
             let (p, m) = small(seed).build(&dir.path().join(name));
-            p.edited_tiles(m, Layer::Height).unwrap()
+            p.edited_tiles(m, Layer::HEIGHT).unwrap()
         };
         let a = tiles("a", 1);
         assert!(!a.is_empty());

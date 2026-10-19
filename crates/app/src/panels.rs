@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use eframe::egui::{self, RichText};
-use mmc_core::{Entity, EntityId, FieldDef, FieldType, Layer, Map, MapId, MapKindModule};
+use mmc_core::{Entity, EntityId, FieldDef, FieldType, GenRun, Layer, Map, MapId, MapKindModule};
 use serde_json::Value;
 
 use crate::i18n::{tr, tr_args};
@@ -28,10 +28,7 @@ pub enum Intent {
     ActivateTab(usize),
     CloseTab(usize),
     CreateChild(EntityId),
-    Generate {
-        generator: &'static str,
-        seed: u64,
-    },
+    Generate(GenRun),
     ToggleLayer(Layer),
     SetMode(Mode),
 }
@@ -332,10 +329,11 @@ pub fn layers(
         return;
     };
     for &l in k.layers() {
-        let drawn = k.render_layers().contains(&l);
+        let drawn = k.render_passes().iter().any(|p| p.layer == l);
+        let derived = k.stages().iter().any(|s| s.writes.contains(&l));
         let mut on = !hidden.contains(&l);
-        let name = tr(layer_id(l))
-            + &if l.is_derived() {
+        let name = tr(&format!("layer-{}", l.as_str()))
+            + &if derived {
                 format!(" {}", tr("layer-derived"))
             } else {
                 String::new()
@@ -347,20 +345,13 @@ pub fn layers(
     }
 }
 
-fn layer_id(l: Layer) -> &'static str {
-    match l {
-        Layer::Height => "layer-height",
-        Layer::Slope => "layer-slope",
-        Layer::Land => "layer-land",
-        Layer::Lock => "layer-lock",
-    }
-}
-
 /// Generate mode: the kind's generators, the seed, the last run, Generate and Regenerate selection.
 pub struct GenInput<'a> {
     pub kind: &'a dyn MapKindModule,
     pub generator: &'a mut usize,
     pub seed: &'a mut u64,
+    /// Parameter values by id; missing ones show the default.
+    pub params: &'a mut Vec<(String, f64)>,
     pub busy: bool,
     pub last: Option<String>,
 }
@@ -369,23 +360,45 @@ pub fn generate_panel(ui: &mut egui::Ui, g: GenInput, t: &Theme, out: &mut Vec<I
     header(ui, "panel-generate", t);
     let gens = g.kind.generators();
     *g.generator = (*g.generator).min(gens.len().saturating_sub(1));
-    for (i, id) in gens.iter().enumerate() {
-        ui.radio_value(g.generator, i, tr(&format!("generator-{id}")));
+    for (i, d) in gens.iter().enumerate() {
+        ui.radio_value(g.generator, i, tr(&format!("generator-{}", d.id)));
     }
     ui.horizontal(|ui| {
         ui.label(tr("generate-seed"));
         ui.add(egui::DragValue::new(g.seed));
     });
+    if let Some(d) = gens.get(*g.generator) {
+        for p in d.params {
+            let at = match g.params.iter().position(|(id, _)| id == p.id) {
+                Some(i) => i,
+                None => {
+                    g.params.push((p.id.into(), p.default));
+                    g.params.len() - 1
+                }
+            };
+            ui.horizontal(|ui| {
+                ui.label(tr(&format!("param-{}", p.id)));
+                ui.add(egui::DragValue::new(&mut g.params[at].1).range(p.min..=p.max));
+            });
+        }
+    }
     if let Some(last) = g.last {
         ui.weak(last);
     }
     ui.add_space(4.0);
     ui.add_enabled_ui(!g.busy && !gens.is_empty(), |ui| {
         if ui.button(tr("generate-run")).clicked() {
-            out.push(Intent::Generate {
-                generator: gens[*g.generator],
+            let d = gens[*g.generator];
+            out.push(Intent::Generate(GenRun {
+                generator: d.id.into(),
                 seed: *g.seed,
-            });
+                params: g
+                    .params
+                    .iter()
+                    .filter(|(id, _)| d.params.iter().any(|p| p.id == id))
+                    .cloned()
+                    .collect(),
+            }));
         }
     });
     // ponytail: core has no masked regeneration yet (#16); the button stays off until it does.

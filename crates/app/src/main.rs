@@ -21,8 +21,8 @@ use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, Sense, TextStyle};
 use i18n::{tr, tr_args};
 use input::{DuplicatePressFilter, PenApi, PenEvent, Phase};
 use mmc_core::{
-    Command, Entity, EntityEdit, EntityId, FieldDef, Kinds, Layer, Map, MapId, MapKind,
-    MapSettings, Project, RootPoint,
+    Command, Entity, EntityEdit, EntityId, FieldDef, Kinds, Layer, Map, MapId, MapKindModule,
+    MapSettings, Project, RootPoint, ToolAction,
 };
 use mmc_store::Store;
 use paint::Painter;
@@ -99,8 +99,8 @@ impl Snapshot {
             tr_args(
                 "generate-last",
                 &[
-                    ("generator", &g.generator),
-                    ("seed", &g.seed.to_string()),
+                    ("generator", &g.run.generator),
+                    ("seed", &g.run.seed.to_string()),
                     ("version", &g.app_version),
                 ],
             )
@@ -140,6 +140,7 @@ struct App {
     page: Option<(EntityId, String)>,
     generator: usize,
     seed: u64,
+    params: Vec<(String, f64)>,
     search: Search,
     search_names: Vec<(EntityId, String)>,
     panels_hidden: bool,
@@ -175,18 +176,18 @@ impl App {
         theme::install_fonts(&cc.egui_ctx);
         Theme::new(dark).apply(&cc.egui_ctx, dark);
         let project: SharedProject = Arc::new(Mutex::new(None));
+        let kinds = Arc::new(Kinds::new(vec![
+            Box::new(mmc_kind_world::WorldKind),
+            Box::new(mmc_kind_region::RegionKind),
+        ]));
         let canvas = cc
             .wgpu_render_state
             .as_ref()
-            .map(|rs| Canvas::new(rs, project.clone(), cc.egui_ctx.clone()));
-        let kinds = Kinds::new(vec![
-            Box::new(mmc_kind_world::WorldKind),
-            Box::new(mmc_kind_region::RegionKind),
-        ]);
+            .map(|rs| Canvas::new(rs, project.clone(), kinds.clone(), cc.egui_ctx.clone()));
         Self {
             dark,
             project,
-            kinds: Arc::new(kinds),
+            kinds,
             doc: None,
             snap: Snapshot::default(),
             dirty: false,
@@ -198,6 +199,7 @@ impl App {
             page: None,
             generator: 0,
             seed: 1,
+            params: vec![],
             search: Search::default(),
             search_names: vec![],
             panels_hidden: false,
@@ -225,18 +227,19 @@ impl App {
     fn run(&mut self, action: AppCommand) {
         match action {
             AppCommand::New => {
+                let root = mmc_kind_region::RegionKind.default_settings();
+                let kinds = self.kinds.clone();
                 let r = Store::create(&working_copy())
                     .map_err(Into::into)
-                    .and_then(|s| {
-                        Project::create(Box::new(s), MapSettings::default_for(MapKind::Region))
-                    });
+                    .and_then(|s| Project::create(Box::new(s), kinds, root));
                 self.replace(r.map(|p| (p, None)), "error-new");
             }
             AppCommand::Open => {
                 if let Some(file) = file_dialog().pick_file() {
+                    let kinds = self.kinds.clone();
                     let r = Store::open(&file, &working_copy())
                         .map_err(Into::into)
-                        .and_then(|s| Project::load(Box::new(s)));
+                        .and_then(|s| Project::load(Box::new(s), kinds));
                     self.replace(r.map(|p| (p, Some(file))), "error-open");
                 }
             }
@@ -363,15 +366,15 @@ impl App {
 
     fn spawn(
         &mut self,
-        work: impl FnOnce(&mut Project, &Kinds) -> mmc_core::Result<Done> + Send + 'static,
+        work: impl FnOnce(&mut Project) -> mmc_core::Result<Done> + Send + 'static,
     ) {
         if self.job.is_some() {
             return;
         }
-        let (project, kinds) = (self.project.clone(), self.kinds.clone());
+        let project = self.project.clone();
         self.job = Some(std::thread::spawn(move || {
             match project.lock().unwrap().as_mut() {
-                Some(p) => work(p, &kinds),
+                Some(p) => work(p),
                 None => Err(mmc_core::Error::InvalidChild("no project is open")),
             }
         }));
@@ -506,23 +509,21 @@ impl App {
                 }
                 Intent::CloseTab(i) => self.tabs.close(i),
                 Intent::CreateChild(entity) => {
-                    self.spawn(move |p, kinds| {
-                        p.create_child_map(kinds, map, entity, None)
-                            .map(Done::Child)
-                    });
+                    self.spawn(move |p| p.create_child_map(map, entity, None).map(Done::Child));
                 }
-                Intent::Generate { generator, seed } => {
-                    self.spawn(move |p, kinds| {
+                Intent::Generate(run) => {
+                    let kinds = self.kinds.clone();
+                    self.spawn(move |p| {
                         let kind = p
                             .maps()
                             .iter()
                             .find(|m| m.id == map)
                             .map(|m| m.settings.kind)
                             .ok_or(mmc_core::Error::UnknownMap(map))?;
-                        let k = kinds
-                            .get(kind)
-                            .ok_or_else(|| mmc_core::Error::UnknownGenerator(generator.into()))?;
-                        let cmd = k.generate(p, map, generator, seed)?;
+                        let k = kinds.get(kind).ok_or_else(|| {
+                            mmc_core::Error::UnknownGenerator(run.generator.clone())
+                        })?;
+                        let cmd = k.generate(p, map, &run)?;
                         p.apply(map, cmd)?;
                         Ok(Done::Generated(map))
                     });
@@ -627,7 +628,7 @@ impl App {
             && self.doc.as_ref().is_some_and(|d| {
                 self.kinds
                     .get(d.settings.kind)
-                    .is_some_and(|k| k.tools().iter().any(|t| t.layer == Layer::Height))
+                    .is_some_and(|k| k.tools().iter().any(|t| t.action == ToolAction::Brush))
             })
     }
 
@@ -654,7 +655,7 @@ impl App {
                 entity: e,
                 defs: self.snap.defs.get(&e.kind)?,
                 entities: &self.snap.entities,
-                can_child: kind.is_some_and(|k| k.child_kind().is_some())
+                can_child: kind.is_some_and(|k| k.child().is_some())
                     && self.snap.outlines.iter().any(|o| o.0 == e.id),
             })
         });
@@ -797,15 +798,15 @@ impl App {
         {
             self.elevation = self
                 .hover
-                .and_then(|r| p.layer_value(map, Layer::Height, r).ok().flatten());
+                .and_then(|r| p.layer_value(map, Layer::HEIGHT, r).ok().flatten());
         }
         let layers: Vec<Layer> = self
             .kinds
             .get(s.kind)
             .map(|k| {
-                k.render_layers()
+                k.render_passes()
                     .iter()
-                    .copied()
+                    .map(|p| p.layer)
                     .filter(|l| !self.hidden.contains(l))
                     .collect()
             })
@@ -1041,6 +1042,7 @@ impl eframe::App for App {
                                     kind,
                                     generator: &mut self.generator,
                                     seed: &mut self.seed,
+                                    params: &mut self.params,
                                     busy,
                                     last,
                                 },
@@ -1095,9 +1097,10 @@ impl eframe::App for App {
         {
             self.leftovers.remove(0);
             if restore {
+                let kinds = self.kinds.clone();
                 let r = Store::restore(&leftover)
                     .map_err(Into::into)
-                    .and_then(|s| Project::load(Box::new(s)));
+                    .and_then(|s| Project::load(Box::new(s), kinds));
                 self.replace(r.map(|p| (p, None)), "error-restore");
             } else if let Err(e) = Store::discard(&leftover) {
                 self.message = Some(tr_args("error-restore", &[("error", &e.to_string())]));

@@ -6,6 +6,10 @@ use rusqlite::{Connection, params};
 use crate::{Result, Store};
 
 // Outlines have no key on entities, so a generation and its entities are written in any order.
+/// Generator parameter values of each run, a JSON object (ADR-0021).
+pub(crate) const PARAMS_MIGRATION: &str =
+    "ALTER TABLE generations ADD COLUMN params TEXT NOT NULL DEFAULT '{}';";
+
 pub(crate) const MIGRATION: &str = "
     CREATE TABLE generations (
         id INTEGER PRIMARY KEY,
@@ -34,7 +38,7 @@ impl Store {
     /// Generations of a map, oldest first.
     pub fn generations(&self, map_id: i64) -> Result<Vec<GenerationRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, map_id, generator, seed, app_version FROM generations
+            "SELECT id, map_id, generator, seed, params, app_version FROM generations
              WHERE map_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([map_id], |r| {
@@ -43,7 +47,8 @@ impl Store {
                 map_id: r.get(1)?,
                 generator: r.get(2)?,
                 seed: r.get(3)?,
-                app_version: r.get(4)?,
+                params: r.get(4)?,
+                app_version: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -84,9 +89,9 @@ pub(crate) fn write_outline(tx: &Connection, o: &OutlineRecord, present: bool) -
 pub(crate) fn write_generation(tx: &Connection, g: &GenerationRecord, present: bool) -> Result<()> {
     if present {
         tx.execute(
-            "INSERT OR REPLACE INTO generations (id, map_id, generator, seed, app_version)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![g.id, g.map_id, g.generator, g.seed, g.app_version],
+            "INSERT OR REPLACE INTO generations (id, map_id, generator, seed, params, app_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![g.id, g.map_id, g.generator, g.seed, g.params, g.app_version],
         )?;
     } else {
         tx.execute("DELETE FROM generations WHERE id = ?1", [g.id])?;

@@ -1,8 +1,9 @@
-use mmc_core::{MapKind, MapSettings};
+use mmc_core::{MapKindModule, MapSettings};
+use mmc_kind_region::{REGION, RegionKind};
 
 #[test]
 fn default_region_is_8192_at_10_metres_per_pixel() {
-    let s = MapSettings::default_for(MapKind::Region);
+    let s = RegionKind.default_settings();
     assert_eq!((s.width, s.height, s.metres_per_pixel), (8192, 8192, 10.0));
 }
 
@@ -12,7 +13,7 @@ fn create_save_reopen_keeps_map_tree_and_settings() {
     let docs = tempfile::tempdir().unwrap();
     let file = docs.path().join("my world.mmc");
     let settings = MapSettings {
-        kind: MapKind::Region,
+        kind: REGION,
         width: 2048,
         height: 1024,
         metres_per_pixel: 25.0,

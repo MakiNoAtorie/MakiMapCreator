@@ -82,12 +82,16 @@ fn key(id: TileId) -> TileKey {
 }
 
 /// Reads the overviews of `layer` from a project file without opening it, one per map.
-pub fn read_overviews(reader: &dyn ProjectReader, layer: Layer) -> Result<Vec<Overview>> {
+pub fn read_overviews(
+    reader: &dyn ProjectReader,
+    kinds: &crate::Kinds,
+    layer: Layer,
+) -> Result<Vec<Overview>> {
     reader
         .maps()?
         .into_iter()
         .map(|r| {
-            let map = Map::from_record(r)?;
+            let map = Map::from_record(r, kinds)?;
             let level = top_level(&map.settings);
             let id = TileId {
                 map: map.id,
@@ -156,7 +160,7 @@ impl Project {
     /// Drops cached tiles of derived layers after a rebuild replaced them.
     pub(crate) fn forget_derived_tiles(&self) {
         if let Some(cache) = self.cache.get() {
-            cache.forget(|k| k.layer.is_derived());
+            cache.forget(|k| self.is_derived(MapId(k.map_id), k.layer).unwrap_or(false));
         }
     }
 

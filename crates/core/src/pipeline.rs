@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use crate::persist::{TileKey, TileOpener, TileRecord, TileStore};
 
 use crate::jobs::{Cancelled, Jobs};
-use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode, tile_of};
+use crate::layer::{Layer, decode, encode};
 use crate::pyramid::{Level, levels_above};
 use crate::undo::Change;
 use crate::{Error, MapId, Project, Result};
@@ -24,37 +24,35 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
     }
 }
 
-/// Decoded level-0 tiles of a layer; a missing tile is all zeros.
-type Raster = BTreeMap<(u32, u32), Vec<f32>>;
+/// Decoded level-0 tiles of a layer by (tx, ty); a missing tile is all zeros.
+pub type Raster = BTreeMap<(u32, u32), Vec<f32>>;
 
-struct Ctx<'a> {
-    width: u32,
-    height: u32,
-    metres_per_pixel: f64,
-    threads: usize,
-    cancelled: Cancelled<'a>,
-    layers: HashMap<Layer, Raster>,
+/// What a stage reads: the map's size and the rasters of the layers it declared.
+pub struct StageInput<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub metres_per_pixel: f64,
+    /// Threads for `par_map`.
+    pub threads: usize,
+    /// True once a newer rebuild replaced this one; the stage then returns `None`.
+    pub cancelled: &'a (dyn Fn() -> bool + Sync),
+    pub layers: HashMap<Layer, Raster>,
 }
 
-struct Stage {
-    reads: &'static [Layer],
-    writes: &'static [Layer],
+/// A pipeline stage a map kind declares (ADR-0018).
+pub struct Stage {
+    pub reads: &'static [Layer],
+    pub writes: &'static [Layer],
     /// One raster per `writes` entry; `None` when cancelled.
-    run: fn(&Ctx) -> Option<Vec<Raster>>,
+    pub run: fn(&StageInput) -> Option<Vec<Raster>>,
 }
 
-const STAGES: &[Stage] = &[Stage {
-    reads: &[Layer::Height],
-    writes: &[Layer::Slope],
-    run: slope,
-}];
-
-pub(crate) fn writes(layer: Layer) -> bool {
-    STAGES.iter().any(|s| s.writes.contains(&layer))
+pub(crate) fn writes(stages: &[Stage], layer: Layer) -> bool {
+    stages.iter().any(|s| s.writes.contains(&layer))
 }
 
-fn decls() -> Vec<(&'static [Layer], &'static [Layer])> {
-    STAGES.iter().map(|s| (s.reads, s.writes)).collect()
+fn decls(stages: &[Stage]) -> Vec<(&'static [Layer], &'static [Layer])> {
+    stages.iter().map(|s| (s.reads, s.writes)).collect()
 }
 
 /// Stage indices so that each stage runs after the stages that write what it reads.
@@ -85,8 +83,9 @@ fn dirty<L: PartialEq + Clone>(decls: &[(&[L], &[L])], changed: &[L]) -> Vec<boo
     out
 }
 
-/// `f` over `items` on `threads` scoped threads; output in item order, so it never depends on scheduling.
-fn par_map<T: Sync, R: Send>(
+/// `f` over `items` on `threads` scoped threads; output in item order, so it never depends on
+/// scheduling. `None` when `cancelled` became true.
+pub fn par_map<T: Sync, R: Send>(
     threads: usize,
     items: &[T],
     cancelled: Cancelled,
@@ -120,65 +119,9 @@ fn par_map<T: Sync, R: Send>(
     Some(out.into_iter().map(|p| p.1).collect())
 }
 
-/// Gradient magnitude of height by central differences, clamped at the map edge.
-fn slope(cx: &Ctx) -> Option<Vec<Raster>> {
-    let h = &cx.layers[&Layer::Height];
-    let (w, hh) = (cx.width as i64, cx.height as i64);
-    let (ntx, nty) = (
-        cx.width.div_ceil(TILE_SIZE) as i64,
-        cx.height.div_ceil(TILE_SIZE) as i64,
-    );
-    let mut want = BTreeSet::new();
-    for &(tx, ty) in h.keys() {
-        for (dx, dy) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (dx, dy))) {
-            let (x, y) = (tx as i64 + dx, ty as i64 + dy);
-            if (0..ntx).contains(&x) && (0..nty).contains(&y) {
-                want.insert((x as u32, y as u32));
-            }
-        }
-    }
-    let want: Vec<(u32, u32)> = want.into_iter().collect();
-    let at = |x: i64, y: i64| {
-        let (t, i) = tile_of(x.clamp(0, w - 1) as u32, y.clamp(0, hh - 1) as u32);
-        h.get(&t).map_or(0.0, |v| v[i])
-    };
-    let k = (1.0 / (2.0 * cx.metres_per_pixel)) as f32;
-    let tiles = par_map(cx.threads, &want, cx.cancelled, |&(tx, ty)| {
-        // Height with a one-pixel border, so the inner loop needs no lookups.
-        let (ts, n) = (TILE_SIZE as usize, TILE_SIZE as usize + 2);
-        let (x0, y0) = ((tx * TILE_SIZE) as i64 - 1, (ty * TILE_SIZE) as i64 - 1);
-        let centre = h.get(&(tx, ty));
-        let mut pad = vec![0.0f32; n * n];
-        for py in 0..n {
-            for px in 0..n {
-                let (gx, gy) = (x0 + px as i64, y0 + py as i64);
-                let inner = (1..=ts).contains(&px) && (1..=ts).contains(&py) && gx < w && gy < hh;
-                pad[py * n + px] = match (inner, centre) {
-                    (true, Some(c)) => c[(py - 1) * ts + px - 1],
-                    (true, None) => 0.0,
-                    (false, _) => at(gx, gy),
-                };
-            }
-        }
-        let mut out = vec![0.0f32; TILE_LEN];
-        for py in 0..ts {
-            if y0 + 1 + py as i64 >= hh {
-                break;
-            }
-            for px in 0..ts.min((w - x0 - 1) as usize) {
-                let c = (py + 1) * n + px + 1;
-                let dx = (pad[c + 1] - pad[c - 1]) * k;
-                let dy = (pad[c + n] - pad[c - n]) * k;
-                out[py * ts + px] = (dx * dx + dy * dy).sqrt();
-            }
-        }
-        out
-    })?;
-    Some(vec![want.into_iter().zip(tiles).collect()])
-}
-
 struct MapJob {
     id: i64,
+    stages: &'static [Stage],
     width: u32,
     height: u32,
     metres_per_pixel: f64,
@@ -196,6 +139,7 @@ type Output = (
     Box<dyn TileStore>,
     i64,
     usize,
+    Vec<Layer>,
     Vec<(Layer, Encoded, Vec<Level>)>,
 );
 
@@ -229,7 +173,7 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
         Ok(r) => r,
         Err(e) => return Some(Err(e)),
     };
-    let mut cx = Ctx {
+    let mut cx = StageInput {
         width: job.width,
         height: job.height,
         metres_per_pixel: job.metres_per_pixel,
@@ -238,8 +182,11 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
         layers: HashMap::new(),
     };
     let mut written = vec![];
-    for i in order(&decls()).into_iter().filter(|&i| job.dirty[i]) {
-        let stage = &STAGES[i];
+    for i in order(&decls(job.stages))
+        .into_iter()
+        .filter(|&i| job.dirty[i])
+    {
+        let stage = &job.stages[i];
         for &l in stage.reads {
             if cx.layers.contains_key(&l) {
                 continue;
@@ -276,19 +223,20 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
             above,
         ));
     }
-    Some(Ok((reader, job.id, job.threads, out)))
+    let derived = job.stages.iter().flat_map(|s| s.writes).copied().collect();
+    Some(Ok((reader, job.id, job.threads, derived, out)))
 }
 
 /// Writes only the tiles whose bytes changed, in one transaction, so readers see the old or
 /// the new state. Runs under the jobs lock, so the digests match the working copy.
 fn commit(committed: &Committed, out: Result<Output>) -> Result<()> {
-    let (conn, map, threads, layers) = out?;
+    let (conn, map, threads, derived, layers) = out?;
     let mut committed = committed.lock().unwrap();
     let mut known = match committed.take() {
         Some(k) => k,
         None => {
             let mut k = HashMap::new();
-            for l in Layer::ALL.into_iter().filter(|l| l.is_derived()) {
+            for l in derived {
                 let tiles = conn
                     .layer_tiles_until(map, l, &|| false)?
                     .unwrap_or_default();
@@ -379,8 +327,8 @@ impl Project {
 
     /// Starts a full rebuild of all derived layers of `map` in the background.
     pub fn rebuild_derived(&mut self, map: MapId) -> Result<()> {
-        self.map(map)?;
-        self.request(map, vec![true; STAGES.len()]);
+        let n = self.kind_of(map)?.stages().len();
+        self.request(map, vec![true; n]);
         Ok(())
     }
 
@@ -419,8 +367,12 @@ impl Project {
         Ok(())
     }
 
-    pub(crate) fn refuse_derived(change: &Change) -> Result<()> {
-        match changed_layers(change).into_iter().find(|l| l.is_derived()) {
+    pub(crate) fn refuse_derived(&self, map: MapId, change: &Change) -> Result<()> {
+        let stages = self.kind_of(map)?.stages();
+        match changed_layers(change)
+            .into_iter()
+            .find(|l| writes(stages, *l))
+        {
             Some(l) => Err(Error::DerivedLayer(l)),
             None => Ok(()),
         }
@@ -428,23 +380,29 @@ impl Project {
 
     /// Marks stages downstream of the written layers dirty and starts a rebuild.
     pub(crate) fn after_write(&mut self, map: MapId, change: &Change) {
-        self.request(map, dirty(&decls(), &changed_layers(change)));
+        let Ok(kind) = self.kind_of(map) else {
+            return;
+        };
+        let dirty = dirty(&decls(kind.stages()), &changed_layers(change));
+        self.request(map, dirty);
     }
 
     fn request(&mut self, map: MapId, dirty: Vec<bool>) {
         if !dirty.contains(&true) {
             return;
         }
-        let Ok(s) = self.map(map).map(|m| m.settings) else {
+        let (Ok(s), Ok(kind)) = (self.map(map).map(|m| m.settings), self.kind_of(map)) else {
             return;
         };
+        let stages = kind.stages();
         let st = self.pipeline.maps.entry(map).or_default();
-        st.dirty.resize(STAGES.len(), false);
+        st.dirty.resize(stages.len(), false);
         for (d, n) in st.dirty.iter_mut().zip(dirty) {
             *d |= n;
         }
         let job = MapJob {
             id: map.0,
+            stages,
             width: s.width,
             height: s.height,
             metres_per_pixel: s.metres_per_pixel,

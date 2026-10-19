@@ -9,5 +9,7 @@ serde_json = "1.0.154"
 zstd = "0.14.3"
 
 [dev-dependencies]
+mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
+mmc-kind-world = { version = "0.1.0", path = "../kind-world" }
 mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
 tempfile = "3.27.0"

@@ -98,6 +98,8 @@ pub struct GenerationRecord {
     pub generator: String,
     /// The u64 seed, bit for bit.
     pub seed: i64,
+    /// Parameter values, a JSON object; opaque to the backend.
+    pub params: String,
     pub app_version: String,
 }
 

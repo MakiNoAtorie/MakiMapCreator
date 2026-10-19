@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
+use mmc_core::MapKindModule;
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TileId,
+    BrushStroke, Command, Layer, MapId, MapSettings, Project, RootPoint, StrokePoint, TileId,
 };
-use mmc_render::{HeightPass, Image, Renderer, View, export_png};
+use mmc_kind_region::{REGION, RegionKind};
+use mmc_render::{Image, Renderer, ShaderPass, View, export_png};
 
 /// BLAKE3 of the RGBA bytes of `fixture_view()` under WARP. Hashes are per backend.
 const WARP_HASH: &str = "7da03512c4be8aaea6d3814623f714fcf857b012f01a5059f98d444c9cd96288";
 
 fn fixture(dir: &std::path::Path) -> (Project, MapId) {
     let settings = MapSettings {
-        kind: MapKind::Region,
+        kind: REGION,
         width: 600,
         height: 400,
         metres_per_pixel: 10.0,
@@ -26,7 +27,7 @@ fn fixture(dir: &std::path::Path) -> (Project, MapId) {
         p.apply(
             map,
             Command::Brush(BrushStroke {
-                layer: Layer::Height,
+                layer: Layer::HEIGHT,
                 points: vec![StrokePoint {
                     at: RootPoint { x, y },
                     pressure: 1.0,
@@ -55,8 +56,8 @@ fn view(map: MapId, width: u32, height: u32) -> View {
 
 fn renderer() -> Renderer {
     let mut r = Renderer::warp().unwrap();
-    let pass = HeightPass::new(r.device());
-    r.register(Layer::Height, Box::new(pass));
+    let pass = ShaderPass::new(r.device(), RegionKind.render_passes()[0].shader);
+    r.register(Layer::HEIGHT, Box::new(pass));
     r
 }
 
@@ -165,7 +166,7 @@ fn a_cached_scene_draws_a_stand_in_then_the_full_tiles() {
     let top = p.top_level(map).unwrap();
     p.cached_tile(TileId {
         map,
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         level: top,
         tx: 0,
         ty: 0,
@@ -204,7 +205,7 @@ fn the_overview_draws_a_first_frame_before_the_project_opens() {
     p.wait_for_save().unwrap();
     p.close().unwrap();
 
-    let overviews = mmc_fixtures::read_overviews(&file, Layer::Height).unwrap();
+    let overviews = mmc_fixtures::read_overviews(&file, Layer::HEIGHT).unwrap();
     let r = renderer();
     let scene = r
         .overview_scene(&overviews[0], view(map, 300, 200))

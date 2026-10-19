@@ -25,7 +25,6 @@ empty-text = No project is open.
 
 map-kind-world = World map
 map-kind-region = Region map
-map-kind-settlement = Settlement map
 
 status-cursor = x { $x } m   y { $y } m
 status-outside = Cursor outside map
@@ -71,6 +70,8 @@ page-empty = This page is empty.
 generator-regions = Regions
 generator-from-parent = From parent
 generate-seed = Seed
+param-sites-per-side = Sites per side
+param-amplitude = Noise amplitude (m)
 generate-run = Generate
 generate-regenerate = Regenerate selection
 generate-regenerate-unavailable = Core has no masked regeneration yet.

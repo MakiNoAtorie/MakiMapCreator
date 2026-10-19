@@ -2,14 +2,27 @@
 //! root-space noise (ADR-0002, ADR-0008).
 
 use mmc_core::{
-    Command, Error, Generation, Layer, MapId, MapKind, MapKindModule, Project, Result, RootPoint,
-    Summary, TILE_SIZE, Tool, rng,
+    Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind, MapKindModule,
+    MapSettings, Param, Project, RenderPass, Result, RootPoint, Stage, Summary, TILE_SIZE, Tool,
+    ToolAction, rng,
 };
+
+mod slope;
+pub use slope::SLOPE;
+
+pub const REGION: MapKind = MapKind::new("region");
+/// The parent's land layer (world map), read from the parent context.
+const PARENT_LAND: Layer = Layer::new("land");
 
 /// Height step across the parent coast, metres: land 1 maps to +RELIEF/2, sea to -RELIEF/2.
 const RELIEF: f32 = 400.0;
-/// Noise amplitude, metres. Below RELIEF/2, so a coast moves at most about one parent cell.
-const AMPLITUDE: f32 = 200.0;
+/// Noise amplitude, metres. At most RELIEF/2, so a coast moves at most about one parent cell.
+const AMPLITUDE: Param = Param {
+    id: "amplitude",
+    default: 200.0,
+    min: 0.0,
+    max: 200.0,
+};
 /// Noise lattice cells, root-space metres, coarse first.
 const OCTAVES: [(f64, f32); 2] = [(4000.0, 0.65), (1000.0, 0.35)];
 
@@ -17,51 +30,67 @@ pub struct RegionKind;
 
 impl MapKindModule for RegionKind {
     fn kind(&self) -> MapKind {
-        MapKind::Region
+        REGION
+    }
+
+    fn default_settings(&self) -> MapSettings {
+        MapSettings {
+            kind: REGION,
+            width: 8192,
+            height: 8192,
+            metres_per_pixel: 10.0,
+        }
     }
 
     fn layers(&self) -> &'static [Layer] {
-        &[Layer::Height, Layer::Slope, Layer::Lock]
+        &[Layer::HEIGHT, SLOPE, Layer::LOCK]
     }
 
-    fn render_layers(&self) -> &'static [Layer] {
-        &[Layer::Height]
+    fn stages(&self) -> &'static [Stage] {
+        slope::STAGES
+    }
+
+    fn render_passes(&self) -> &'static [RenderPass] {
+        &[RenderPass {
+            layer: Layer::HEIGHT,
+            shader: include_str!("height.wgsl"),
+        }]
     }
 
     fn tools(&self) -> &'static [Tool] {
         &[
             Tool {
                 id: "brush-height",
-                layer: Layer::Height,
+                layer: Layer::HEIGHT,
+                action: ToolAction::Brush,
             },
             Tool {
                 id: "paint-lock",
-                layer: Layer::Lock,
+                layer: Layer::LOCK,
+                action: ToolAction::Paint { on: 1.0, off: 0.0 },
             },
         ]
     }
 
-    fn generators(&self) -> &'static [&'static str] {
-        &["from-parent"]
+    fn generators(&self) -> &'static [GeneratorDecl] {
+        &[GeneratorDecl {
+            id: "from-parent",
+            params: &[AMPLITUDE],
+        }]
     }
 
-    fn generate(
-        &self,
-        project: &Project,
-        map: MapId,
-        generator: &str,
-        seed: u64,
-    ) -> Result<Command> {
-        if generator != "from-parent" {
-            return Err(Error::UnknownGenerator(generator.into()));
+    fn generate(&self, project: &Project, map: MapId, run: &GenRun) -> Result<Command> {
+        if run.generator != "from-parent" {
+            return Err(Error::UnknownGenerator(run.generator.clone()));
         }
+        let (seed, amplitude) = (run.seed, run.param(&AMPLITUDE) as f32);
         let m = project
             .maps()
             .iter()
             .find(|m| m.id == map)
             .ok_or(Error::UnknownMap(map))?;
         let land = project
-            .parent_context(map, Layer::Land)?
+            .parent_context(map, PARENT_LAND)?
             .ok_or(Error::InvalidChild("the map has no parent land to refine"))?;
         let s = m.settings;
         let mpp = s.metres_per_pixel;
@@ -83,15 +112,14 @@ impl MapKindModule for RegionKind {
                         .iter()
                         .map(|&(cell, w)| w * rng::noise(seed, "region.height", at, cell) as f32)
                         .sum();
-                    (land.sample(at) - 0.5) * RELIEF + (n - 0.5) * AMPLITUDE
+                    (land.sample(at) - 0.5) * RELIEF + (n - 0.5) * amplitude
                 })
             })
             .collect();
         Ok(Command::Generate(Generation {
-            generator: generator.into(),
-            seed,
+            run: run.clone(),
             entities: vec![],
-            rasters: vec![(Layer::Height, values)],
+            rasters: vec![(Layer::HEIGHT, values)],
         }))
     }
 
@@ -111,7 +139,7 @@ impl MapKindModule for RegionKind {
         // ponytail: reads every tile on each call; cache summaries when large parents redraw slowly.
         for ty in 0..s.height.div_ceil(TILE_SIZE) {
             for tx in 0..s.width.div_ceil(TILE_SIZE) {
-                let tile = project.layer_tile(map, Layer::Height, tx, ty)?;
+                let tile = project.layer_tile(map, Layer::HEIGHT, tx, ty)?;
                 for y in (0..TILE_SIZE).step_by(SUMMARY_STEP) {
                     for x in (0..TILE_SIZE).step_by(SUMMARY_STEP) {
                         let (px, py) = (tx * TILE_SIZE + x, ty * TILE_SIZE + y);

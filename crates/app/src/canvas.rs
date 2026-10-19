@@ -4,8 +4,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions};
-use mmc_core::{Layer, MapId, Project};
-use mmc_render::{HeightPass, Image, LandPass, Renderer, View};
+use mmc_core::{Kinds, Layer, MapId, Project};
+use mmc_render::{Image, Renderer, ShaderPass, View};
 
 use crate::view::MapView;
 
@@ -21,13 +21,16 @@ struct Req {
     layers: Vec<Layer>,
 }
 
-fn renderer_for(rs: &eframe::egui_wgpu::RenderState, layers: &[Layer]) -> Renderer {
+/// A renderer with the draw passes of `layers`, taken from the kinds that declare them.
+fn renderer_for(rs: &eframe::egui_wgpu::RenderState, kinds: &Kinds, layers: &[Layer]) -> Renderer {
     let mut r = Renderer::from_device(rs.device.clone(), rs.queue.clone());
     for &l in layers {
-        match l {
-            Layer::Height => r.register(l, Box::new(HeightPass::new(&rs.device))),
-            Layer::Land => r.register(l, Box::new(LandPass::new(&rs.device))),
-            Layer::Slope | Layer::Lock => {}
+        let pass = kinds
+            .all()
+            .flat_map(|k| k.render_passes())
+            .find(|p| p.layer == l);
+        if let Some(p) = pass {
+            r.register(l, Box::new(ShaderPass::new(&rs.device, p.shader)));
         }
     }
     r
@@ -48,6 +51,7 @@ impl Canvas {
     pub fn new(
         render_state: &eframe::egui_wgpu::RenderState,
         project: SharedProject,
+        kinds: std::sync::Arc<Kinds>,
         ctx: egui::Context,
     ) -> Canvas {
         let rs = render_state.clone();
@@ -64,7 +68,8 @@ impl Canvas {
                 let at = match renderers.iter().position(|r| r.0 == req.layers) {
                     Some(i) => i,
                     None => {
-                        renderers.push((req.layers.clone(), renderer_for(&rs, &req.layers)));
+                        renderers
+                            .push((req.layers.clone(), renderer_for(&rs, &kinds, &req.layers)));
                         renderers.len() - 1
                     }
                 };

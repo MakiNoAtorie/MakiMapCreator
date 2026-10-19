@@ -42,7 +42,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Raster tiles are `TILE_SIZE` (256) px squares; key (map_id, layer, level, tx, ty), level 0 = full resolution. A missing tile row means all zeros, not edited.
 - Core owns the tile format (f32 little-endian, zstd level 3). Store keeps tile blobs as opaque bytes.
 - Every edit is a `Command`. A command produces before/after records; undo writes the before records, redo the after records, each in one transaction.
-- A new raster layer adds a `Layer` variant. Command and undo types never name a layer.
+- `Layer` and `MapKind` are open ids (`Layer::new("water")`). Core defines only `Layer::HEIGHT` and `Layer::LOCK`; a kind crate defines its own layers and kind id. Command and undo types never name a layer.
 - Undo is per map, in memory, bounded by `UNDO_LIMIT`.
 - Deleting map M goes to the history of M's parent; for a root map, to the project history (`undo_project`, key `MapId(0)`). A `Change` variant that deletes maps is handled in `delete::history_key`.
 - Deleted maps are flagged, not removed, until the project is next opened. A new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`.
@@ -91,9 +91,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 ## Map kinds
 
-- A kind crate is `crates/kind-<name>` implementing `MapKindModule`; the caller (app, tests) builds `Kinds`. No runtime plugins.
-- Draw passes live in `mmc-render`, keyed by `Layer`; a kind lists only its `render_layers`.
-- A generator returns one `Command::Generate`; core assigns entity ids and records generator, seed and `APP_VERSION`.
+- A kind crate is `crates/kind-<name>` implementing `MapKindModule`: default settings, layers, stages (derived layers), render passes (WGSL text, no wgpu), tools, generators with `Param`s, child decl (kind, scale factor, context layers), summary, entity kinds. The caller builds `Kinds` and passes it to `Project::create`/`load`. A new kind edits neither core nor render. No runtime plugins.
+- A layer is derived when a stage of the map's kind writes it (`Project::is_derived`).
+- A generator takes a `GenRun` (generator, seed, params) and returns one `Command::Generate`; core assigns entity ids and records the run and `APP_VERSION`.
 - A store write that also writes entities calls `write_entity_rows` inside its own transaction; a core path that creates entities updates `names`.
 - Each map has a root-space `origin` (root maps at 0,0) on its own pixel grid. Generators compute pixel centres from global indices: `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree.
 - Generated tiles have `edited = false`. Child-map store code lives in `store/src/children.rs`.

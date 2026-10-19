@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use mmc_core::{
-    BrushStroke, Command, Layer, MapId, MapKind, MapSettings, Project, RootPoint, StrokePoint,
-    TILE_SIZE, TileId,
+    BrushStroke, Command, Layer, MapId, MapSettings, Project, RootPoint, StrokePoint, TILE_SIZE,
+    TileId,
 };
+use mmc_kind_region::{REGION, SLOPE};
 
 const T: usize = TILE_SIZE as usize;
 
 fn project(dir: &std::path::Path) -> (Project, MapId) {
     let settings = MapSettings {
-        kind: MapKind::Region,
+        kind: REGION,
         width: 1000,
         height: 1024,
         metres_per_pixel: 1.0,
@@ -20,7 +21,7 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
     p.apply(
         map,
         Command::Brush(BrushStroke {
-            layer: Layer::Height,
+            layer: Layer::HEIGHT,
             points: vec![StrokePoint {
                 at: RootPoint { x: 512.0, y: 250.0 },
                 pressure: 1.0,
@@ -34,7 +35,7 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
 }
 
 fn id(map: MapId, level: u32, tx: u32, ty: u32) -> TileId {
-    lid(map, Layer::Height, level, tx, ty)
+    lid(map, Layer::HEIGHT, level, tx, ty)
 }
 
 fn lid(map: MapId, layer: Layer, level: u32, tx: u32, ty: u32) -> TileId {
@@ -87,13 +88,13 @@ fn edits_undo_and_redo_update_every_level_above() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, map) = project(dir.path());
     assert_eq!(p.top_level(map).unwrap(), 2);
-    assert_pyramid_consistent(&p, map, Layer::Height);
+    assert_pyramid_consistent(&p, map, Layer::HEIGHT);
     assert!(full(&p, id(map, 2, 0, 0)).iter().any(|&v| v > 0.0));
 
     p.undo(map).unwrap();
     assert!(full(&p, id(map, 2, 0, 0)).iter().all(|&v| v == 0.0));
     p.redo(map).unwrap();
-    assert_pyramid_consistent(&p, map, Layer::Height);
+    assert_pyramid_consistent(&p, map, Layer::HEIGHT);
 }
 
 #[test]
@@ -138,7 +139,7 @@ fn the_saved_file_has_an_overview_per_map_readable_without_opening() {
     p.save(&file);
     p.wait_for_save().unwrap();
 
-    let overviews = mmc_fixtures::read_overviews(&file, Layer::Height).unwrap();
+    let overviews = mmc_fixtures::read_overviews(&file, Layer::HEIGHT).unwrap();
     assert_eq!(overviews.len(), 1);
     let o = &overviews[0];
     assert_eq!(o.map, p.maps()[0]);
@@ -154,14 +155,14 @@ fn derived_layers_get_pyramids_and_rebuilds_replace_cached_tiles() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, map) = project(dir.path());
     p.wait_for_jobs().unwrap();
-    assert_pyramid_consistent(&p, map, Layer::Slope);
-    let before = full(&p, lid(map, Layer::Slope, 2, 0, 0));
+    assert_pyramid_consistent(&p, map, SLOPE);
+    let before = full(&p, lid(map, SLOPE, 2, 0, 0));
     assert!(before.iter().any(|&v| v > 0.0));
 
     p.apply(
         map,
         Command::Brush(BrushStroke {
-            layer: Layer::Height,
+            layer: Layer::HEIGHT,
             points: vec![StrokePoint {
                 at: RootPoint { x: 800.0, y: 800.0 },
                 pressure: 1.0,
@@ -172,6 +173,6 @@ fn derived_layers_get_pyramids_and_rebuilds_replace_cached_tiles() {
     )
     .unwrap();
     p.wait_for_jobs().unwrap();
-    assert_ne!(full(&p, lid(map, Layer::Slope, 2, 0, 0)), before);
-    assert_pyramid_consistent(&p, map, Layer::Slope);
+    assert_ne!(full(&p, lid(map, SLOPE, 2, 0, 0)), before);
+    assert_pyramid_consistent(&p, map, SLOPE);
 }

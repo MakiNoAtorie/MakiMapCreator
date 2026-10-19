@@ -1,12 +1,12 @@
-use mmc_core::{Command, Layer, MapKind, MapSettings, PaintStroke, RootPoint};
-use mmc_kind_world::WorldKind;
+use mmc_core::{Command, MapSettings, PaintStroke, RootPoint};
+use mmc_kind_world::{LAND, WORLD, WorldKind};
 use mmc_render::{Renderer, View};
 
 #[test]
 fn a_world_map_draws_land_and_sea_through_its_kind_passes() {
     let dir = tempfile::tempdir().unwrap();
     let settings = MapSettings {
-        kind: MapKind::World,
+        kind: WORLD,
         width: 200,
         height: 100,
         metres_per_pixel: 1000.0,
@@ -16,7 +16,7 @@ fn a_world_map_draws_land_and_sea_through_its_kind_passes() {
     p.apply(
         map,
         Command::Paint(PaintStroke {
-            layer: Layer::Land,
+            layer: LAND,
             points: vec![RootPoint {
                 x: 50_000.0,
                 y: 50_000.0,

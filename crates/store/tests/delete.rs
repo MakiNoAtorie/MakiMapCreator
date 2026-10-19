@@ -15,7 +15,7 @@ fn open_purges_deleted_maps_and_rows_of_deleted_entities() {
     let gone = store.insert_map(None, "region", 256, 256, 10.0).unwrap();
     let tile = |map_id| TileKey {
         map_id,
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         level: 0,
         tx: 0,
         ty: 0,

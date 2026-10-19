@@ -1,45 +1,52 @@
 //! Deletion rules (seam 1): deleting a map keeps lore, child maps become root maps, and an
 //! entity with its own map needs a choice. Both deletions undo fully.
 
+use std::sync::Arc;
+
 use mmc_core::{
-    Command, Entity, EntityEdit, EntityId, Error, Generation, Kinds, Layer, MapId, MapKind,
-    MapKindModule, MapSettings, NewEntity, OwnMap, PageEdit, PaintStroke, Project, RootPoint,
+    ChildDecl, Command, Entity, EntityEdit, EntityId, Error, GenRun, Generation, Kinds, Layer,
+    MapId, MapKind, MapKindModule, MapSettings, NewEntity, OwnMap, PageEdit, PaintStroke, Project,
+    RootPoint,
 };
 
+const WORLD: MapKind = MapKind::new("world");
+const REGION: MapKind = MapKind::new("region");
+const SETTLEMENT: MapKind = MapKind::new("settlement");
+const LAND: Layer = Layer::new("land");
+
+/// A kind defined only in this test: no edit in core is needed for it.
 struct TestKind(MapKind, Option<MapKind>);
 
 impl MapKindModule for TestKind {
     fn kind(&self) -> MapKind {
         self.0
     }
+    fn default_settings(&self) -> MapSettings {
+        MapSettings {
+            kind: self.0,
+            width: 32,
+            height: 32,
+            metres_per_pixel: 1000.0,
+        }
+    }
     fn layers(&self) -> &'static [Layer] {
-        &[Layer::Land]
+        &[LAND]
     }
-    fn render_layers(&self) -> &'static [Layer] {
-        &[]
-    }
-    fn tools(&self) -> &'static [mmc_core::Tool] {
-        &[]
-    }
-    fn generators(&self) -> &'static [&'static str] {
-        &[]
-    }
-    fn generate(&self, _: &Project, _: MapId, g: &str, _: u64) -> mmc_core::Result<Command> {
-        Err(Error::UnknownGenerator(g.into()))
-    }
-    fn entity_kinds(&self) -> &'static [&'static str] {
-        &[]
-    }
-    fn child_kind(&self) -> Option<MapKind> {
-        self.1
+    fn child(&self) -> Option<ChildDecl> {
+        self.1.map(|kind| ChildDecl {
+            kind,
+            scale_factor: 100.0,
+            context: &[LAND],
+        })
     }
 }
 
-fn kinds() -> Kinds {
-    Kinds::new(vec![
-        Box::new(TestKind(MapKind::World, Some(MapKind::Region))),
-        Box::new(TestKind(MapKind::Region, Some(MapKind::Settlement))),
-    ])
+fn kinds() -> Arc<Kinds> {
+    Arc::new(Kinds::new(vec![
+        Box::new(TestKind(WORLD, Some(REGION))),
+        Box::new(TestKind(REGION, Some(SETTLEMENT))),
+        Box::new(TestKind(SETTLEMENT, None)),
+    ]))
 }
 
 fn at(x: f64, y: f64) -> RootPoint {
@@ -54,8 +61,7 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<RootPoint> {
 fn outline_entity(p: &mut Project, map: MapId, kind: &str, outline: Vec<RootPoint>) -> EntityId {
     let id = p.next_entity_id().unwrap();
     let g = Generation {
-        generator: "test".into(),
-        seed: 1,
+        run: GenRun::new("test", 1),
         entities: vec![NewEntity {
             kind: kind.into(),
             name: format!("{kind} {map:?}"),
@@ -69,7 +75,7 @@ fn outline_entity(p: &mut Project, map: MapId, kind: &str, outline: Vec<RootPoin
 
 fn paint(p: &mut Project, map: MapId, c: RootPoint, value: f32) {
     let s = PaintStroke {
-        layer: Layer::Land,
+        layer: LAND,
         points: vec![c],
         radius: 50.0,
         value,
@@ -78,7 +84,7 @@ fn paint(p: &mut Project, map: MapId, c: RootPoint, value: f32) {
 }
 
 fn land(p: &Project, map: MapId, c: RootPoint) -> Option<f32> {
-    p.layer_value(map, Layer::Land, c).unwrap()
+    p.layer_value(map, LAND, c).unwrap()
 }
 
 struct Tree {
@@ -92,19 +98,18 @@ struct Tree {
 }
 
 fn tree(dir: &std::path::Path) -> Tree {
-    let k = kinds();
     let world = MapSettings {
-        kind: MapKind::World,
+        kind: WORLD,
         width: 32,
         height: 32,
         metres_per_pixel: 1000.0,
     };
-    let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world).unwrap();
+    let mut p = mmc_fixtures::create_with(&dir.join("wc.sqlite"), kinds(), world).unwrap();
     let w = p.maps()[0].id;
     let region = outline_entity(&mut p, w, "region", rect(4e3, 4e3, 12e3, 12e3));
-    let r = p.create_child_map(&k, w, region, None).unwrap();
+    let r = p.create_child_map(w, region, None).unwrap();
     let town = outline_entity(&mut p, r, "settlement", rect(6e3, 6e3, 6.2e3, 6.2e3));
-    let t = p.create_child_map(&k, r, town, None).unwrap();
+    let t = p.create_child_map(r, town, None).unwrap();
     paint(&mut p, r, at(8e3, 8e3), 0.5);
     paint(&mut p, t, at(6.1e3, 6.1e3), 0.75);
     let edit = PageEdit {
@@ -156,7 +161,7 @@ fn deleting_a_map_keeps_lore_turns_children_into_roots_and_undoes_fully() {
     assert_eq!(t_now.origin, town_before.origin);
     assert_eq!(t_now.settings, town_before.settings);
     assert_eq!(land(&p, t, at(6.1e3, 6.1e3)), Some(0.75));
-    assert_eq!(p.parent_context(t, Layer::Land).unwrap(), None);
+    assert_eq!(p.parent_context(t, LAND).unwrap(), None);
     // A root map owns all its ground, so edits outside the old outline now apply.
     paint(&mut p, t, at(5.9e3, 5.9e3), 0.25);
     p.undo(t).unwrap();
@@ -166,7 +171,7 @@ fn deleting_a_map_keeps_lore_turns_children_into_roots_and_undoes_fully() {
     assert_eq!(p.maps(), &before[..]);
     assert_eq!(p.outlines(r).unwrap(), town_outlines);
     assert_eq!(land(&p, r, at(8e3, 8e3)), Some(0.5));
-    assert!(p.parent_context(t, Layer::Land).unwrap().is_some());
+    assert!(p.parent_context(t, LAND).unwrap().is_some());
     // The deleted map's own history comes back with it.
     assert!(p.undo(r).unwrap());
     assert_eq!(land(&p, r, at(8e3, 8e3)), Some(0.0));
@@ -329,7 +334,7 @@ fn a_reopened_project_no_longer_has_the_deleted_map() {
     let expected = p.maps().to_vec();
     p.close().unwrap();
 
-    let q = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    let q = mmc_fixtures::open_with(&file, &dir.path().join("wc2.sqlite"), kinds()).unwrap();
     assert_eq!(q.maps(), &expected[..]);
     assert_eq!(map(&q, t).parent, None);
 }

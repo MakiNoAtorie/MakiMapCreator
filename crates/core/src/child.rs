@@ -6,17 +6,14 @@ use crate::persist::{ContextRecord, NewChildMap, TileRecord};
 use crate::generation::{decode_outline, encode_outline};
 use crate::layer::{TILE_SIZE, decode, encode, tile_of};
 use crate::undo::Change;
-use crate::{EntityId, Error, Kinds, Layer, Map, MapId, MapSettings, Project, Result, RootPoint};
-
-/// Default child scale: parent metres per pixel divided by this (world 1 km/px to region 10 m/px).
-pub const CHILD_SCALE_FACTOR: f64 = 100.0;
+use crate::{EntityId, Error, Layer, Map, MapId, MapSettings, Project, Result, RootPoint};
 
 /// Margin around a child's outline, in parent pixels. Refinement moves a coast about one
 /// parent cell (ADR-0008), so two cells show it in full.
 pub const CHILD_MARGIN: f64 = 2.0;
 
 /// Largest child width or height in pixels.
-const MAX_CHILD_SIZE: f64 = 65536.0;
+pub const MAX_CHILD_SIZE: f64 = 65536.0;
 
 /// A snapshot of one parent layer around a child map, taken when the child was made.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,22 +72,20 @@ impl Map {
 impl Project {
     /// Makes a child map on the outline of `entity` on `parent` (ADR-0001). The child covers
     /// the outline's bounding box plus `CHILD_MARGIN`, owns only the outline, and keeps a
-    /// snapshot of the parent's authored layers. `metres_per_pixel` defaults to the parent's
-    /// divided by `CHILD_SCALE_FACTOR`.
+    /// snapshot of the parent context layers its kind declares. `metres_per_pixel` defaults to
+    /// the parent's divided by the kind's scale factor.
     pub fn create_child_map(
         &mut self,
-        kinds: &Kinds,
         parent: MapId,
         entity: EntityId,
         metres_per_pixel: Option<f64>,
     ) -> Result<MapId> {
         let pm = self.map(parent)?.clone();
-        let pk = kinds
-            .get(pm.settings.kind)
-            .ok_or(Error::InvalidChild("this map kind is not available"))?;
-        let kind = pk
-            .child_kind()
+        let decl = self
+            .kind_of(parent)?
+            .child()
             .ok_or(Error::InvalidChild("this map kind has no child maps"))?;
+        let kind = decl.kind;
         let outline = self
             .outlines(parent)?
             .into_iter()
@@ -99,7 +94,7 @@ impl Project {
                 "the entity has no outline on the parent map",
             ))?
             .1;
-        let mpp = metres_per_pixel.unwrap_or(pm.settings.metres_per_pixel / CHILD_SCALE_FACTOR);
+        let mpp = metres_per_pixel.unwrap_or(pm.settings.metres_per_pixel / decl.scale_factor);
         if !(mpp.is_finite() && mpp > 0.0) {
             return Err(Error::InvalidChild("the scale must be a positive number"));
         }
@@ -137,7 +132,7 @@ impl Project {
             metres_per_pixel: mpp,
         };
 
-        let context = self.snapshot(pk.layers(), &pm, origin, w * mpp, h * mpp)?;
+        let context = self.snapshot(decl.context, &pm, origin, w * mpp, h * mpp)?;
 
         let id = MapId(self.store.insert_child_map(&NewChildMap {
             parent_id: parent.0,
@@ -161,7 +156,7 @@ impl Project {
         Ok(id)
     }
 
-    /// A snapshot of `pm`'s authored `layers` under a child area at `origin`, plus one parent
+    /// A snapshot of `pm`'s `layers` under a child area at `origin`, plus one parent
     /// pixel for interpolation, clipped to the parent.
     pub(crate) fn snapshot(
         &self,
@@ -187,7 +182,7 @@ impl Project {
             clip(py1.ceil() + 1.0, pm.settings.height),
         );
         let mut context = vec![];
-        for &layer in layers.iter().filter(|l| !l.is_derived()) {
+        for &layer in layers {
             if x0 == x1 || y0 == y1 {
                 break;
             }

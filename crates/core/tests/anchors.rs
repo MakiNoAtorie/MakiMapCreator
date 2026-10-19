@@ -1,18 +1,15 @@
 use mmc_core::{
     AnchorEdit, Anchors, Command, DerivedFeature, Entity, EntityEdit, EntityId, FeatureId,
-    FeatureKind, MapId, MapKind, MapSettings, PageEdit, Project, RootPoint,
+    FeatureKind, MapId, MapKindModule, PageEdit, Project, RootPoint,
 };
+use mmc_kind_region::RegionKind;
 
 fn pt(x: f64, y: f64) -> RootPoint {
     RootPoint { x, y }
 }
 
 fn new_project(dir: &std::path::Path) -> (Project, MapId) {
-    let p = mmc_fixtures::create(
-        &dir.join("wc.sqlite"),
-        MapSettings::default_for(MapKind::Region),
-    )
-    .unwrap();
+    let p = mmc_fixtures::create(&dir.join("wc.sqlite"), RegionKind.default_settings()).unwrap();
     let m = p.maps()[0].id;
     (p, m)
 }

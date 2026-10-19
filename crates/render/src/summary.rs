@@ -1,12 +1,12 @@
 //! Summary tints: each child map's summary drawn inside its outline on the parent (ADR-0002).
 
-use mmc_core::{Kinds, Project, RootPoint};
+use mmc_core::{Project, RootPoint};
 
 use crate::{Image, Result, Scene};
 
 impl Scene {
     /// Adds the summaries of the view map's child maps, drawn over its layers.
-    pub fn with_summaries(mut self, project: &Project, kinds: &Kinds) -> Result<Scene> {
+    pub fn with_summaries(mut self, project: &Project) -> Result<Scene> {
         let map = self.view.map;
         let origin = project
             .maps()
@@ -15,7 +15,7 @@ impl Scene {
             .ok_or(mmc_core::Error::UnknownMap(map))?
             .origin;
         // Outlines in map metres, the space of `View`.
-        self.summaries = project.child_summaries(kinds, map)?;
+        self.summaries = project.child_summaries(map)?;
         for q in self.summaries.iter_mut().flat_map(|s| s.outline.iter_mut()) {
             (q.x, q.y) = (q.x - origin.x, q.y - origin.y);
         }

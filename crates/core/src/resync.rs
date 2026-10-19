@@ -6,9 +6,7 @@ use crate::child::inside;
 use crate::generation::{GenerationChange, decode_outline, encode_outline};
 use crate::layer::{TILE_LEN, TILE_SIZE, decode, encode};
 use crate::undo::{Change, TileChange};
-use crate::{
-    Command, Error, Kinds, Layer, Map, MapId, MapKindModule, Project, Result, RootPoint, Summary,
-};
+use crate::{Command, Error, GenRun, Layer, Map, MapId, Project, Result, RootPoint, Summary};
 
 /// A level-0 tile: (layer, tx, ty).
 pub type TileAt = (Layer, u32, u32);
@@ -110,11 +108,11 @@ impl Project {
     }
 
     /// Summaries of `map`'s child maps that their kinds define (ADR-0002).
-    pub fn child_summaries(&self, kinds: &Kinds, map: MapId) -> Result<Vec<ChildSummary>> {
+    pub fn child_summaries(&self, map: MapId) -> Result<Vec<ChildSummary>> {
         self.map(map)?;
         let mut out = vec![];
         for m in self.maps.iter().filter(|m| m.parent == Some(map)) {
-            let (Some(k), Some(outline)) = (kinds.get(m.settings.kind), &m.outline) else {
+            let (Some(k), Some(outline)) = (self.kinds.get(m.settings.kind), &m.outline) else {
                 continue;
             };
             if let Some(summary) = k.summary(self, m.id)? {
@@ -175,26 +173,15 @@ impl Project {
         Ok(())
     }
 
-    fn kind_of<'k>(&self, kinds: &'k Kinds, map: MapId) -> Result<&'k dyn MapKindModule> {
-        kinds
-            .get(self.map(map)?.settings.kind)
-            .ok_or(Error::InvalidChild("this map kind is not available"))
-    }
-
-    /// Previews running `generator` with `seed` on `map` again, only inside `selection`
-    /// (root space; `None` is the whole map). Edited tiles and locked pixels are kept
-    /// (ADR-0003, ADR-0022). Writes nothing.
+    /// Previews `run` on `map` again, only inside `selection` (root space; `None` is the
+    /// whole map). Edited tiles and locked pixels are kept (ADR-0003, ADR-0022). Writes nothing.
     pub fn preview_regeneration(
         &self,
-        kinds: &Kinds,
         map: MapId,
-        generator: &str,
-        seed: u64,
+        run: &GenRun,
         selection: Option<&[RootPoint]>,
     ) -> Result<RegenPlan> {
-        let cmd = self
-            .kind_of(kinds, map)?
-            .generate(self, map, generator, seed)?;
+        let cmd = self.kind_of(map)?.generate(self, map, run)?;
         self.plan(map, cmd, selection, None, None)
     }
 
@@ -203,7 +190,6 @@ impl Project {
     /// (root space); ground gained is generated, ground lost becomes context. Writes nothing.
     pub fn preview_resync(
         &mut self,
-        kinds: &Kinds,
         map: MapId,
         outline: Option<Vec<RootPoint>>,
     ) -> Result<RegenPlan> {
@@ -227,8 +213,12 @@ impl Project {
             ));
         }
         let s = m.settings;
+        let decl = self
+            .kind_of(parent.id)?
+            .child()
+            .ok_or(Error::InvalidChild("the parent kind has no child maps"))?;
         let context = self.snapshot(
-            self.kind_of(kinds, parent.id)?.layers(),
+            decl.context,
             &parent,
             m.origin,
             s.width as f64 * s.metres_per_pixel,
@@ -238,9 +228,12 @@ impl Project {
             .generations(map)?
             .pop()
             .ok_or(Error::InvalidChild("the map was never generated"))?;
-        let kind = self.kind_of(kinds, map)?;
+        let kinds = self.kinds.clone();
+        let kind = kinds
+            .get(m.settings.kind)
+            .ok_or_else(|| Error::UnknownMapKind(m.settings.kind.as_str().into()))?;
         self.resync.context = Some((map, context.clone()));
-        let cmd = kind.generate(self, map, &g.generator, g.seed);
+        let cmd = kind.generate(self, map, &g.run);
         self.resync.context = None;
         let after = ChildState {
             outline: encode_outline(&new),
@@ -283,7 +276,7 @@ impl Project {
         for c in all {
             let layer = c.key.layer;
             let at = (layer, c.key.tx, c.key.ty);
-            let lock = self.store.tile(&m.tile_key(Layer::Lock, at.1, at.2))?;
+            let lock = self.store.tile(&m.tile_key(Layer::LOCK, at.1, at.2))?;
             let lock = decode(lock.as_ref())?;
             let before = decode(c.before.as_ref())?;
             let generated = decode(c.after.as_ref())?;

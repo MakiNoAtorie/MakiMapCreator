@@ -49,7 +49,7 @@ impl Project {
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
         let changes = self.changes(self.map(map)?, &cmd)?;
         let changes = self.clip_to_outline(map, changes)?;
-        Self::refuse_derived(&changes)?;
+        self.refuse_derived(map, &changes)?;
         self.record(map, changes)
     }
 

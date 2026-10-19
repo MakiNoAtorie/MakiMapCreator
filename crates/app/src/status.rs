@@ -34,11 +34,7 @@ pub fn map(s: &MapSettings) -> String {
 }
 
 pub fn map_kind(k: MapKind) -> String {
-    tr(match k {
-        MapKind::World => "map-kind-world",
-        MapKind::Region => "map-kind-region",
-        MapKind::Settlement => "map-kind-settlement",
-    })
+    tr(&format!("map-kind-{}", k.as_str()))
 }
 
 #[cfg(test)]
@@ -60,9 +56,19 @@ mod tests {
 
     #[test]
     fn map_shows_size_and_scale() {
-        let s = MapSettings::default_for(MapKind::Region);
+        let s = MapSettings {
+            kind: MapKind::new("region"),
+            width: 8192,
+            height: 8192,
+            metres_per_pixel: 10.0,
+        };
         assert_eq!(map(&s), "8192 × 8192 px · 1 px = 10 m");
-        let s = MapSettings::default_for(MapKind::Settlement);
+        let s = MapSettings {
+            width: 4096,
+            height: 4096,
+            metres_per_pixel: 0.5,
+            ..s
+        };
         assert_eq!(map(&s), "4096 × 4096 px · 1 px = 0.5 m");
     }
 }

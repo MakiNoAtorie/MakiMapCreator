@@ -1926,6 +1926,8 @@ name = "mmc-core"
 version = "0.1.0"
 dependencies = [
  "mmc-fixtures",
+ "mmc-kind-region",
+ "mmc-kind-world",
  "mmc-page",
  "serde_json",
  "tempfile",
@@ -1937,6 +1939,8 @@ name = "mmc-fixtures"
 version = "0.1.0"
 dependencies = [
  "mmc-core",
+ "mmc-kind-region",
+ "mmc-kind-world",
  "mmc-store",
  "serde_json",
  "tempfile",

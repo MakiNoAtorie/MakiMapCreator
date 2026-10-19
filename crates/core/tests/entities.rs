@@ -1,15 +1,12 @@
 use mmc_core::{
-    Command, Entity, EntityEdit, EntityId, Error, FieldType, MapKind, MapSettings, Project,
-    Relation,
+    Command, Entity, EntityEdit, EntityId, Error, FieldType, MapKindModule, Project, Relation,
 };
+use mmc_kind_region::RegionKind;
+use mmc_kind_world::WorldKind;
 use serde_json::{Map, Value, json};
 
 fn new_project(dir: &std::path::Path) -> Project {
-    mmc_fixtures::create(
-        &dir.join("wc.sqlite"),
-        MapSettings::default_for(MapKind::Region),
-    )
-    .unwrap()
+    mmc_fixtures::create(&dir.join("wc.sqlite"), RegionKind.default_settings()).unwrap()
 }
 
 fn fields(v: Value) -> Map<String, Value> {
@@ -149,9 +146,7 @@ fn entity_edits_undo_and_redo_on_the_active_map() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = new_project(dir.path());
     let map = p.maps()[0].id;
-    let other = p
-        .add_root_map(MapSettings::default_for(MapKind::World))
-        .unwrap();
+    let other = p.add_root_map(WorldKind.default_settings()).unwrap();
     let a = create(&mut p, "settlement", "Ash", json!({"population": 10})).unwrap();
     let b = create(&mut p, "region", "Vale", json!({})).unwrap();
     let rel = Relation {

@@ -1,11 +1,12 @@
 use mmc_core::{
-    APP_VERSION, Command, Error, Generation, MapId, MapKind, MapSettings, NewEntity, Project,
+    APP_VERSION, Command, Error, GenRun, Generation, MapId, MapSettings, NewEntity, Project,
     RootPoint,
 };
+use mmc_kind_world::WORLD;
 
 fn world() -> MapSettings {
     MapSettings {
-        kind: MapKind::World,
+        kind: WORLD,
         width: 512,
         height: 512,
         metres_per_pixel: 1000.0,
@@ -24,8 +25,7 @@ fn square(x: f64) -> Vec<RootPoint> {
 
 fn generation(kind: &str) -> Command {
     Command::Generate(Generation {
-        generator: "regions".into(),
-        seed: 42,
+        run: GenRun::new("regions", 42),
         entities: vec![
             NewEntity {
                 kind: kind.into(),
@@ -68,8 +68,8 @@ fn generation_creates_entities_with_outlines_and_records_version_and_seed() {
     assert_eq!(g.len(), 1);
     assert_eq!(
         (
-            g[0].generator.as_str(),
-            g[0].seed,
+            g[0].run.generator.as_str(),
+            g[0].run.seed,
             g[0].app_version.as_str()
         ),
         ("regions", 42, APP_VERSION)

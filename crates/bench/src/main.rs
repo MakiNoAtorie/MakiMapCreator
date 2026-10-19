@@ -99,7 +99,7 @@ fn measure() -> BTreeMap<String, f64> {
         .collect();
 
     let first_frame = (0..RUNS)
-        .map(|_| time_ms(|| mmc_fixtures::read_overviews(&file, Layer::Height).unwrap()).0)
+        .map(|_| time_ms(|| mmc_fixtures::read_overviews(&file, Layer::HEIGHT).unwrap()).0)
         .collect();
 
     // Pan a 1920x1080 view at full resolution to an area no tile of which is loaded.
@@ -107,7 +107,7 @@ fn measure() -> BTreeMap<String, f64> {
     let top = p.top_level(map).unwrap();
     let id = |level, tx, ty| TileId {
         map,
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         level,
         tx,
         ty,

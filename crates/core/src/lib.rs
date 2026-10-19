@@ -8,6 +8,7 @@ mod jobs;
 mod layer;
 pub mod persist;
 mod pipeline;
+pub use pipeline::{Raster, Stage, StageInput, par_map};
 mod pyramid;
 pub mod rng;
 mod save;
@@ -32,34 +33,28 @@ pub use paint::PaintStroke;
 mod generation;
 pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
 mod kind;
-pub use kind::{Kinds, MapKindModule, Summary, Tool};
+pub use kind::{
+    ChildDecl, GenRun, GeneratorDecl, Kinds, MapKindModule, Param, RenderPass, Summary, Tool,
+    ToolAction,
+};
 mod child;
-pub use child::{CHILD_MARGIN, CHILD_SCALE_FACTOR, ParentContext};
+pub use child::{CHILD_MARGIN, MAX_CHILD_SIZE, ParentContext};
 mod delete;
 pub use delete::OwnMap;
 mod resync;
 pub use resync::{ChildSummary, RegenPlan, TileAt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapKind {
-    World,
-    Region,
-    Settlement,
-}
+/// A map kind, named by its stored id. Each kind module defines its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MapKind(&'static str);
 
 impl MapKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            MapKind::World => "world",
-            MapKind::Region => "region",
-            MapKind::Settlement => "settlement",
-        }
+    pub const fn new(id: &'static str) -> MapKind {
+        MapKind(id)
     }
 
-    fn parse(s: &str) -> Option<MapKind> {
-        [MapKind::World, MapKind::Region, MapKind::Settlement]
-            .into_iter()
-            .find(|k| k.as_str() == s)
+    pub fn as_str(self) -> &'static str {
+        self.0
     }
 }
 
@@ -70,22 +65,6 @@ pub struct MapSettings {
     pub width: u32,
     pub height: u32,
     pub metres_per_pixel: f64,
-}
-
-impl MapSettings {
-    pub fn default_for(kind: MapKind) -> MapSettings {
-        let (size, metres_per_pixel) = match kind {
-            MapKind::World => (4096, 1000.0),
-            MapKind::Region => (8192, 10.0),
-            MapKind::Settlement => (4096, 0.5),
-        };
-        MapSettings {
-            kind,
-            width: size,
-            height: size,
-            metres_per_pixel,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -103,12 +82,12 @@ pub struct Map {
 }
 
 impl Map {
-    fn from_record(r: persist::MapRecord) -> Result<Map> {
+    fn from_record(r: persist::MapRecord, kinds: &Kinds) -> Result<Map> {
         Ok(Map {
             id: MapId(r.id),
             parent: r.parent_id.map(MapId),
             settings: MapSettings {
-                kind: MapKind::parse(&r.kind).ok_or(Error::UnknownMapKind(r.kind))?,
+                kind: kinds.parse(&r.kind).ok_or(Error::UnknownMapKind(r.kind))?,
                 width: r.width,
                 height: r.height,
                 metres_per_pixel: r.metres_per_pixel,
@@ -200,6 +179,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// An open project. Edits go to a working copy; `save` writes the project file.
 pub struct Project {
     store: Box<dyn persist::Storage>,
+    kinds: std::sync::Arc<Kinds>,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
     names: search::NameIndex,
@@ -211,8 +191,16 @@ pub struct Project {
 }
 
 impl Project {
-    /// Creates a project with one root map on an empty `store`.
-    pub fn create(store: Box<dyn persist::Storage>, root: MapSettings) -> Result<Project> {
+    /// Creates a project with one root map on an empty `store`. `kinds` are the map kinds
+    /// the app ships; maps of other kinds can not be made or opened.
+    pub fn create(
+        store: Box<dyn persist::Storage>,
+        kinds: std::sync::Arc<Kinds>,
+        root: MapSettings,
+    ) -> Result<Project> {
+        if kinds.get(root.kind).is_none() {
+            return Err(Error::UnknownMapKind(root.kind.as_str().into()));
+        }
         let id = store.insert_map(
             None,
             root.kind.as_str(),
@@ -222,6 +210,7 @@ impl Project {
         )?;
         Ok(Project {
             store,
+            kinds,
             maps: vec![Map {
                 id: MapId(id),
                 parent: None,
@@ -240,14 +229,15 @@ impl Project {
     }
 
     /// A project on an opened or restored `store`.
-    pub fn load(store: Box<dyn persist::Storage>) -> Result<Project> {
+    pub fn load(store: Box<dyn persist::Storage>, kinds: std::sync::Arc<Kinds>) -> Result<Project> {
         let maps = store
             .maps()?
             .into_iter()
-            .map(Map::from_record)
+            .map(|r| Map::from_record(r, &kinds))
             .collect::<Result<_>>()?;
         let mut p = Project {
             store,
+            kinds,
             maps,
             history: Default::default(),
             names: Default::default(),
@@ -265,6 +255,9 @@ impl Project {
     /// Adds a map with no parent and returns its id.
     pub fn add_root_map(&mut self, settings: MapSettings) -> Result<MapId> {
         let s = settings;
+        if self.kinds.get(s.kind).is_none() {
+            return Err(Error::UnknownMapKind(s.kind.as_str().into()));
+        }
         let id = MapId(self.store.insert_map(
             None,
             s.kind.as_str(),
@@ -294,6 +287,24 @@ impl Project {
     /// All maps in the tree, ordered by id.
     pub fn maps(&self) -> &[Map] {
         &self.maps
+    }
+
+    /// The map kinds this project was opened with.
+    pub fn kinds(&self) -> &Kinds {
+        &self.kinds
+    }
+
+    /// The kind module of `map`.
+    pub(crate) fn kind_of(&self, map: MapId) -> Result<&dyn MapKindModule> {
+        let kind = self.map(map)?.settings.kind;
+        self.kinds
+            .get(kind)
+            .ok_or_else(|| Error::UnknownMapKind(kind.as_str().into()))
+    }
+
+    /// Whether a stage of `map`'s kind writes `layer` (ADR-0018).
+    pub fn is_derived(&self, map: MapId, layer: Layer) -> Result<bool> {
+        Ok(pipeline::writes(self.kind_of(map)?.stages(), layer))
     }
 }
 

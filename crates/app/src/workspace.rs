@@ -309,13 +309,19 @@ pub fn pick(outlines: &[(EntityId, Vec<RootPoint>)], p: RootPoint) -> Option<Ent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mmc_core::{Command, EntityEdit, MapKind, MapSettings, Project};
+    use mmc_core::{Command, EntityEdit, MapKindModule, Project};
+    use mmc_kind_region::RegionKind;
+    use mmc_kind_world::WorldKind;
     use serde_json::Map as JsonMap;
 
     fn project() -> (tempfile::TempDir, Project) {
         let dir = tempfile::tempdir().unwrap();
         let store = mmc_store::Store::create(&dir.path().join("w.mmc")).unwrap();
-        let p = Project::create(Box::new(store), MapSettings::default_for(MapKind::World)).unwrap();
+        let kinds = std::sync::Arc::new(mmc_core::Kinds::new(vec![
+            Box::new(WorldKind),
+            Box::new(RegionKind),
+        ]));
+        let p = Project::create(Box::new(store), kinds, WorldKind.default_settings()).unwrap();
         (dir, p)
     }
 
@@ -413,9 +419,7 @@ mod tests {
     fn breadcrumb_runs_root_to_active() {
         let (_d, mut p) = project();
         let root = p.maps()[0].id;
-        let other = p
-            .add_root_map(MapSettings::default_for(MapKind::Region))
-            .unwrap();
+        let other = p.add_root_map(RegionKind.default_settings()).unwrap();
         assert_eq!(breadcrumb(p.maps(), root), vec![root]);
         assert_eq!(breadcrumb(p.maps(), other), vec![other]);
         assert_eq!(map_label(p.maps(), root), "World map");
@@ -426,8 +430,7 @@ mod tests {
         let (_d, mut p) = project();
         let (a, b) = (
             p.maps()[0].id,
-            p.add_root_map(MapSettings::default_for(MapKind::Region))
-                .unwrap(),
+            p.add_root_map(RegionKind.default_settings()).unwrap(),
         );
         let mut t = Tabs::only(Tab::Map(a));
         t.open(Tab::Map(b));
@@ -445,8 +448,7 @@ mod tests {
         let (_d, mut p) = project();
         let (a, b) = (
             p.maps()[0].id,
-            p.add_root_map(MapSettings::default_for(MapKind::Region))
-                .unwrap(),
+            p.add_root_map(RegionKind.default_settings()).unwrap(),
         );
         let c = add(&mut p, "region", "C");
         let mut t = Tabs::only(Tab::Map(a));

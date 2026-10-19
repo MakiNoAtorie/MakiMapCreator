@@ -9,34 +9,22 @@ pub const TILE_SIZE: u32 = 256;
 
 pub(crate) const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
-/// A raster layer of a map.
+/// A layer of a map, named by its stored id. Kinds define their own layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Layer {
-    /// Metres, sea level 0.
-    Height,
-    /// Derived: gradient magnitude of height, metres per metre.
-    Slope,
-    /// Authored: 1 is land, 0 is sea (world map).
-    Land,
-    /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
-    Lock,
-}
+pub struct Layer(&'static str);
 
 impl Layer {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Layer::Height => "height",
-            Layer::Slope => "slope",
-            Layer::Land => "land",
-            Layer::Lock => "lock",
-        }
+    pub const fn new(id: &'static str) -> Layer {
+        Layer(id)
     }
 
-    pub(crate) const ALL: [Layer; 4] = [Layer::Height, Layer::Slope, Layer::Land, Layer::Lock];
+    /// Metres, sea level 0.
+    pub const HEIGHT: Layer = Layer("height");
+    /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
+    pub const LOCK: Layer = Layer("lock");
 
-    /// Derived layers are written by a pipeline stage, never by commands (ADR-0018).
-    pub fn is_derived(self) -> bool {
-        crate::pipeline::writes(self)
+    pub fn as_str(self) -> &'static str {
+        self.0
     }
 }
 

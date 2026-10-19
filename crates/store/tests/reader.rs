@@ -5,7 +5,7 @@ use mmc_store::{Error, FileReader, Store};
 fn key(level: u32) -> TileKey {
     TileKey {
         map_id: 1,
-        layer: Layer::Height,
+        layer: Layer::HEIGHT,
         level,
         tx: 0,
         ty: 0,

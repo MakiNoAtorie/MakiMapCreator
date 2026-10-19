@@ -1,14 +1,9 @@
-use mmc_core::{
-    Command, Entity, EntityEdit, EntityId, MapId, MapKind, MapSettings, PageEdit, Project,
-};
+use mmc_core::{Command, Entity, EntityEdit, EntityId, MapId, MapKindModule, PageEdit, Project};
+use mmc_kind_region::RegionKind;
 use serde_json::json;
 
 fn new_project(dir: &std::path::Path) -> (Project, MapId) {
-    let p = mmc_fixtures::create(
-        &dir.join("wc.sqlite"),
-        MapSettings::default_for(MapKind::Region),
-    )
-    .unwrap();
+    let p = mmc_fixtures::create(&dir.join("wc.sqlite"), RegionKind.default_settings()).unwrap();
     let m = p.maps()[0].id;
     (p, m)
 }
