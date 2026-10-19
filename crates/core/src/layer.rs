@@ -16,6 +16,8 @@ pub enum Layer {
     Height,
     /// Derived: gradient magnitude of height, metres per metre.
     Slope,
+    /// Authored: 1 is land, 0 is sea (world map).
+    Land,
 }
 
 impl Layer {
@@ -23,10 +25,11 @@ impl Layer {
         match self {
             Layer::Height => "height",
             Layer::Slope => "slope",
+            Layer::Land => "land",
         }
     }
 
-    pub(crate) const ALL: [Layer; 2] = [Layer::Height, Layer::Slope];
+    pub(crate) const ALL: [Layer; 3] = [Layer::Height, Layer::Slope, Layer::Land];
 
     pub(crate) fn parse(s: &str) -> Option<Layer> {
         Layer::ALL.into_iter().find(|l| l.as_str() == s)
