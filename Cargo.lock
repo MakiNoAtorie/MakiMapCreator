@@ -1884,6 +1884,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmc-render"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "mmc-core",
+ "png",
+ "pollster",
+ "tempfile",
+ "wgpu",
+]
+
+[[package]]
 name = "mmc-store"
 version = "0.1.0"
 dependencies = [
