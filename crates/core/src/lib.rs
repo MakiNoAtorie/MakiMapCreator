@@ -6,7 +6,10 @@ use std::path::Path;
 use mmc_store::Store;
 
 mod command;
+mod jobs;
 mod layer;
+mod pipeline;
+pub mod rng;
 mod undo;
 pub use command::{BrushStroke, Command, StrokePoint};
 pub use layer::{Layer, RootPoint, TILE_SIZE};
@@ -82,6 +85,7 @@ pub enum Error {
     UnknownMapKind(String),
     UnknownMap(MapId),
     CorruptTile,
+    DerivedLayer(Layer),
     UnknownEntityKind(String),
     UnknownEntity(EntityId),
     EntityExists(EntityId),
@@ -96,6 +100,13 @@ impl fmt::Display for Error {
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
             Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
             Error::CorruptTile => write!(f, "the file has a damaged map tile"),
+            Error::DerivedLayer(l) => {
+                write!(
+                    f,
+                    "the {} layer is computed and can not be edited",
+                    l.as_str()
+                )
+            }
             Error::UnknownEntityKind(k) => write!(f, "the project has no entity kind {k}"),
             Error::UnknownEntity(id) => write!(f, "the project has no entity with id {}", id.0),
             Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
@@ -121,6 +132,7 @@ pub struct Project {
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
     names: search::NameIndex,
+    pipeline: pipeline::Pipeline,
 }
 
 impl Project {
@@ -143,6 +155,7 @@ impl Project {
             }],
             history: Default::default(),
             names: Default::default(),
+            pipeline: Default::default(),
         })
     }
 
@@ -170,6 +183,7 @@ impl Project {
             maps,
             history: Default::default(),
             names: Default::default(),
+            pipeline: Default::default(),
         };
         p.names = p.build_name_index()?;
         Ok(p)
@@ -198,7 +212,8 @@ impl Project {
     }
 
     /// Closes the project and deletes its working copy.
-    pub fn close(self) -> Result<()> {
+    pub fn close(mut self) -> Result<()> {
+        self.pipeline.shutdown();
         Ok(self.store.close()?)
     }
 

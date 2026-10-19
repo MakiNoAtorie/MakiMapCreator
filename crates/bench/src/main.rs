@@ -71,7 +71,27 @@ fn measure() -> BTreeMap<String, f64> {
         })
         .collect();
 
+    // ADR-0014: full rebuild of derived region layers at 4096², strokes wide enough to touch most tiles.
+    let fixture = LargeMap {
+        size: 4096,
+        radius: 2000.0,
+        ..LargeMap::region(2)
+    };
+    let (mut project, map) = fixture.build(&dir.path().join("rebuild.sqlite"));
+    project.wait_for_jobs().unwrap();
+    let rebuild = (0..RUNS)
+        .map(|_| {
+            time_ms(|| {
+                project.rebuild_derived(map).unwrap();
+                project.wait_for_jobs().unwrap();
+            })
+            .0
+        })
+        .collect();
+    project.close().unwrap();
+
     BTreeMap::from([
+        ("full_rebuild".into(), median(rebuild)),
         ("brush_stroke".into(), median(brush)),
         ("open_project".into(), median(open)),
         ("save".into(), median(save)),

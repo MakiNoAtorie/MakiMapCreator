@@ -7,6 +7,7 @@ use rusqlite::{Connection, OpenFlags};
 
 mod assets;
 mod tiles;
+pub use tiles::{LayerTiles, TileConn};
 pub use tiles::{TileKey, TileRecord};
 mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};

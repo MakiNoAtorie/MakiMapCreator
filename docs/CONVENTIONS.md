@@ -68,6 +68,14 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Fixtures live in `mmc-fixtures`: seeded (`Rng`), parametric (`LargeMap` size, strokes, radius), shared by tests and bench. Same seed gives the same data.
 - Later additions: "many entities" (#10) and "long pages" (#11) generators, with their budgets (name lookup, search).
 
+## Pipeline and jobs
+
+- A derived layer is one a `STAGES` entry in `core/src/pipeline.rs` writes; commands on it return `Error::DerivedLayer`.
+- Rebuilds read and write on their own connection (`TileConn`); a commit replaces whole layers in one transaction.
+- Stage work goes through `par_map` (results in item order), so output does not depend on thread count.
+- Randomness only through `mmc_core::rng` (stateless hash), never stateful RNGs.
+- Tests wait on jobs through the API (`wait_for_jobs`), never sleep.
+
 ## Render
 
 - `mmc-render` uses the wgpu version eframe uses; the app shares one device through `Renderer::from_device`.
