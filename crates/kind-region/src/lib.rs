@@ -4,7 +4,7 @@
 use mmc_core::{
     Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind, MapKindModule,
     MapSettings, Param, Project, RenderPass, Result, RootPoint, Stage, Summary, TILE_SIZE, Tool,
-    ToolAction, rng,
+    ToolAction, par_map, rng,
 };
 
 mod slope;
@@ -99,11 +99,11 @@ impl MapKindModule for RegionKind {
             (m.origin.x / mpp).round() as i64,
             (m.origin.y / mpp).round() as i64,
         );
-        // ponytail: one thread; use the pipeline's par_map if 8192² generation is too slow.
-        let values = (0..s.height as i64)
-            .flat_map(|j| {
-                let land = &land;
-                (0..s.width as i64).map(move |i| {
+        let rows: Vec<i64> = (0..s.height as i64).collect();
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let values = par_map(threads, &rows, &|| false, |&j| {
+            (0..s.width as i64)
+                .map(|i| {
                     let at = RootPoint {
                         x: ((gx + i) as f64 + 0.5) * mpp,
                         y: ((gy + j) as f64 + 0.5) * mpp,
@@ -114,8 +114,10 @@ impl MapKindModule for RegionKind {
                         .sum();
                     (land.sample(at) - 0.5) * RELIEF + (n - 0.5) * amplitude
                 })
-            })
-            .collect();
+                .collect::<Vec<f32>>()
+        })
+        .expect("never cancelled")
+        .concat();
         Ok(Command::Generate(Generation {
             run: run.clone(),
             entities: vec![],

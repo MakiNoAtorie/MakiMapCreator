@@ -12,8 +12,9 @@ use crate::{EntityId, Error, Layer, Map, MapId, MapSettings, Project, Result, Ro
 /// parent cell (ADR-0008), so two cells show it in full.
 pub const CHILD_MARGIN: f64 = 2.0;
 
-/// Largest child width or height in pixels.
-pub const MAX_CHILD_SIZE: f64 = 65536.0;
+/// Largest child width or height in pixels: the default region size (8192², 256 MB of f32 per
+/// layer while generating).
+pub const MAX_CHILD_SIZE: f64 = 8192.0;
 
 /// A snapshot of one parent layer around a child map, taken when the child was made.
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +95,7 @@ impl Project {
                 "the entity has no outline on the parent map",
             ))?
             .1;
-        let mpp = metres_per_pixel.unwrap_or(pm.settings.metres_per_pixel / decl.scale_factor);
+        let mut mpp = metres_per_pixel.unwrap_or(pm.settings.metres_per_pixel / decl.scale_factor);
         if !(mpp.is_finite() && mpp > 0.0) {
             return Err(Error::InvalidChild("the scale must be a positive number"));
         }
@@ -112,6 +113,11 @@ impl Project {
         for q in &outline {
             (lo.x, lo.y) = (lo.x.min(q.x - margin), lo.y.min(q.y - margin));
             (hi.x, hi.y) = (hi.x.max(q.x + margin), hi.y.max(q.y + margin));
+        }
+        // The default scale doubles until the map fits, so equal areas still share a scale.
+        let side = (hi.x - lo.x).max(hi.y - lo.y);
+        while metres_per_pixel.is_none() && side / mpp + 2.0 > MAX_CHILD_SIZE {
+            mpp *= 2.0;
         }
         // On the child's pixel grid in root space, so neighbours share pixel centres.
         let origin = RootPoint {
