@@ -116,12 +116,23 @@ impl Project {
         rows.extend(c.entities.rows(forward));
         self.store.write(&rows)?;
         self.note_names(&c.entities, forward);
+        for m in &c.deleted {
+            if forward {
+                // No job may write into a deleted map.
+                self.pipeline.forget(m.id);
+                self.forget_map_tiles(m.id);
+            }
+        }
         if forward {
             self.maps
                 .retain(|m| !c.deleted.iter().any(|d| d.id == m.id));
         } else {
             self.maps.extend(c.deleted.iter().cloned());
             self.maps.sort_by_key(|m| m.id);
+            // Its rebuild stopped at the deletion.
+            for m in &c.deleted {
+                self.rebuild_derived(m.id)?;
+            }
         }
         for (before, _) in &c.unlinked {
             if let Some(m) = self.maps.iter_mut().find(|m| m.id == before.id) {

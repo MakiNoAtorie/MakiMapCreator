@@ -162,3 +162,24 @@ fn a_newer_request_replaces_an_older_one_and_full_rebuild_matches() {
     assert!(all_tiles(&quick, map, SLOPE) == expected);
     assert!(!quick.poll_jobs().unwrap());
 }
+
+#[test]
+fn deleting_a_map_stops_its_rebuild_and_undo_rebuilds_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let first = p.maps()[0].id;
+    let map = p.add_root_map(settings()).unwrap();
+    p.apply(map, stroke(Layer::HEIGHT, 2005.0, 2005.0, 50.0))
+        .unwrap();
+    p.delete_map(map).unwrap();
+    p.wait_for_jobs().unwrap();
+    assert!(p.layer_tile(map, SLOPE, 0, 0).is_err());
+    // The same edit on a live map gives the expected slope.
+    p.apply(first, stroke(Layer::HEIGHT, 2005.0, 2005.0, 50.0))
+        .unwrap();
+    p.wait_for_jobs().unwrap();
+    let flank = slope(&p, first, 2105.0, 2005.0);
+    assert!(p.undo_project().unwrap());
+    p.wait_for_jobs().unwrap();
+    assert_eq!(slope(&p, map, 2105.0, 2005.0), flank);
+}

@@ -188,6 +188,14 @@ impl Project {
         Ok(())
     }
 
+    /// Drops cached tiles and pending pyramid updates of `map`.
+    pub(crate) fn forget_map_tiles(&self, map: MapId) {
+        if let Some(cache) = self.cache.get() {
+            cache.forget(|k| k.map_id == map.0);
+            cache.drop_dirty(|k| k.map_id == map.0);
+        }
+    }
+
     /// After a map's tiles moved: drops its cached tiles, rebuilds its pyramid and derived layers.
     pub(crate) fn after_resize(&mut self, map: MapId) -> Result<()> {
         let s = self.map(map)?.settings;

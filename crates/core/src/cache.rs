@@ -111,6 +111,15 @@ impl TileCache {
         self.shared.work.notify_all();
     }
 
+    /// Drops pending pyramid updates that match.
+    pub(crate) fn drop_dirty(&self, matches: impl Fn(&TileKey) -> bool) {
+        let mut s = self.shared.lock();
+        s.dirty.retain(|k, _| !matches(k));
+        if s.idle() {
+            self.shared.idle.notify_all();
+        }
+    }
+
     /// Drops loaded tiles that match, so the next request reloads them.
     pub(crate) fn forget(&self, matches: impl Fn(&TileKey) -> bool) {
         let mut s = self.shared.lock();
