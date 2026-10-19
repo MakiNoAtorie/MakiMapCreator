@@ -1,6 +1,6 @@
 # Features and Phase 0 seams (draft)
 
-Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0012`, `doc-research/SYNTHESIS.md` §6.
+Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0013`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
 
 ## 1. Roadmap
 
@@ -40,7 +40,7 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 - Fields: built-in plus user fields per project, including entity references; field sets as template files (ADR-0010).
 - Relations: typed links between entities ("part of", "capital of").
 - Pages (ADR-0012):
-  - Markdown source with live preview; sections from the kind's page template; add, remove and reorder sections.
+  - Markdown with inline live preview (Obsidian-like; editing core reused from Just-a-markdown-editor); sections from the kind's page template; add, remove and reorder sections.
   - Entity links stored by id, completed by name, survive renames; backlinks panel.
   - Infobox from fields; images (map snapshots, user files) stored in the project.
   - Open a page by clicking a place on a map; "show on map" from a page; entities with no map still have pages.
@@ -84,4 +84,4 @@ Not in Phase 0: real generators, rivers, biomes, political algorithms, styling, 
 7. Edit the world inside the region's area; the child shows as out of date.
 
 ## 6. Open questions
-- UI toolkit: egui is the default for Rust and wgpu; confirm, including its Markdown preview and text editing for pages.
+- eframe or our own winit loop (ADR-0013): decided by the WinTab test in Phase 0.
