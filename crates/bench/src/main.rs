@@ -71,7 +71,8 @@ fn measure() -> BTreeMap<String, f64> {
         })
         .collect();
 
-    // ADR-0014: full rebuild of derived region layers at 4096², strokes wide enough to touch most tiles.
+    // ADR-0014: full rebuild of derived region layers at 4096² after an edit. Strokes are wide
+    // enough to touch most tiles; each timed stroke changes many tiles.
     let fixture = LargeMap {
         size: 4096,
         radius: 2000.0,
@@ -81,11 +82,9 @@ fn measure() -> BTreeMap<String, f64> {
     project.wait_for_jobs().unwrap();
     let rebuild = (0..RUNS)
         .map(|_| {
-            time_ms(|| {
-                project.rebuild_derived(map).unwrap();
-                project.wait_for_jobs().unwrap();
-            })
-            .0
+            // The rebuild starts when `apply` returns; time it alone.
+            project.apply(map, fixture.stroke(&mut rng)).unwrap();
+            time_ms(|| project.wait_for_jobs().unwrap()).0
         })
         .collect();
     project.close().unwrap();
