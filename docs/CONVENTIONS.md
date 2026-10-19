@@ -32,6 +32,14 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Save: `VACUUM INTO` `<file>.tmp` in the same folder, then rename over the file. No other file is written next to the project file.
 - Close deletes the working copy. A leftover working copy means a crash.
 
+## Layers, commands and undo
+
+- Raster tiles are `TILE_SIZE` (256) px squares; key (map_id, layer, level, tx, ty), level 0 = full resolution. A missing tile row means all zeros, not edited.
+- Core owns the tile format (f32 little-endian, zstd level 3). Store keeps tile blobs as opaque bytes.
+- Every edit is a `Command`. A command produces before/after records; undo writes the before records, redo the after records, each in one transaction.
+- A new raster layer adds a `Layer` variant. Command and undo types never name a layer.
+- Undo is per map, in memory, bounded by `UNDO_LIMIT`.
+
 ## Tests
 
 - Test external behaviour through public seams only. Seam 1 tests live in `crates/core/tests/` and use only the `mmc-core` API.
