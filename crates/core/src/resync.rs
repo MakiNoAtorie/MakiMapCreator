@@ -141,7 +141,9 @@ impl Project {
             Change::Tiles(t) => t.as_slice(),
             Change::Generation(g) => &g.tiles,
             Change::Resync(r) => r.tiles(),
-            Change::Entities(_) | Change::Page(_) | Change::Anchor(_) => return Ok(()),
+            Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Deletion(_) => {
+                return Ok(());
+            }
         };
         for c in tiles.iter().filter(|c| c.key.level == 0) {
             let Some(parent) = self.maps.iter().find(|m| m.id.0 == c.key.map_id) else {
@@ -369,11 +371,7 @@ impl Project {
         {
             return Err(Error::StalePlan);
         }
-        let changes = Change::Resync(change);
-        self.write(&changes, true)?;
-        self.after_write(map, &changes);
-        self.push_history(map, changes);
-        Ok(())
+        self.record(map, Change::Resync(change))
     }
 
     pub(crate) fn write_resync_change(&mut self, c: &ResyncChange, forward: bool) -> Result<()> {

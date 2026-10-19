@@ -23,6 +23,8 @@ mod children;
 pub use children::{ChildMapRecord, ContextRecord, NewChildMap};
 mod save;
 pub use save::save_snapshot;
+mod delete;
+pub use delete::ChildLink;
 mod resync;
 pub use resync::ChildState;
 
@@ -47,6 +49,7 @@ const MIGRATIONS: &[&str] = &[
     search::MIGRATION,
     generations::MIGRATION,
     children::MIGRATION,
+    delete::MIGRATION,
     resync::MIGRATION,
 ];
 
@@ -138,6 +141,7 @@ impl Store {
             tx.execute_batch(sql)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.execute_batch(delete::PURGE)?;
         tx.commit()?;
         Ok(Store {
             conn,

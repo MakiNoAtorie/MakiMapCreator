@@ -26,6 +26,7 @@ pub(crate) enum Change {
     Page(crate::page::PageChange),
     Anchor(crate::anchor::AnchorChange),
     Generation(crate::generation::GenerationChange),
+    Deletion(crate::delete::DeletionChange),
     Resync(crate::resync::ResyncChange),
 }
 
@@ -41,60 +42,59 @@ impl Project {
         let changes = self.changes(self.map(map)?, &cmd)?;
         let changes = self.clip_to_outline(map, changes)?;
         Self::refuse_derived(&changes)?;
-        self.write(&changes, true)?;
-        self.after_write(map, &changes);
-        self.push_history(map, changes);
-        Ok(())
+        self.record(map, changes)
     }
 
-    /// Records written `changes` as the newest command on `map`.
-    pub(crate) fn push_history(&mut self, map: MapId, changes: Change) {
-        let h = self.history.entry(map).or_default();
+    /// Writes `changes` applied on `map` and records them in the history `history_key` picks.
+    pub(crate) fn record(&mut self, map: MapId, changes: Change) -> Result<()> {
+        let key = crate::delete::history_key(map, &changes);
+        self.write(&changes, true)?;
+        self.after_write(map, &changes);
+        let h = self.history.entry(key).or_default();
         h.undone.clear();
         if h.done.len() == UNDO_LIMIT {
             h.done.pop_front();
         }
         h.done.push_back(changes);
+        Ok(())
     }
 
     /// Undoes the last command on `map`; `false` if there is none.
     pub fn undo(&mut self, map: MapId) -> Result<bool> {
         self.map(map)?;
-        let Some(changes) = self.history.entry(map).or_default().done.pop_back() else {
-            return Ok(false);
-        };
-        let res = self.write(&changes, false);
-        if res.is_ok() {
-            self.after_write(map, &changes);
-        }
-        let h = self.history.get_mut(&map).unwrap();
-        match res {
-            Ok(()) => h.undone.push(changes),
-            Err(_) => h.done.push_back(changes),
-        }
-        res.map(|()| true)
+        self.step(map, false)
     }
 
     /// Redoes the last undone command on `map`; `false` if there is none.
     pub fn redo(&mut self, map: MapId) -> Result<bool> {
         self.map(map)?;
-        let Some(changes) = self.history.entry(map).or_default().undone.pop() else {
+        self.step(map, true)
+    }
+
+    /// Redoes (`forward`) or undoes one change of the history `key`.
+    pub(crate) fn step(&mut self, key: MapId, forward: bool) -> Result<bool> {
+        let h = self.history.entry(key).or_default();
+        let Some(changes) = (if forward {
+            h.undone.pop()
+        } else {
+            h.done.pop_back()
+        }) else {
             return Ok(false);
         };
-        let res = self.write(&changes, true);
+        let res = self.write(&changes, forward);
         if res.is_ok() {
-            self.after_write(map, &changes);
+            self.after_write(key, &changes);
         }
-        let h = self.history.get_mut(&map).unwrap();
-        match res {
-            Ok(()) => h.done.push_back(changes),
-            Err(_) => h.undone.push(changes),
+        let h = self.history.get_mut(&key).unwrap();
+        if res.is_ok() == forward {
+            h.done.push_back(changes);
+        } else {
+            h.undone.push(changes);
         }
         res.map(|()| true)
     }
-
     /// Writes the after records, or the before records when `forward` is false.
-    pub(crate) fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
+    fn write(&mut self, changes: &Change, forward: bool) -> Result<()> {
         let res = match changes {
             Change::Tiles(tiles) => {
                 let writes: Vec<_> = tiles
@@ -112,6 +112,7 @@ impl Project {
             Change::Page(p) => self.write_page_change(p, forward),
             Change::Anchor(a) => self.write_anchor_change(a, forward),
             Change::Generation(g) => self.write_generation_change(g, forward),
+            Change::Deletion(d) => self.write_deletion(d, forward),
             Change::Resync(r) => self.write_resync_change(r, forward),
         };
         res?;

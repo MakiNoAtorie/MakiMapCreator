@@ -73,8 +73,14 @@ pub enum EntityEdit {
         key: String,
         value: Value,
     },
-    /// Also removes the entity's relations.
+    /// Also removes the entity's relations. Refused with `Error::OwnMapChoice` if the
+    /// entity has its own map.
     Delete(EntityId),
+    /// Deletes an entity and says what happens to the maps made from it.
+    DeleteWithMap {
+        id: EntityId,
+        own_map: crate::OwnMap,
+    },
     Relate(Relation),
     Unrelate(Relation),
 }
@@ -316,8 +322,11 @@ impl Project {
                 }
                 c.entities.push(update(&before, &after));
             }
-            EntityEdit::Delete(id) => {
+            EntityEdit::Delete(id) | EntityEdit::DeleteWithMap { id, .. } => {
                 let before = self.existing(*id)?;
+                if matches!(edit, EntityEdit::Delete(_)) && !self.own_maps(*id)?.is_empty() {
+                    return Err(Error::OwnMapChoice(*id));
+                }
                 for r in self.store.relations()? {
                     if r.from_id == id.0 || r.to_id == id.0 {
                         c.relations.push((r, true, false));
