@@ -5,6 +5,13 @@ use std::path::Path;
 
 use mmc_store::Store;
 
+mod command;
+mod layer;
+mod undo;
+pub use command::{BrushStroke, Command, StrokePoint};
+pub use layer::{Layer, RootPoint, TILE_SIZE};
+pub use undo::UNDO_LIMIT;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
     World,
@@ -67,6 +74,8 @@ pub struct Map {
 pub enum Error {
     Store(mmc_store::Error),
     UnknownMapKind(String),
+    UnknownMap(MapId),
+    CorruptTile,
 }
 
 impl fmt::Display for Error {
@@ -74,6 +83,8 @@ impl fmt::Display for Error {
         match self {
             Error::Store(e) => e.fmt(f),
             Error::UnknownMapKind(k) => write!(f, "the file has an unknown map kind: {k}"),
+            Error::UnknownMap(id) => write!(f, "the project has no map with id {}", id.0),
+            Error::CorruptTile => write!(f, "the file has a damaged map tile"),
         }
     }
 }
@@ -92,6 +103,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Project {
     store: Store,
     maps: Vec<Map>,
+    history: std::collections::HashMap<MapId, undo::History>,
 }
 
 impl Project {
@@ -112,6 +124,7 @@ impl Project {
                 parent: None,
                 settings: root,
             }],
+            history: Default::default(),
         })
     }
 
@@ -134,7 +147,29 @@ impl Project {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok(Project { store, maps })
+        Ok(Project {
+            store,
+            maps,
+            history: Default::default(),
+        })
+    }
+
+    /// Adds a map with no parent and returns its id.
+    pub fn add_root_map(&mut self, settings: MapSettings) -> Result<MapId> {
+        let s = settings;
+        let id = MapId(self.store.insert_map(
+            None,
+            s.kind.as_str(),
+            s.width,
+            s.height,
+            s.metres_per_pixel,
+        )?);
+        self.maps.push(Map {
+            id,
+            parent: None,
+            settings,
+        });
+        Ok(id)
     }
 
     pub fn save(&self, file: &Path) -> Result<()> {

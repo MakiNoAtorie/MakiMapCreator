@@ -5,18 +5,24 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
+mod tiles;
+pub use tiles::{TileKey, TileRecord};
+
 /// `PRAGMA application_id` of a project file ("MMC1").
 pub const APPLICATION_ID: i32 = 0x4D4D_4331;
 
 /// Ordered migrations; `user_version` is the count applied.
-const MIGRATIONS: &[&str] = &["CREATE TABLE maps (
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE maps (
         id INTEGER PRIMARY KEY,
         parent_id INTEGER REFERENCES maps(id),
         kind TEXT NOT NULL,
         width INTEGER NOT NULL,
         height INTEGER NOT NULL,
         metres_per_pixel REAL NOT NULL
-    );"];
+    );",
+    tiles::MIGRATION,
+];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
 
