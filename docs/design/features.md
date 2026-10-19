@@ -1,6 +1,6 @@
 # Features and Phase 0 seams (draft)
 
-Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0022`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
+Status: working draft. Terms follow `GLOSSARY.md`. Decisions: `docs/adr/0001`–`0023`, UI rules in `docs/design/ui.md`, `doc-research/SYNTHESIS.md` §6.
 
 ## 1. Roadmap
 
