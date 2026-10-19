@@ -18,6 +18,7 @@ impl From<EntityId> for Value {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityKind {
     pub id: String,
+    /// A UI string id (ADR-0017).
     pub label: String,
     /// "political" or "natural".
     pub category: String,
@@ -37,6 +38,7 @@ pub enum FieldType {
 pub struct FieldDef {
     pub kind: String,
     pub key: String,
+    /// A UI string id for built-in fields; the user's text for user fields.
     pub label: String,
     pub field_type: FieldType,
     /// Built-in fields are read and written by the app; the others are user fields.

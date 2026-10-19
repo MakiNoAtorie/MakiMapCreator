@@ -56,6 +56,7 @@ pub const MIGRATIONS: &[&str] = &[
     // One project seed (ADR-0021); a new or older file gets a random one.
     "CREATE TABLE project (seed INTEGER NOT NULL);
      INSERT INTO project (seed) VALUES (random());",
+    entities::LABEL_KEYS,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;

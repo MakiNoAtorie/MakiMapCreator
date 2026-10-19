@@ -192,7 +192,11 @@ pub fn properties(
             }
             ui.end_row();
             for d in i.defs {
-                ui.label(&d.label);
+                ui.label(if d.builtin {
+                    tr(&d.label)
+                } else {
+                    d.label.clone()
+                });
                 let v = e.fields.get(&d.key);
                 field_editor(ui, edit, e, d, v, i.entities, out);
                 ui.end_row();

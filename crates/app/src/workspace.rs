@@ -56,7 +56,7 @@ pub fn outliner_rows(
         kinds
             .iter()
             .find(|x| x.id == k)
-            .map_or(k.to_owned(), |x| x.label.clone())
+            .map_or(k.to_owned(), |x| crate::i18n::tr(&x.label))
     };
     let mut rows = vec![];
     let mut stack: Vec<(EntityId, usize)> = children

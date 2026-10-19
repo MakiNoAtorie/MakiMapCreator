@@ -52,6 +52,12 @@ pub(crate) const MIGRATION: &str = "
         ('settlement', 'population', 'Population', 'number', NULL, 1);
 ";
 
+/// Seeded kind and built-in field labels become UI string ids (ADR-0017); user labels stay text.
+pub(crate) const LABEL_KEYS: &str = "
+    UPDATE entity_kinds SET label = 'entity-kind-' || replace(id, '_', '-');
+    UPDATE field_defs SET label = 'field-' || kind || '-' || key WHERE builtin;
+";
+
 fn entity_row(r: &Row) -> rusqlite::Result<EntityRecord> {
     Ok(EntityRecord {
         id: r.get(0)?,
