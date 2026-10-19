@@ -23,13 +23,13 @@ pub struct Theme {
     pub panel: Color32,
     panel_alt: Color32,
     field: Color32,
-    widget: Color32,
-    widget_hi: Color32,
-    line: Color32,
-    text: Color32,
-    text_weak: Color32,
-    accent: Color32,
-    accent_dim: Color32,
+    pub widget: Color32,
+    pub widget_hi: Color32,
+    pub line: Color32,
+    pub text: Color32,
+    pub text_weak: Color32,
+    pub accent: Color32,
+    pub accent_dim: Color32,
 }
 
 impl Theme {

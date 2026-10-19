@@ -2,14 +2,16 @@
 //! layers rebuild on worker threads after each edit (ADR-0014).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 
-use mmc_store::{LayerTiles, TileConn, TileRecord};
+use mmc_store::{TileConn, TileKey, TileRecord};
 
 use crate::jobs::{Cancelled, Jobs};
 use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode, tile_of};
-use crate::pyramid::levels_above;
+use crate::pyramid::{Level, levels_above};
 use crate::undo::Change;
 use crate::{Error, MapId, Project, Result};
 
@@ -20,7 +22,7 @@ fn changed_layers(change: &Change) -> Vec<Layer> {
             .iter()
             .filter_map(|c| Layer::parse(&c.key.layer))
             .collect(),
-        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) => vec![],
+        Change::Entities(_) | Change::Page(_) | Change::Anchor(_) | Change::Generation(_) => vec![],
     }
 }
 
@@ -189,7 +191,34 @@ struct MapJob {
     top: u32,
 }
 
-type Output = (TileConn, i64, Vec<(Layer, Vec<LayerTiles>)>);
+/// Per computed tile: digest and zstd bytes, `None` when all zeros.
+type Encoded = Vec<((u32, u32), Option<(u64, Vec<u8>)>)>;
+/// Per written layer: level-0 tiles, and levels 1..=top decoded for the pyramid.
+type Output = (TileConn, i64, usize, Vec<(Layer, Encoded, Vec<Level>)>);
+
+/// Digests of the derived tiles in the working copy; `None` until loaded.
+type Committed = Mutex<Option<HashMap<(Layer, (u32, u32)), u64>>>;
+
+// ponytail: 64-bit SipHash; a collision skips one tile write. Use BLAKE3 if that ever matters.
+fn digest(data: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
+}
+
+fn tile_key(map: i64, layer: Layer, (tx, ty): (u32, u32)) -> TileKey {
+    level_key(map, layer, 0, (tx, ty))
+}
+
+fn level_key(map: i64, layer: Layer, level: u32, (tx, ty): (u32, u32)) -> TileKey {
+    TileKey {
+        map_id: map,
+        layer: layer.as_str().to_owned(),
+        level,
+        tx,
+        ty,
+    }
+}
 
 /// Runs the dirty stages in order on its own connection to the working copy.
 fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
@@ -230,34 +259,88 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
     }
     let mut out = vec![];
     for l in written {
+        let tiles: Vec<_> = cx.layers[&l].iter().collect();
+        let encoded = par_map(job.threads, &tiles, cancelled, |(_, v)| {
+            v.iter().any(|x| *x != 0.0).then(|| {
+                let data = encode(v);
+                (digest(&data), data)
+            })
+        })?;
         let above = levels_above(&cx.layers[&l], job.top);
-        let mut levels = vec![];
-        for level in std::iter::once(&cx.layers[&l]).chain(&above) {
-            let tiles: Vec<_> = level.iter().collect();
-            let encoded = par_map(job.threads, &tiles, cancelled, |(_, v)| {
-                v.iter().any(|x| *x != 0.0).then(|| encode(v))
-            })?;
-            let records = tiles.iter().zip(encoded).filter_map(|((t, _), data)| {
-                Some((
-                    **t,
-                    TileRecord {
-                        data: data?,
-                        edited: false,
-                    },
-                ))
-            });
-            levels.push(records.collect());
-        }
-        out.push((l, levels));
+        out.push((
+            l,
+            tiles.iter().map(|(t, _)| **t).zip(encoded).collect(),
+            above,
+        ));
     }
-    Some(Ok((reader, job.id, out)))
+    Some(Ok((reader, job.id, job.threads, out)))
 }
 
-/// Swaps the new derived tiles in: one transaction, so readers see the old or the new state.
-fn commit(out: Result<Output>) -> Result<()> {
-    let (mut conn, map, layers) = out?;
-    let layers: Vec<_> = layers.into_iter().map(|(l, t)| (l.as_str(), t)).collect();
-    Ok(conn.replace_layers(map, &layers)?)
+/// Writes only the tiles whose bytes changed, in one transaction, so readers see the old or
+/// the new state. Runs under the jobs lock, so the digests match the working copy.
+fn commit(committed: &Committed, out: Result<Output>) -> Result<()> {
+    let (conn, map, threads, layers) = out?;
+    let mut committed = committed.lock().unwrap();
+    let mut known = match committed.take() {
+        Some(k) => k,
+        None => {
+            let mut k = HashMap::new();
+            for l in Layer::ALL.into_iter().filter(|l| l.is_derived()) {
+                for (t, r) in conn.layer_tiles(map, l.as_str())? {
+                    k.insert((l, t), digest(&r.data));
+                }
+            }
+            k
+        }
+    };
+    let mut writes = vec![];
+    for (l, tiles, above) in layers {
+        let first = writes.len();
+        let mut stale: BTreeSet<(u32, u32)> =
+            known.keys().filter(|k| k.0 == l).map(|k| k.1).collect();
+        for (t, enc) in tiles {
+            let Some((d, data)) = enc else { continue };
+            stale.remove(&t);
+            if known.insert((l, t), d) != Some(d) {
+                let rec = TileRecord {
+                    data,
+                    edited: false,
+                };
+                writes.push((tile_key(map, l, t), Some(rec)));
+            }
+        }
+        for t in stale {
+            known.remove(&(l, t));
+            writes.push((tile_key(map, l, t), None));
+        }
+        // Pyramid tiles above the changed level-0 tiles only.
+        let changed: Vec<(u32, u32)> = writes[first..].iter().map(|(k, _)| (k.tx, k.ty)).collect();
+        let mut upper = BTreeSet::new();
+        for (i, _) in above.iter().enumerate() {
+            let shift = i as u32 + 1;
+            upper.extend(
+                changed
+                    .iter()
+                    .map(|&(x, y)| (shift, (x >> shift, y >> shift))),
+            );
+        }
+        let upper: Vec<_> = upper.into_iter().collect();
+        let encoded = par_map(threads, &upper, &|| false, |&(level, t)| {
+            let v = above[level as usize - 1].get(&t)?;
+            v.iter().any(|x| *x != 0.0).then(|| encode(v))
+        })
+        .expect("never cancelled");
+        for ((level, t), data) in upper.into_iter().zip(encoded) {
+            let rec = data.map(|data| TileRecord {
+                data,
+                edited: false,
+            });
+            writes.push((level_key(map, l, level, t), rec));
+        }
+    }
+    conn.write_tiles(&writes)?;
+    *committed = Some(known);
+    Ok(())
 }
 
 #[derive(Default)]
@@ -265,6 +348,7 @@ struct MapState {
     /// Stages to rerun; cleared when the latest job has committed.
     dirty: Vec<bool>,
     jobs: Jobs<Result<()>>,
+    committed: Arc<Committed>,
 }
 
 pub(crate) struct Pipeline {
@@ -363,10 +447,11 @@ impl Project {
             threads: self.pipeline.threads,
             top: crate::pyramid::top_level(&s),
         };
-        // ponytail: the commit holds the SQLite write lock (~0.5 s for 4096² of slope), so an edit
-        // made meanwhile waits; write in chunks or shrink derived tiles if strokes stall.
-        st.jobs
-            .submit(move |cancelled| rebuild(job, cancelled), commit);
+        let committed = Arc::clone(&st.committed);
+        st.jobs.submit(
+            move |cancelled| rebuild(job, cancelled),
+            move |out| commit(&committed, out),
+        );
     }
 }
 

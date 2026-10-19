@@ -28,6 +28,12 @@ mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
 mod search;
 pub use search::{NameHit, TextHit, TextSearch};
+mod paint;
+pub use paint::PaintStroke;
+mod generation;
+pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
+mod kind;
+pub use kind::{Kinds, MapKindModule, Summary, Tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -116,6 +122,7 @@ pub enum Error {
     CorruptEntity,
     InvalidAnchor(&'static str),
     UnknownFeature(FeatureId),
+    UnknownGenerator(String),
 }
 
 impl fmt::Display for Error {
@@ -139,6 +146,7 @@ impl fmt::Display for Error {
             Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
             Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
             Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
+            Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
         }
     }
 }
