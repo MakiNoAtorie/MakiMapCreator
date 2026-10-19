@@ -42,9 +42,10 @@ fn brush(c: RootPoint) -> Command {
         points: vec![StrokePoint {
             at: c,
             pressure: 1.0,
+            radius: 300.0,
         }],
-        radius: 300.0,
         strength: 50.0,
+        falloff: 1.0,
     })
 }
 

@@ -29,9 +29,10 @@ fn stroke_at(i: usize) -> Command {
         points: vec![StrokePoint {
             at: RootPoint { x, y },
             pressure: 1.0,
+            radius: 50.0,
         }],
-        radius: 50.0,
         strength: 10.0,
+        falloff: 1.0,
     })
 }
 

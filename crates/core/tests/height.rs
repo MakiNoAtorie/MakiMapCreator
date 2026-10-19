@@ -19,9 +19,10 @@ fn stroke(x: f64, y: f64, strength: f32) -> Command {
         points: vec![StrokePoint {
             at: RootPoint { x, y },
             pressure: 1.0,
+            radius: 50.0,
         }],
-        radius: 50.0,
         strength,
+        falloff: 1.0,
     })
 }
 
@@ -71,9 +72,10 @@ fn brush_raises_height_inside_radius_only_and_scales_with_pressure() {
                 y: 2005.0,
             },
             pressure: 0.5,
+            radius: 50.0,
         }],
-        radius: 50.0,
         strength: 10.0,
+        falloff: 1.0,
     });
     p.apply(map, half).unwrap();
     assert_eq!(height(&p, map, 6005.0, 2005.0), centre / 2.0);
@@ -185,4 +187,43 @@ fn heights_and_edited_flags_survive_save_and_reload_but_undo_does_not() {
     assert_eq!(p.edited_tiles(map, Layer::HEIGHT).unwrap(), edited);
     assert!(!p.undo(map).unwrap());
     p.close().unwrap();
+}
+
+#[test]
+fn each_point_has_its_own_radius_and_falloff_shapes_the_stamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let map = p.maps()[0].id;
+    let point = |x: f64, radius: f64| StrokePoint {
+        at: RootPoint { x, y: 2005.0 },
+        pressure: 1.0,
+        radius,
+    };
+    let brush = |falloff: f32, points| {
+        Command::Brush(BrushStroke {
+            layer: Layer::HEIGHT,
+            points,
+            strength: 10.0,
+            falloff,
+        })
+    };
+    // One command: a small stamp at x = 1005 and a large one at x = 4005.
+    p.apply(
+        map,
+        brush(1.0, vec![point(1005.0, 30.0), point(4005.0, 300.0)]),
+    )
+    .unwrap();
+    assert_eq!(height(&p, map, 1105.0, 2005.0), 0.0);
+    assert!(height(&p, map, 4105.0, 2005.0) > 0.0);
+    assert!(p.undo(map).unwrap());
+    assert!(!p.undo(map).unwrap(), "one stroke is one undo step");
+
+    // Hard (0) keeps full strength out to the rim; soft (1) fades.
+    p.apply(map, brush(0.0, vec![point(1005.0, 100.0)]))
+        .unwrap();
+    p.apply(map, brush(1.0, vec![point(4005.0, 100.0)]))
+        .unwrap();
+    assert_eq!(height(&p, map, 1085.0, 2005.0), 10.0);
+    let soft = height(&p, map, 4085.0, 2005.0);
+    assert!(soft > 0.0 && soft < 2.0, "{soft}");
 }

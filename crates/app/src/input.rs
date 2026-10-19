@@ -49,6 +49,21 @@ pub enum PenApi {
     Ink,
 }
 
+/// The WinTab device in use, or why WinTab is not used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WintabState {
+    Device {
+        name: String,
+        pressure: (u32, u32),
+    },
+    NotSelected,
+    NoDriver,
+    /// The driver lacks a WinTab function.
+    BadDriver,
+    NoService,
+    NoContext,
+}
+
 pub fn active_api(setting: PenApi, wintab_present: bool) -> PenApi {
     if setting == PenApi::WinTab && wintab_present {
         PenApi::WinTab

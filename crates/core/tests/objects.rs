@@ -122,3 +122,64 @@ fn objects_are_deleted_with_their_map() {
     assert_eq!(q.maps().len(), 1);
     assert!(q.objects(first).unwrap().is_empty());
 }
+
+#[test]
+fn the_entity_under_a_point_comes_from_objects_then_anchors() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = project(dir.path());
+    let map = p.maps()[0].id;
+    let mut add = |kind: &str| {
+        let id = p.next_entity_id().unwrap();
+        let e = Entity {
+            id,
+            kind: kind.into(),
+            name: kind.into(),
+            fields: Default::default(),
+        };
+        p.apply(map, Command::Entity(EntityEdit::Create(e)))
+            .unwrap();
+        id
+    };
+    let (region, town, river, lake) = (add("region"), add("settlement"), add("river"), add("lake"));
+    let mut area = object(
+        &p,
+        Shape::Polygon,
+        vec![
+            at(0.0, 0.0),
+            at(1000.0, 0.0),
+            at(1000.0, 1000.0),
+            at(0.0, 1000.0),
+        ],
+    );
+    area.entity = Some(region);
+    p.apply(map, Command::Object(ObjectEdit::Create(area)))
+        .unwrap();
+    let mut dot = object(&p, Shape::Point, vec![at(500.0, 500.0)]);
+    dot.entity = Some(town);
+    p.apply(map, Command::Object(ObjectEdit::Create(dot)))
+        .unwrap();
+    let anchors = mmc_core::Anchors::Lake {
+        inside: at(3000.0, 3000.0),
+    };
+    let edit = mmc_core::AnchorEdit::Set {
+        entity: lake,
+        anchors,
+    };
+    p.apply(map, Command::Anchor(edit)).unwrap();
+    let anchors = mmc_core::Anchors::River {
+        mouth: at(5000.0, 0.0),
+        picked: at(5000.0, 400.0),
+    };
+    let edit = mmc_core::AnchorEdit::Set {
+        entity: river,
+        anchors,
+    };
+    p.apply(map, Command::Anchor(edit)).unwrap();
+
+    let e = |x, y| p.entity_at(map, at(x, y), 20.0).unwrap();
+    assert_eq!(e(510.0, 505.0), Some(town));
+    assert_eq!(e(200.0, 200.0), Some(region));
+    assert_eq!(e(3010.0, 3000.0), Some(lake));
+    assert_eq!(e(5000.0, 410.0), Some(river));
+    assert_eq!(e(8000.0, 8000.0), None);
+}

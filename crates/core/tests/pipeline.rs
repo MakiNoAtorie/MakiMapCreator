@@ -19,9 +19,10 @@ fn stroke(layer: Layer, x: f64, y: f64, strength: f32) -> Command {
         points: vec![StrokePoint {
             at: RootPoint { x, y },
             pressure: 1.0,
+            radius: 300.0,
         }],
-        radius: 300.0,
         strength,
+        falloff: 1.0,
     })
 }
 

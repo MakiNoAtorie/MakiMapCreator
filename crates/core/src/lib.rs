@@ -14,7 +14,7 @@ pub mod rng;
 mod save;
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
-pub use command::{BrushStroke, Command, StrokePoint};
+pub use command::{BrushStroke, Command, StrokePoint, brush_weight};
 pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;

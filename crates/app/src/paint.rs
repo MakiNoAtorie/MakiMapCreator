@@ -1,14 +1,13 @@
-//! Painting state and UI: tool strip, options bar, brush cursor, stroke overlay, undo groups.
-//!
+//! Painting state and UI: tool strip, options bar, brush cursor, stroke overlay.
 //! A stroke is shown by an overlay while the pen is down and until the renderer shows the
-//! edit; core gets one set of commands at pen up so a stroke is one undo step.
+//! edit; core gets one command per stroke at pen up, so a stroke is one undo step.
 
 use std::collections::VecDeque;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
-use mmc_core::{BrushStroke, MapId, RootPoint};
+use mmc_core::{Command, MapId, RootPoint, Tool, ToolAction};
 
-use crate::brush::{self, Edit, MAX_STRENGTH, Options, Sample, Tool};
+use crate::brush::{self, Direction, Edit, MAX_STRENGTH, Options, Sample};
 use crate::canvas::{Canvas, SharedProject};
 use crate::i18n::{tr, tr_args};
 use crate::input::Phase;
@@ -17,12 +16,10 @@ use crate::view::MapView;
 
 /// Seconds the app waits for derived layers after an edit.
 const JOBS_WAIT: f64 = 30.0;
-/// The fixed core profile `(1-d^2)^2` is half its peak at this fraction of the radius.
-const HALF_RADIUS: f32 = 0.541;
 const TOOL_BUTTON: f32 = 32.0;
 
 enum Op {
-    Commit(Vec<BrushStroke>),
+    Commit(Command),
     Undo,
     Redo,
 }
@@ -35,7 +32,10 @@ pub struct Input {
 }
 
 pub struct Painter {
-    pub tool: Tool,
+    /// The map kind's edit tools; `tool` indexes them.
+    tools: &'static [Tool],
+    pub tool: usize,
+    pub dir: Direction,
     pub options: Options,
     mpp: f64,
     stroke: Vec<Sample>,
@@ -44,10 +44,6 @@ pub struct Painter {
     overlay: Vec<(RootPoint, f64, bool)>,
     await_epoch: Option<u64>,
     jobs_until: Option<f64>,
-    /// Core commands per stroke; undo and redo move whole strokes.
-    // ponytail: assumes only strokes are applied on the map; entity edits (#10) need a shared group in core.
-    done: Vec<usize>,
-    undone: Vec<usize>,
     /// Last known cursor and pressure, for the brush rings.
     cursor: Option<(Pos2, f32)>,
     /// Bumped when an edit, undo or redo changed the project; the app reloads what it shows.
@@ -55,9 +51,11 @@ pub struct Painter {
 }
 
 impl Painter {
-    pub fn new(mpp: f64) -> Painter {
+    pub fn new(mpp: f64, tools: &'static [Tool]) -> Painter {
         Painter {
-            tool: Tool::Raise,
+            tools,
+            tool: 0,
+            dir: Direction::Raise,
             options: Options::for_map(mpp),
             mpp,
             stroke: vec![],
@@ -65,17 +63,17 @@ impl Painter {
             overlay: vec![],
             await_epoch: None,
             jobs_until: None,
-            done: vec![],
-            undone: vec![],
             cursor: None,
             version: 0,
         }
     }
 
-    /// Records a command applied outside the brush (entity edit, generator) as one undo step.
-    pub fn external_command(&mut self, canvas: &mut Canvas, now: f64, derived: bool) {
-        self.done.push(1);
-        self.undone.clear();
+    fn current(&self) -> Option<Tool> {
+        self.tools.get(self.tool).copied()
+    }
+
+    /// Notes a change made outside the painter (entity edit, generator) so the canvas redraws.
+    pub fn changed(&mut self, canvas: &mut Canvas, now: f64, derived: bool) {
         self.version += 1;
         self.await_epoch = Some(canvas.invalidate());
         if derived {
@@ -89,8 +87,13 @@ impl Painter {
             Edit::Redo => self.ops.push_back(Op::Redo),
             Edit::SizeDown => self.options.step_size(-1, self.mpp),
             Edit::SizeUp => self.options.step_size(1, self.mpp),
-            Edit::Tool(t) => self.tool = t,
+            Edit::Direction(d) => self.dir = d,
         }
+    }
+
+    fn plan(&self, path: &[Sample]) -> Option<Command> {
+        let t = self.current()?;
+        brush::plan(t.action, t.layer, self.dir, &self.options, self.mpp, path)
     }
 
     /// Feeds one sample from the canvas; `view` and `rect` map points to root space.
@@ -114,11 +117,13 @@ impl Painter {
                 }
                 self.stroke.push(sample);
                 let path = std::mem::take(&mut self.stroke);
-                let strokes = brush::plan(self.tool, &self.options, self.mpp, &path);
-                let raise = self.tool == Tool::Raise;
-                self.overlay
-                    .extend(stamps(&strokes).map(|(at, r)| (at, r, raise)));
-                self.ops.push_back(Op::Commit(strokes));
+                if let Some(cmd) = self.plan(&path) {
+                    let raise = self.dir == Direction::Raise;
+                    let discs = brush::stamp_discs(&cmd);
+                    self.overlay
+                        .extend(discs.into_iter().map(|(at, r)| (at, r, raise)));
+                    self.ops.push_back(Op::Commit(cmd));
+                }
             }
         }
     }
@@ -152,38 +157,18 @@ impl Painter {
         let mut changed = false;
         while let Some(op) = self.ops.pop_front() {
             let r = match op {
-                Op::Commit(strokes) => {
-                    let mut n = 0;
-                    let mut r = Ok(());
-                    for s in strokes {
-                        r = p.apply(map, mmc_core::Command::Brush(s));
-                        if r.is_err() {
-                            break;
-                        }
-                        n += 1;
-                    }
-                    if n > 0 {
-                        self.done.push(n);
-                        self.undone.clear();
-                    }
-                    changed |= n > 0;
-                    r
-                }
-                Op::Undo => step(p, map, &mut self.done, &mut self.undone, true, &mut changed),
-                Op::Redo => step(
-                    p,
-                    map,
-                    &mut self.undone,
-                    &mut self.done,
-                    false,
-                    &mut changed,
-                ),
+                Op::Commit(cmd) => p.apply(map, cmd).map(|()| true),
+                Op::Undo => p.undo(map),
+                Op::Redo => p.redo(map),
             };
-            if let Err(e) = r {
-                error = Some(tr_args(
-                    "error-paint",
-                    &[("error", &crate::errors::text(&e))],
-                ));
+            match r {
+                Ok(c) => changed |= c,
+                Err(e) => {
+                    error = Some(tr_args(
+                        "error-paint",
+                        &[("error", &crate::errors::text(&e))],
+                    ))
+                }
             }
         }
         if changed {
@@ -230,28 +215,34 @@ impl Painter {
         for &(at, r, raise) in &self.overlay {
             painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(raise));
         }
-        if !self.stroke.is_empty() {
-            let live = brush::plan(self.tool, &self.options, self.mpp, &self.stroke);
-            let raise = self.tool == Tool::Raise;
-            for (at, r) in stamps(&live) {
+        if !self.stroke.is_empty()
+            && let Some(live) = self.plan(&self.stroke)
+        {
+            let raise = self.dir == Direction::Raise;
+            for (at, r) in brush::stamp_discs(&live) {
                 painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(raise));
             }
         }
         if let Some((pos, pressure)) = self.cursor.filter(|(p, _)| rect.contains(*p)) {
             let r = to_pt(self.options.radius_at(pressure));
             painter.circle_stroke(pos, r, Stroke::new(1.0, t.text));
-            painter.circle_stroke(pos, r * HALF_RADIUS, Stroke::new(1.0, t.text_weak));
+            let soft = self
+                .current()
+                .is_some_and(|t| t.action == ToolAction::Brush);
+            if soft {
+                let half = r * self.options.half_radius();
+                painter.circle_stroke(pos, half, Stroke::new(1.0, t.text_weak));
+            }
         }
     }
 
-    /// Left tool strip.
+    /// Left tool strip: the kind's tools, then raise and lower.
     pub fn tool_strip(&mut self, ui: &mut egui::Ui, t: &Theme) {
-        for (tool, name, key) in [
-            (Tool::Raise, "tool-raise", "R"),
-            (Tool::Lower, "tool-lower", "L"),
-        ] {
+        let button = |ui: &mut egui::Ui,
+                      active: bool,
+                      tip: String,
+                      draw: &dyn Fn(&egui::Painter, Rect, Stroke)| {
             let (rect, resp) = ui.allocate_exact_size(Vec2::splat(TOOL_BUTTON), Sense::click());
-            let active = self.tool == tool;
             let fill = if active {
                 t.accent_dim
             } else if resp.hovered() {
@@ -259,23 +250,40 @@ impl Painter {
             } else {
                 Color32::TRANSPARENT
             };
-            let painter = ui.painter();
-            painter.rect_filled(rect, 2.0, fill);
+            ui.painter().rect_filled(rect, 2.0, fill);
             let colour = if active { t.accent } else { t.text };
-            icon(painter, rect, tool == Tool::Raise, Stroke::new(1.5, colour));
-            if resp
-                .on_hover_text(tr_args("tool-tip", &[("name", &tr(name)), ("key", key)]))
-                .clicked()
-            {
-                self.tool = tool;
+            draw(ui.painter(), rect, Stroke::new(1.5, colour));
+            resp.on_hover_text(tip).clicked()
+        };
+        for (i, tool) in self.tools.iter().enumerate() {
+            let name = tr(&format!("tool-{}", tool.id));
+            let brush = tool.action == ToolAction::Brush;
+            let draw = move |p: &egui::Painter, r: Rect, s: Stroke| tool_icon(p, r, brush, s);
+            if button(ui, self.tool == i, name, &draw) {
+                self.tool = i;
+            }
+        }
+        ui.separator();
+        for (dir, name, key) in [
+            (Direction::Raise, "tool-raise", "R"),
+            (Direction::Lower, "tool-lower", "L"),
+        ] {
+            let tip = tr_args("tool-tip", &[("name", &tr(name)), ("key", key)]);
+            let up = dir == Direction::Raise;
+            let draw = move |p: &egui::Painter, r: Rect, s: Stroke| arrow(p, r, up, s);
+            if button(ui, self.dir == dir, tip, &draw) {
+                self.dir = dir;
             }
         }
     }
 
-    /// Options bar for the brush tools.
+    /// Options bar for the active tool.
     pub fn options_bar(&mut self, ui: &mut egui::Ui) {
         let mpp = self.mpp;
         let (lo, hi) = Options::size_limits(mpp);
+        let brush = self
+            .current()
+            .is_some_and(|t| t.action == ToolAction::Brush);
         ui.horizontal(|ui| {
             ui.label(tr("options-size"));
             // The slider shows pixels; the option is metres.
@@ -286,6 +294,9 @@ impl Painter {
                     .suffix(" px"),
             );
             self.options.size = px * mpp;
+            if !brush {
+                return;
+            }
             ui.separator();
             ui.label(tr("options-strength"));
             ui.add(egui::Slider::new(
@@ -294,11 +305,7 @@ impl Painter {
             ));
             ui.separator();
             ui.label(tr("options-falloff"));
-            ui.add_enabled(
-                false,
-                egui::Slider::new(&mut self.options.falloff, 0.0..=1.0),
-            )
-            .on_disabled_hover_text(tr("options-falloff-fixed"));
+            ui.add(egui::Slider::new(&mut self.options.falloff, 0.0..=1.0));
             ui.separator();
             ui.checkbox(&mut self.options.pressure_size, tr("options-pressure-size"));
             ui.checkbox(
@@ -309,68 +316,35 @@ impl Painter {
     }
 }
 
-fn step(
-    p: &mut mmc_core::Project,
-    map: MapId,
-    from: &mut Vec<usize>,
-    to: &mut Vec<usize>,
-    undo: bool,
-    changed: &mut bool,
-) -> mmc_core::Result<()> {
-    let Some(n) = from.pop() else {
-        return Ok(());
-    };
-    for k in 0..n {
-        let r = if undo { p.undo(map) } else { p.redo(map) };
-        if let Err(e) = r {
-            // Keep the strokes that did not move on the source stack.
-            from.push(n - k);
-            if k > 0 {
-                to.push(k);
-                *changed = true;
-            }
-            return Err(e);
-        }
-    }
-    to.push(n);
-    *changed = true;
-    Ok(())
-}
-
-fn stamps(strokes: &[BrushStroke]) -> impl Iterator<Item = (RootPoint, f64)> + '_ {
-    strokes
-        .iter()
-        .flat_map(|s| s.points.iter().map(|p| (p.at, s.radius)))
-}
-
-/// Raise: hill with an up arrow. Lower: valley with a down arrow.
-fn icon(painter: &egui::Painter, rect: Rect, raise: bool, stroke: Stroke) {
+/// A brush tool: a hill. A paint tool: a filled disc.
+fn tool_icon(painter: &egui::Painter, rect: Rect, brush: bool, stroke: Stroke) {
     let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * rect.size();
-    let line = |pts: &[(f32, f32)]| {
+    if brush {
+        let pts = [
+            (0.12, 0.8),
+            (0.35, 0.45),
+            (0.52, 0.62),
+            (0.70, 0.35),
+            (0.88, 0.8),
+        ];
         painter.add(egui::Shape::line(
             pts.iter().map(|&(x, y)| at(x, y)).collect(),
             stroke,
         ));
-    };
-    if raise {
-        line(&[
-            (0.12, 0.85),
-            (0.35, 0.55),
-            (0.52, 0.72),
-            (0.70, 0.48),
-            (0.88, 0.85),
-        ]);
-        line(&[(0.5, 0.45), (0.5, 0.12)]);
-        line(&[(0.38, 0.24), (0.5, 0.12), (0.62, 0.24)]);
     } else {
-        line(&[
-            (0.12, 0.15),
-            (0.35, 0.45),
-            (0.52, 0.28),
-            (0.70, 0.52),
-            (0.88, 0.15),
-        ]);
-        line(&[(0.5, 0.55), (0.5, 0.88)]);
-        line(&[(0.38, 0.76), (0.5, 0.88), (0.62, 0.76)]);
+        painter.circle_filled(rect.center(), rect.width() * 0.25, stroke.color);
     }
+}
+
+/// Raise: an up arrow. Lower: a down arrow.
+fn arrow(painter: &egui::Painter, rect: Rect, up: bool, stroke: Stroke) {
+    let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * rect.size();
+    let (tip, tail, wing) = if up {
+        (0.2, 0.8, 0.38)
+    } else {
+        (0.8, 0.2, 0.62)
+    };
+    painter.line_segment([at(0.5, tail), at(0.5, tip)], stroke);
+    painter.line_segment([at(0.35, wing), at(0.5, tip)], stroke);
+    painter.line_segment([at(0.65, wing), at(0.5, tip)], stroke);
 }

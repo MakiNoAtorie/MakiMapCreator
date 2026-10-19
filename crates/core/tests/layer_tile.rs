@@ -17,9 +17,13 @@ fn layer_tile_returns_a_whole_tile_matching_point_reads() {
         map,
         Command::Brush(BrushStroke {
             layer: Layer::HEIGHT,
-            points: vec![StrokePoint { at, pressure: 1.0 }],
-            radius: 20.0,
+            points: vec![StrokePoint {
+                at,
+                pressure: 1.0,
+                radius: 20.0,
+            }],
             strength: 100.0,
+            falloff: 1.0,
         }),
     )
     .unwrap();

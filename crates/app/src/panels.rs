@@ -3,7 +3,10 @@
 use std::collections::HashSet;
 
 use eframe::egui::{self, RichText};
-use mmc_core::{Entity, EntityId, FieldDef, FieldType, GenRun, Layer, Map, MapId, MapKindModule};
+use mmc_core::{
+    Entity, EntityId, FieldDef, FieldType, GenRun, Layer, Map, MapId, MapKindModule, RegenPlan,
+    RootPoint,
+};
 use serde_json::Value;
 
 use crate::i18n::{tr, tr_args};
@@ -29,6 +32,10 @@ pub enum Intent {
     CloseTab(usize),
     CreateChild(EntityId),
     Generate(GenRun),
+    /// Previews a masked regeneration inside the selection outline (root space).
+    RegenerateSelection(GenRun, Vec<RootPoint>),
+    /// Applies (`true`) or drops the previewed regeneration.
+    ApplyRegeneration(bool),
     ToggleLayer(Layer),
     SetMode(Mode),
 }
@@ -358,6 +365,8 @@ pub struct GenInput<'a> {
     pub params: &'a mut Vec<(String, f64)>,
     pub busy: bool,
     pub last: Option<String>,
+    /// The selected entity's outline on this map: the area "Regenerate selection" uses.
+    pub selection: Option<Vec<RootPoint>>,
 }
 
 pub fn generate_panel(ui: &mut egui::Ui, g: GenInput, t: &Theme, out: &mut Vec<Intent>) {
@@ -390,24 +399,32 @@ pub fn generate_panel(ui: &mut egui::Ui, g: GenInput, t: &Theme, out: &mut Vec<I
         ui.weak(last);
     }
     ui.add_space(4.0);
-    ui.add_enabled_ui(!g.busy && !gens.is_empty(), |ui| {
-        if ui.button(tr("generate-run")).clicked() {
-            let d = gens[*g.generator];
-            out.push(Intent::Generate(GenRun {
-                generator: d.id.into(),
-                seed: *g.seed,
-                params: g
-                    .params
-                    .iter()
-                    .filter(|(id, _)| d.params.iter().any(|p| p.id == id))
-                    .cloned()
-                    .collect(),
-            }));
+    let run = gens.get(*g.generator).map(|d| GenRun {
+        generator: d.id.into(),
+        seed: *g.seed,
+        params: g
+            .params
+            .iter()
+            .filter(|(id, _)| d.params.iter().any(|p| p.id == id))
+            .cloned()
+            .collect(),
+    });
+    ui.add_enabled_ui(!g.busy && run.is_some(), |ui| {
+        if ui.button(tr("generate-run")).clicked()
+            && let Some(run) = run.clone()
+        {
+            out.push(Intent::Generate(run));
         }
     });
-    // ponytail: core has no masked regeneration yet (#16); the button stays off until it does.
-    ui.add_enabled(false, egui::Button::new(tr("generate-regenerate")))
+    let can_regen = !g.busy && run.is_some() && g.selection.is_some();
+    let r = ui
+        .add_enabled(can_regen, egui::Button::new(tr("generate-regenerate")))
         .on_disabled_hover_text(tr("generate-regenerate-unavailable"));
+    if r.clicked()
+        && let (Some(run), Some(sel)) = (run, g.selection)
+    {
+        out.push(Intent::RegenerateSelection(run, sel));
+    }
     if g.busy {
         ui.horizontal(|ui| {
             ui.spinner();
@@ -479,6 +496,35 @@ pub fn command_search(
     }
     s.open = open;
     pick
+}
+
+/// Preview of a masked regeneration: what it rewrites and keeps. `Some(true)` applies it.
+pub fn regen_preview(ctx: &egui::Context, plan: &RegenPlan) -> Option<bool> {
+    let mut answer = None;
+    egui::Window::new(tr("regen-title"))
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            let n = |v: &[mmc_core::TileAt]| v.len().to_string();
+            ui.label(tr_args(
+                "regen-summary",
+                &[
+                    ("tiles", &n(&plan.regenerate)),
+                    ("edited", &n(&plan.kept_edited)),
+                    ("locked", &n(&plan.kept_locked)),
+                ],
+            ));
+            ui.horizontal(|ui| {
+                if ui.button(tr("regen-apply")).clicked() {
+                    answer = Some(true);
+                }
+                if ui.button(tr("regen-cancel")).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+    answer
 }
 
 /// Offer for a working copy a crash left behind.

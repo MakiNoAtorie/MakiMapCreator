@@ -77,6 +77,27 @@ impl ObjectChange {
     }
 }
 
+fn dist(a: RootPoint, b: RootPoint) -> f64 {
+    (a.x - b.x).hypot(a.y - b.y)
+}
+
+pub(crate) fn segment_dist(p: RootPoint, a: RootPoint, b: RootPoint) -> f64 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 {
+        0.0
+    } else {
+        (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+    };
+    dist(
+        p,
+        RootPoint {
+            x: a.x + t * dx,
+            y: a.y + t * dy,
+        },
+    )
+}
+
 pub(crate) fn record_of(map: MapId, o: &MapObject) -> ObjectRecord {
     ObjectRecord {
         id: o.id.0,
@@ -115,6 +136,27 @@ impl Project {
             });
         }
         Ok(out)
+    }
+
+    /// The entity drawn at `at` on `map`: the newest map object of an existing entity that
+    /// covers it (a polygon) or lies within `tolerance` metres (a point or path), else an
+    /// anchored river or lake within `tolerance`.
+    pub fn entity_at(&self, map: MapId, at: RootPoint, tolerance: f64) -> Result<Option<EntityId>> {
+        for o in self.objects(map)?.into_iter().rev() {
+            let Some(e) = o.entity else { continue };
+            let hit = match o.shape {
+                Shape::Point => dist(o.points[0], at) <= tolerance,
+                Shape::Path => o
+                    .points
+                    .windows(2)
+                    .any(|w| segment_dist(at, w[0], w[1]) <= tolerance),
+                Shape::Polygon => crate::child::inside(&o.points, at),
+            };
+            if hit && self.store.entity(e.0)?.is_some() {
+                return Ok(Some(e));
+            }
+        }
+        self.anchored_at(at, tolerance)
     }
 
     /// The object layers of `map`: its kind's, plus `Layer::OUTLINES`.

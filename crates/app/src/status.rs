@@ -22,6 +22,12 @@ pub fn elevation(h: Option<f32>) -> String {
         .unwrap_or_default()
 }
 
+/// The name of the entity under the cursor; empty when there is none.
+pub fn entity(name: Option<&str>) -> String {
+    name.map(|n| tr_args("status-entity", &[("name", n)]))
+        .unwrap_or_default()
+}
+
 pub fn map(s: &MapSettings) -> String {
     tr_args(
         "status-map",

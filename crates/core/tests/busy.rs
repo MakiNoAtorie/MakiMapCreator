@@ -45,9 +45,10 @@ fn edits_never_fail_or_stall_while_background_writers_run() {
                     y: 2500.0,
                 },
                 pressure: 1.0,
+                radius: 20.0,
             }],
-            radius: 20.0,
             strength: 1.0,
+            falloff: 1.0,
         })
     };
     let mut rng = Rng::new(5);

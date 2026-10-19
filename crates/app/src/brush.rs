@@ -1,10 +1,13 @@
 //! Brush logic without UI: options, pressure mapping, stroke resampling, shortcut routing.
 
 use eframe::egui::{Key, Modifiers};
-use mmc_core::{BrushStroke, Layer, RootPoint, StrokePoint};
+use mmc_core::{
+    BrushStroke, Command, Layer, PaintStroke, RootPoint, StrokePoint, ToolAction, brush_weight,
+};
 
+/// Raise adds (brush) or paints the tool's "on" value; lower subtracts or paints "off".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tool {
+pub enum Direction {
     Raise,
     Lower,
 }
@@ -15,7 +18,7 @@ pub struct Options {
     pub size: f64,
     /// Height added at the stroke centre for one pass at full pressure; always positive.
     pub strength: f32,
-    /// Display only: core has a fixed profile today (`(1-d^2)^2`).
+    /// 0 hard edge, 1 soft (see `mmc_core::brush_weight`).
     pub falloff: f32,
     pub pressure_size: bool,
     pub pressure_strength: bool,
@@ -25,8 +28,6 @@ pub struct Options {
 const MIN_SIZE_FRACTION: f64 = 0.1;
 /// Stamp spacing as a fraction of the stamp radius.
 const SPACING: f64 = 0.25;
-/// Radius levels under pressure; one core command per level run.
-const LEVELS: f64 = 8.0;
 /// `[` and `]` multiply the size by this.
 const SIZE_STEP: f64 = 1.25;
 pub const MAX_STRENGTH: f32 = 200.0;
@@ -37,7 +38,7 @@ impl Options {
         Options {
             size: 24.0 * mpp,
             strength: 20.0,
-            falloff: 0.5,
+            falloff: 1.0,
             pressure_size: false,
             pressure_strength: true,
         }
@@ -66,6 +67,22 @@ impl Options {
         }
     }
 
+    /// Fraction of the radius where the stamp has half its strength, for the cursor ring.
+    pub fn half_radius(&self) -> f32 {
+        let mut d = 0.5f64;
+        // Bisection: the weight falls from 1 at the centre to 0 at the rim.
+        let (mut lo, mut hi) = (0.0f64, 1.0f64);
+        for _ in 0..30 {
+            d = (lo + hi) / 2.0;
+            if brush_weight(d * d, self.falloff) > 0.5 {
+                lo = d;
+            } else {
+                hi = d;
+            }
+        }
+        d as f32
+    }
+
     /// `[` is `dir` -1, `]` is +1.
     pub fn step_size(&mut self, dir: i32, mpp: f64) {
         let (lo, hi) = Self::size_limits(mpp);
@@ -80,41 +97,53 @@ pub struct Sample {
     pub pressure: f32,
 }
 
-/// Turns a pen path into core commands: stamps at even spacing along the path, grouped by radius.
-/// One command when pressure does not change the size.
-pub fn plan(tool: Tool, o: &Options, mpp: f64, path: &[Sample]) -> Vec<BrushStroke> {
-    let sign = if tool == Tool::Raise { 1.0 } else { -1.0 };
-    let strength = sign * o.strength * SPACING as f32;
-    let mut out: Vec<BrushStroke> = Vec::new();
-    let mut level = 0u32;
-    for s in stamps(o, mpp, path) {
-        let l = if o.pressure_size {
-            ((o.radius_at(s.pressure) / o.size) * LEVELS)
-                .ceil()
-                .max(1.0) as u32
-        } else {
-            0
-        };
-        if out.is_empty() || l != level {
-            level = l;
-            let radius = if o.pressure_size {
-                o.size * l as f64 / LEVELS
-            } else {
-                o.size
-            };
-            out.push(BrushStroke {
-                layer: Layer::HEIGHT,
-                points: vec![],
-                radius,
-                strength,
-            });
-        }
-        out.last_mut().unwrap().points.push(StrokePoint {
-            at: s.at,
-            pressure: o.pressure_for(s.pressure),
-        });
+/// Turns a pen path into one core command: stamps at even spacing along the path, each with
+/// its own radius and pressure. `None` for an empty path.
+pub fn plan(
+    action: ToolAction,
+    layer: Layer,
+    dir: Direction,
+    o: &Options,
+    mpp: f64,
+    path: &[Sample],
+) -> Option<Command> {
+    let stamps = stamps(o, mpp, path);
+    if stamps.is_empty() {
+        return None;
     }
-    out
+    Some(match action {
+        ToolAction::Brush => {
+            let sign = if dir == Direction::Raise { 1.0 } else { -1.0 };
+            Command::Brush(BrushStroke {
+                layer,
+                points: stamps
+                    .iter()
+                    .map(|s| StrokePoint {
+                        at: s.at,
+                        pressure: o.pressure_for(s.pressure),
+                        radius: o.radius_at(s.pressure),
+                    })
+                    .collect(),
+                strength: sign * o.strength * SPACING as f32,
+                falloff: o.falloff,
+            })
+        }
+        ToolAction::Paint { on, off } => Command::Paint(PaintStroke {
+            layer,
+            points: stamps.iter().map(|s| s.at).collect(),
+            radius: o.size,
+            value: if dir == Direction::Raise { on } else { off },
+        }),
+    })
+}
+
+/// Stamp centres and radii of a planned command, for the overlay.
+pub fn stamp_discs(cmd: &Command) -> Vec<(RootPoint, f64)> {
+    match cmd {
+        Command::Brush(b) => b.points.iter().map(|p| (p.at, p.radius)).collect(),
+        Command::Paint(p) => p.points.iter().map(|&at| (at, p.radius)).collect(),
+        _ => vec![],
+    }
 }
 
 fn stamps(o: &Options, mpp: f64, path: &[Sample]) -> Vec<Sample> {
@@ -150,7 +179,7 @@ pub enum Edit {
     Redo,
     SizeDown,
     SizeUp,
-    Tool(Tool),
+    Direction(Direction),
 }
 
 pub fn route(key: Key, m: Modifiers) -> Option<Edit> {
@@ -162,8 +191,8 @@ pub fn route(key: Key, m: Modifiers) -> Option<Edit> {
         (Key::Z, true, true) => Some(Edit::Redo),
         (Key::OpenBracket, false, _) => Some(Edit::SizeDown),
         (Key::CloseBracket, false, _) => Some(Edit::SizeUp),
-        (Key::R, false, false) => Some(Edit::Tool(Tool::Raise)),
-        (Key::L, false, false) => Some(Edit::Tool(Tool::Lower)),
+        (Key::R, false, false) => Some(Edit::Direction(Direction::Raise)),
+        (Key::L, false, false) => Some(Edit::Direction(Direction::Lower)),
         _ => None,
     }
 }
@@ -176,6 +205,13 @@ mod tests {
         Sample {
             at: RootPoint { x, y: 0.0 },
             pressure,
+        }
+    }
+
+    fn brush(dir: Direction, o: &Options, path: &[Sample]) -> BrushStroke {
+        match plan(ToolAction::Brush, Layer::HEIGHT, dir, o, 1.0, path) {
+            Some(Command::Brush(b)) => b,
+            other => panic!("{other:?}"),
         }
     }
 
@@ -213,37 +249,66 @@ mod tests {
     }
 
     #[test]
-    fn stamps_are_evenly_spaced_and_sign_follows_tool() {
+    fn stamps_are_evenly_spaced_and_sign_follows_direction() {
         let mut o = Options::for_map(1.0);
         o.size = 40.0;
         let path = [p(0.0, 1.0), p(100.0, 1.0)];
-        let raise = plan(Tool::Raise, &o, 1.0, &path);
-        assert_eq!(raise.len(), 1);
-        let pts = &raise[0].points;
+        let raise = brush(Direction::Raise, &o, &path);
+        let pts = &raise.points;
         assert_eq!(pts.len(), 11); // spacing 10 m: 0, 10 .. 100
         assert!((pts[3].at.x - 30.0).abs() < 1e-9);
-        assert!(raise[0].strength > 0.0);
-        assert!(plan(Tool::Lower, &o, 1.0, &path)[0].strength < 0.0);
+        assert!(raise.strength > 0.0);
+        assert_eq!(raise.falloff, o.falloff);
+        assert!(brush(Direction::Lower, &o, &path).strength < 0.0);
     }
 
     #[test]
-    fn single_sample_is_one_stamp() {
+    fn single_sample_is_one_stamp_and_no_sample_is_no_command() {
         let o = Options::for_map(1.0);
-        let s = plan(Tool::Raise, &o, 1.0, &[p(5.0, 0.5)]);
-        assert_eq!(s[0].points.len(), 1);
-        assert!(plan(Tool::Raise, &o, 1.0, &[]).is_empty());
+        assert_eq!(brush(Direction::Raise, &o, &[p(5.0, 0.5)]).points.len(), 1);
+        let none = plan(
+            ToolAction::Brush,
+            Layer::HEIGHT,
+            Direction::Raise,
+            &o,
+            1.0,
+            &[],
+        );
+        assert!(none.is_none());
     }
 
     #[test]
-    fn size_pressure_splits_into_radius_runs() {
+    fn size_pressure_gives_each_stamp_its_radius_in_one_stroke() {
         let mut o = Options::for_map(1.0);
         o.size = 80.0;
         o.pressure_size = true;
-        let path = [p(0.0, 0.1), p(300.0, 1.0)];
-        let s = plan(Tool::Raise, &o, 1.0, &path);
-        assert!(s.len() > 1);
-        assert!(s.windows(2).all(|w| w[0].radius < w[1].radius));
-        assert!((s.last().unwrap().radius - 80.0).abs() < 1e-9);
+        let s = brush(Direction::Raise, &o, &[p(0.0, 0.1), p(300.0, 1.0)]);
+        let r: Vec<f64> = s.points.iter().map(|q| q.radius).collect();
+        assert!(r.windows(2).all(|w| w[0] <= w[1]), "{r:?}");
+        assert!(r[0] < 20.0 && r[r.len() - 1] > 70.0 && r[r.len() - 1] <= 80.0, "{r:?}");
+    }
+
+    #[test]
+    fn a_paint_tool_paints_on_or_off() {
+        let o = Options::for_map(1.0);
+        let lock = Layer::LOCK;
+        let action = ToolAction::Paint { on: 1.0, off: 0.0 };
+        let path = [p(0.0, 1.0)];
+        for (dir, want) in [(Direction::Raise, 1.0), (Direction::Lower, 0.0)] {
+            match plan(action, lock, dir, &o, 1.0, &path) {
+                Some(Command::Paint(s)) => assert_eq!((s.layer, s.value), (lock, want)),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn half_radius_follows_falloff() {
+        let mut o = Options::for_map(1.0);
+        o.falloff = 1.0;
+        assert!((o.half_radius() - 0.541).abs() < 0.01);
+        o.falloff = 0.0;
+        assert!(o.half_radius() > 0.99);
     }
 
     #[test]
@@ -262,7 +327,7 @@ mod tests {
         );
         assert_eq!(
             route(Key::R, Modifiers::NONE),
-            Some(Edit::Tool(Tool::Raise))
+            Some(Edit::Direction(Direction::Raise))
         );
         assert_eq!(route(Key::R, c), None);
     }

@@ -31,9 +31,10 @@ fn fixture(dir: &std::path::Path) -> (Project, MapId) {
                 points: vec![StrokePoint {
                     at: RootPoint { x, y },
                     pressure: 1.0,
+                    radius: r,
                 }],
-                radius: r,
                 strength: s,
+                falloff: 1.0,
             }),
         )
         .unwrap();

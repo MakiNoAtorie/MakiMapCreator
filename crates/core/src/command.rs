@@ -25,15 +25,15 @@ pub enum Command {
     Object(crate::ObjectEdit),
 }
 
-/// Adds `strength * pressure * falloff` to `layer` around each point.
+/// Adds `strength * pressure * weight` to `layer` around each point; one stroke is one command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrushStroke {
     pub layer: Layer,
     pub points: Vec<StrokePoint>,
-    /// Metres.
-    pub radius: f64,
     /// Layer units at the centre at full pressure; negative lowers.
     pub strength: f32,
+    /// 0 is a hard disc; 1 is the smooth `(1 - d²)²` profile; between, a hard core then that profile.
+    pub falloff: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +41,18 @@ pub struct StrokePoint {
     pub at: RootPoint,
     /// 0..=1.
     pub pressure: f32,
+    /// Metres.
+    pub radius: f64,
+}
+
+/// Brush weight at `d2`, the squared distance as a fraction of the radius (`d2 < 1`).
+pub fn brush_weight(d2: f64, falloff: f32) -> f32 {
+    let core = (1.0 - falloff.clamp(0.0, 1.0) as f64).powi(2);
+    if d2 <= core {
+        return 1.0;
+    }
+    let t = (1.0 - d2) / (1.0 - core);
+    (t * t) as f32
 }
 
 impl Project {
@@ -73,8 +85,8 @@ impl Project {
     fn brush(&self, map: &Map, s: &BrushStroke) -> Result<Vec<TileChange>> {
         let mut tiles: BTreeMap<(u32, u32), (Option<TileRecord>, Vec<f32>)> = BTreeMap::new();
         let (w, h) = (map.settings.width as i64, map.settings.height as i64);
-        let r = s.radius / map.settings.metres_per_pixel;
         for p in &s.points {
+            let r = p.radius / map.settings.metres_per_pixel;
             let (cx, cy) = map.to_pixels(p.at);
             let amount = s.strength * p.pressure;
             for y in ((cy - r).floor() as i64).max(0)..((cy + r).ceil() as i64).min(h) {
@@ -93,7 +105,7 @@ impl Project {
                             e.insert((before, values))
                         }
                     };
-                    tile.1[i] += amount * ((1.0 - d2) * (1.0 - d2)) as f32;
+                    tile.1[i] += amount * brush_weight(d2, s.falloff);
                 }
             }
         }

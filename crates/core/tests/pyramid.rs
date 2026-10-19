@@ -25,9 +25,10 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
             points: vec![StrokePoint {
                 at: RootPoint { x: 512.0, y: 250.0 },
                 pressure: 1.0,
+                radius: 90.0,
             }],
-            radius: 90.0,
             strength: 50.0,
+            falloff: 1.0,
         }),
     )
     .unwrap();
@@ -166,9 +167,10 @@ fn derived_layers_get_pyramids_and_rebuilds_replace_cached_tiles() {
             points: vec![StrokePoint {
                 at: RootPoint { x: 800.0, y: 800.0 },
                 pressure: 1.0,
+                radius: 60.0,
             }],
-            radius: 60.0,
             strength: 80.0,
+            falloff: 1.0,
         }),
     )
     .unwrap();

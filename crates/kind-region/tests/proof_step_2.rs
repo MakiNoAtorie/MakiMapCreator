@@ -71,9 +71,13 @@ fn two_regions(dir: &std::path::Path) -> (Project, MapId) {
 fn brush(at: RootPoint, radius: f64) -> Command {
     Command::Brush(BrushStroke {
         layer: Layer::HEIGHT,
-        points: vec![StrokePoint { at, pressure: 1.0 }],
-        radius,
+        points: vec![StrokePoint {
+            at,
+            pressure: 1.0,
+            radius,
+        }],
         strength: 5.0,
+        falloff: 1.0,
     })
 }
 

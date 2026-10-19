@@ -122,14 +122,15 @@ impl LargeMap {
                 StrokePoint {
                     at: RootPoint { x, y },
                     pressure: (0.3 + 0.7 * rng.unit()) as f32,
+                    radius: self.radius,
                 }
             })
             .collect();
         Command::Brush(BrushStroke {
             layer: Layer::HEIGHT,
             points,
-            radius: self.radius,
             strength: (rng.unit() * 40.0 - 20.0) as f32,
+            falloff: 1.0,
         })
     }
 

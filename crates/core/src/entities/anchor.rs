@@ -207,6 +207,23 @@ impl Project {
         rec.map(|r| Anchors::decode(&r.points)).transpose()
     }
 
+    /// An anchored river (mouth or picked point) or lake (inside point) within `tolerance`
+    /// metres of `at`.
+    pub(crate) fn anchored_at(&self, at: RootPoint, tolerance: f64) -> Result<Option<EntityId>> {
+        for r in self.store.anchors()? {
+            let near = match Anchors::decode(&r.points)? {
+                Anchors::River { mouth, picked } => {
+                    dist(mouth, at).min(dist(picked, at)) <= tolerance
+                }
+                Anchors::Lake { inside } => dist(inside, at) <= tolerance,
+            };
+            if near {
+                return Ok(Some(EntityId(r.entity_id)));
+            }
+        }
+        Ok(None)
+    }
+
     /// The derived feature `entity` is attached to.
     pub fn attached_feature(&self, entity: EntityId) -> Result<Option<FeatureId>> {
         let rec = self.store.anchor(entity.0)?;

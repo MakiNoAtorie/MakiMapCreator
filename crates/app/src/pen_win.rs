@@ -2,8 +2,8 @@
 //! or Windows Ink `WM_POINTER` messages into `PenEvent`s. Ported from `spikes/pen-test`.
 
 use crate::input::{
-    PenApi, PenEvent, PhaseTracker, active_api, normalise_pressure, tilt_from_orientation,
-    wintab_is_eraser,
+    PenApi, PenEvent, PhaseTracker, WintabState, active_api, normalise_pressure,
+    tilt_from_orientation, wintab_is_eraser,
 };
 use std::{cell::RefCell, ffi::c_void, mem::zeroed, ptr::null_mut};
 use windows_sys::Win32::{
@@ -100,10 +100,10 @@ struct State {
 
 thread_local! { static STATE: RefCell<Option<State>> = const { RefCell::new(None) }; }
 
-/// Which API ended up active, and the WinTab device name or why WinTab is not used.
+/// Which API ended up active, and the WinTab device or why WinTab is not used.
 pub struct Status {
     pub api: PenApi,
-    pub wintab: String,
+    pub wintab: WintabState,
 }
 
 /// Starts pen reading on `hwnd`. Call once, on the window's thread.
@@ -115,7 +115,7 @@ pub fn install(hwnd: isize, setting: PenApi, repaint: eframe::egui::Context) -> 
             Err(e) => (None, e),
         }
     } else {
-        (None, "not selected".into())
+        (None, WintabState::NotSelected)
     };
     let api = active_api(setting, wintab.is_some());
     STATE.with(|s| {
@@ -145,21 +145,20 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, String), String> {
+/// The WinTab context and the device it opened, or why it could not.
+unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, WintabState), WintabState> {
     unsafe {
         let lib = LoadLibraryW(wide("Wintab32.dll").as_ptr());
         if lib.is_null() {
-            return Err("Wintab32.dll not found".into());
+            return Err(WintabState::NoDriver);
         }
-        let f = |n: &[u8]| {
-            GetProcAddress(lib, n.as_ptr()).ok_or(String::from_utf8_lossy(n).into_owned())
-        };
+        let f = |n: &[u8]| GetProcAddress(lib, n.as_ptr()).ok_or(WintabState::BadDriver);
         let info: WtInfo = std::mem::transmute(f(b"WTInfoW\0")?);
         let open: WtOpen = std::mem::transmute(f(b"WTOpenW\0")?);
         let packet: WtPacket = std::mem::transmute(f(b"WTPacket\0")?);
         let overlap: WtCtx = std::mem::transmute(f(b"WTOverlap\0")?);
         if info(0, 0, null_mut()) == 0 {
-            return Err("WinTab service not available".into());
+            return Err(WintabState::NoService);
         }
 
         let mut name = [0u16; 128];
@@ -171,7 +170,7 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, String), String> {
 
         let mut lc: LogContext = zeroed();
         if info(WTI_DEFSYSCTX, 0, (&mut lc as *mut LogContext).cast()) == 0 {
-            return Err("no default system context".into());
+            return Err(WintabState::NoContext);
         }
         lc.options |= CXO_MESSAGES;
         lc.pkt_data = PK_DATA;
@@ -182,10 +181,13 @@ unsafe fn load_wintab(hwnd: HWND) -> Result<(Wintab, String), String> {
         lc.out_ext = [lc.sys_ext_x, -lc.sys_ext_y, lc.out_ext[2]];
         let ctx = open(hwnd, &mut lc, 1);
         if ctx.is_null() {
-            return Err("WTOpenW failed".into());
+            return Err(WintabState::NoContext);
         }
         let pressure = (axis.min.max(0) as u32, axis.max.max(1) as u32);
-        let device = format!("{device} (pressure {}..{})", pressure.0, pressure.1);
+        let device = WintabState::Device {
+            name: device,
+            pressure,
+        };
         Ok((
             Wintab {
                 packet,
