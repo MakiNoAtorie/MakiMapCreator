@@ -42,3 +42,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 - Errors: one `Error` enum per crate with a hand-written `Display`; no error crates.
 - Comments: rare, one line, objective. State constraints and why.
+
+## App
+
+- `mmc-app` uses eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent`; Win32 code stays in `pen_win.rs` behind `cfg(windows)`.
+- `PenEvent.pos` is in window client physical pixels; divide by `pixels_per_point` for egui points.
+- Win32 calls use the `windows-sys` version that eframe uses.
