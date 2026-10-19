@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
+mod assets;
 mod tiles;
 pub use tiles::{TileKey, TileRecord};
 
@@ -21,6 +22,7 @@ const MIGRATIONS: &[&str] = &[
         height INTEGER NOT NULL,
         metres_per_pixel REAL NOT NULL
     );",
+    assets::MIGRATION,
     tiles::MIGRATION,
 ];
 

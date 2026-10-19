@@ -186,3 +186,18 @@ impl Project {
         &self.maps
     }
 }
+
+impl Project {
+    /// Embeds a copy of an asset; identical content is stored once (ADR-0015).
+    pub fn add_asset(&self, pack_id: &str, asset_id: &str, data: &[u8]) -> Result<()> {
+        Ok(self.store.add_asset(pack_id, asset_id, data)?)
+    }
+
+    pub fn asset(&self, pack_id: &str, asset_id: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.store.asset(pack_id, asset_id)?)
+    }
+
+    pub fn asset_blob_count(&self) -> Result<i64> {
+        Ok(self.store.asset_blob_count()?)
+    }
+}

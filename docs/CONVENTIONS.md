@@ -25,6 +25,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 - One SQLite file per project. `PRAGMA application_id` = `0x4D4D4331` ("MMC1"). `PRAGMA user_version` = number of applied migrations.
 - Migrations: append to `MIGRATIONS` in `crates/store/src/lib.rs`. Never edit or reorder an existing entry. They run in order, in one transaction, on create and open.
+- Store feature code goes in its own module (`crates/store/src/<feature>.rs`) as `impl Store` blocks; its migration is a `pub(crate) const MIGRATION` appended to `MIGRATIONS`.
+- Content hashes are BLAKE3, stored as 32-byte BLOBs. Asset blobs are deduplicated by hash.
 - Open refuses a file with another `application_id` or a newer `user_version`.
 - Open only reads the project file (read-only connection, `VACUUM INTO` the working copy). The working copy uses WAL.
 - Save: `VACUUM INTO` `<file>.tmp` in the same folder, then rename over the file. No other file is written next to the project file.
@@ -40,3 +42,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 - Errors: one `Error` enum per crate with a hand-written `Display`; no error crates.
 - Comments: rare, one line, objective. State constraints and why.
+
+## App
+
+- `mmc-app` uses eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent`; Win32 code stays in `pen_win.rs` behind `cfg(windows)`.
+- `PenEvent.pos` is in window client physical pixels; divide by `pixels_per_point` for egui points.
+- Win32 calls use the `windows-sys` version that eframe uses.
