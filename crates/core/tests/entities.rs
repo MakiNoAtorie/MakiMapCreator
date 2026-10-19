@@ -1,5 +1,6 @@
 use mmc_core::{
-    Command, Entity, EntityEdit, EntityId, Error, FieldType, MapKindModule, Project, Relation,
+    Command, Entity, EntityEdit, EntityId, Error, FieldDef, FieldType, MapKindModule, Project,
+    Relation,
 };
 use mmc_kind_region::RegionKind;
 use mmc_kind_world::WorldKind;
@@ -80,17 +81,10 @@ fn v1_kinds_and_built_in_fields_are_seeded() {
 fn valid_field_values_are_stored_and_invalid_ones_refused() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = new_project(dir.path());
-    p.add_user_field(
-        "settlement",
-        "climate",
-        "Climate",
-        FieldType::Choice(vec!["dry".into(), "wet".into()]),
-    )
-    .unwrap();
-    p.add_user_field("settlement", "walled", "Walled", FieldType::YesNo)
-        .unwrap();
-    p.add_user_field("settlement", "notes", "Notes", FieldType::Markdown)
-        .unwrap();
+    let climate = FieldType::Choice(vec!["dry".into(), "wet".into()]);
+    add_field(&mut p, "settlement", "climate", "Climate", climate);
+    add_field(&mut p, "settlement", "walled", "Walled", FieldType::YesNo);
+    add_field(&mut p, "settlement", "notes", "Notes", FieldType::Markdown);
     let town = create(
         &mut p,
         "settlement",
@@ -206,8 +200,7 @@ fn entity_edits_undo_and_redo_on_the_active_map() {
 fn entities_fields_and_relations_survive_save_and_reload() {
     let dir = tempfile::tempdir().unwrap();
     let mut p = new_project(dir.path());
-    p.add_user_field("river", "length_km", "Length", FieldType::Number)
-        .unwrap();
+    add_field(&mut p, "river", "length_km", "Length", FieldType::Number);
     let r = create(&mut p, "river", "Sill", json!({"length_km": 42.5})).unwrap();
     let s = create(&mut p, "sea", "Grey Sea", json!({})).unwrap();
     let rel = Relation {
@@ -233,4 +226,37 @@ fn entities_fields_and_relations_survive_save_and_reload() {
     );
     let n = create(&mut p, "island", "Holm", json!({})).unwrap();
     assert!(n != r && n != s);
+}
+
+/// Adds a user field as a command on the project's first map.
+fn add_field(p: &mut Project, kind: &str, key: &str, label: &str, field_type: FieldType) {
+    let map = p.maps()[0].id;
+    let def = FieldDef {
+        kind: kind.into(),
+        key: key.into(),
+        label: label.into(),
+        field_type,
+        builtin: false,
+    };
+    p.apply(map, Command::Entity(EntityEdit::AddField(def)))
+        .unwrap();
+}
+
+#[test]
+fn adding_a_user_field_undoes_and_redoes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = new_project(dir.path());
+    let map = p.maps()[0].id;
+    let before = p.field_defs("river").unwrap();
+    add_field(&mut p, "river", "length_km", "Length", FieldType::Number);
+    assert_eq!(p.field_defs("river").unwrap().len(), before.len() + 1);
+    assert!(p.undo(map).unwrap());
+    assert_eq!(p.field_defs("river").unwrap(), before);
+    assert!(p.redo(map).unwrap());
+    assert!(
+        p.field_defs("river")
+            .unwrap()
+            .iter()
+            .any(|d| d.key == "length_km")
+    );
 }

@@ -83,6 +83,9 @@ pub enum EntityEdit {
     },
     Relate(Relation),
     Unrelate(Relation),
+    /// Adds a user field to a kind (ADR-0010); `builtin` is ignored. Refuses a key the kind
+    /// already has.
+    AddField(FieldDef),
 }
 
 /// Rows before and after one entity edit.
@@ -90,6 +93,8 @@ pub enum EntityEdit {
 pub(crate) struct EntityChanges {
     entities: Vec<EntityRow>,
     relations: Vec<(RelationRecord, bool, bool)>,
+    /// A user field added (`true`) or removed.
+    fields: Vec<(FieldDefRecord, bool)>,
 }
 
 impl EntityChanges {
@@ -103,7 +108,11 @@ impl EntityChanges {
             .relations
             .iter()
             .map(|(r, b, a)| Write::Relation(r.clone(), if forward { *a } else { *b }));
-        entities.chain(relations).collect()
+        let fields = self
+            .fields
+            .iter()
+            .map(|(d, added)| Write::FieldDef(d.clone(), *added == forward));
+        entities.chain(relations).chain(fields).collect()
     }
 }
 
@@ -199,33 +208,6 @@ impl Project {
                 })
             })
             .collect()
-    }
-
-    /// Adds a user field to `kind`. Refuses a key the kind already has.
-    pub fn add_user_field(
-        &mut self,
-        kind: &str,
-        key: &str,
-        label: &str,
-        field_type: FieldType,
-    ) -> Result<()> {
-        self.check_kind(kind)?;
-        if self.field_defs(kind)?.iter().any(|d| d.key == key) {
-            return Err(Error::InvalidField {
-                key: key.into(),
-                reason: "the kind already has this field",
-            });
-        }
-        let (ty, choices) = field_type.to_record();
-        let def = FieldDefRecord {
-            kind: kind.into(),
-            key: key.into(),
-            label: label.into(),
-            field_type: ty.into(),
-            choices,
-            builtin: false,
-        };
-        self.store.write(&[Write::FieldDef(def, true)])
     }
 
     pub fn next_entity_id(&self) -> Result<EntityId> {
@@ -346,6 +328,25 @@ impl Project {
                     }
                 }
                 c.entities.push((id.0, Some(record_of(&before)), None));
+            }
+            EntityEdit::AddField(d) => {
+                self.check_kind(&d.kind)?;
+                if self.field_defs(&d.kind)?.iter().any(|x| x.key == d.key) {
+                    return Err(Error::InvalidField {
+                        key: d.key.clone(),
+                        reason: "the kind already has this field",
+                    });
+                }
+                let (ty, choices) = d.field_type.to_record();
+                let def = FieldDefRecord {
+                    kind: d.kind.clone(),
+                    key: d.key.clone(),
+                    label: d.label.clone(),
+                    field_type: ty.into(),
+                    choices,
+                    builtin: false,
+                };
+                c.fields.push((def, true));
             }
             EntityEdit::Relate(r) | EntityEdit::Unrelate(r) => {
                 self.existing(r.from)?;
