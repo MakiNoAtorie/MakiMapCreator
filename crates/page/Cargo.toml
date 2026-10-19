@@ -1,0 +1,10 @@
+[package]
+name = "mmc-page"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+im = "15.1.0"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+ropey = "1.6.1"

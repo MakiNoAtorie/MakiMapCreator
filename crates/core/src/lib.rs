@@ -13,6 +13,8 @@ pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use undo::UNDO_LIMIT;
 mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
+mod page;
+pub use page::{Document, Link, PageEdit, link_markup};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {

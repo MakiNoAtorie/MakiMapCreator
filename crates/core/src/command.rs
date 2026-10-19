@@ -14,6 +14,8 @@ pub enum Command {
     Brush(BrushStroke),
     /// Entities are project-level; the edit goes to the history of the map it is applied on.
     Entity(EntityEdit),
+    /// Pages are project-level; the edit goes to the history of the map it is applied on.
+    Page(crate::PageEdit),
 }
 
 /// Adds `strength * pressure * falloff` to `layer` around each point.
@@ -39,6 +41,7 @@ impl Project {
         match cmd {
             Command::Brush(s) => Ok(Change::Tiles(self.brush(map, s)?)),
             Command::Entity(e) => Ok(Change::Entities(self.entity_changes(e)?)),
+            Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
         }
     }
 

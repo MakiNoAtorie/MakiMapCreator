@@ -23,6 +23,7 @@ pub(crate) struct TileChange {
 pub(crate) enum Change {
     Tiles(Vec<TileChange>),
     Entities(EntityChanges),
+    Page(crate::page::PageChange),
 }
 
 #[derive(Default)]
@@ -91,6 +92,7 @@ impl Project {
                 Ok(self.store.write_tiles(&writes)?)
             }
             Change::Entities(e) => self.write_entity_changes(e, forward),
+            Change::Page(p) => self.write_page_change(p, forward),
         }
     }
 }
