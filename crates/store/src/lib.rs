@@ -7,6 +7,7 @@ use rusqlite::{Connection, OpenFlags};
 
 mod assets;
 mod tiles;
+pub use tiles::{LayerTiles, TileConn};
 pub use tiles::{TileKey, TileRecord};
 
 /// `PRAGMA application_id` of a project file ("MMC1").

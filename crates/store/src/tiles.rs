@@ -1,6 +1,8 @@
 //! Raster tiles: one opaque blob per (map, layer, level, tile) plus the edited flag.
 
-use rusqlite::{OptionalExtension, params};
+use std::path::Path;
+
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Result, Store};
 
@@ -77,5 +79,66 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![map_id, layer], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+/// Level-0 tiles of one layer as ((tx, ty), record), ordered.
+pub type LayerTiles = Vec<((u32, u32), TileRecord)>;
+
+/// A second connection to the working copy for worker threads. WAL lets it read while the
+/// main connection writes; writes wait for each other up to the busy timeout.
+pub struct TileConn {
+    conn: Connection,
+}
+
+impl TileConn {
+    pub fn open(working_copy: &Path) -> Result<TileConn> {
+        Ok(TileConn {
+            conn: Connection::open(working_copy)?,
+        })
+    }
+
+    /// Level-0 tiles of a layer, read in one snapshot.
+    pub fn layer_tiles(&self, map_id: i64, layer: &str) -> Result<LayerTiles> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tx, ty, data, edited FROM tiles
+             WHERE map_id = ?1 AND layer = ?2 AND level = 0
+             ORDER BY tx, ty",
+        )?;
+        let rows = stmt.query_map(params![map_id, layer], |r| {
+            Ok((
+                (r.get(0)?, r.get(1)?),
+                TileRecord {
+                    data: r.get(2)?,
+                    edited: r.get(3)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Replaces all level-0 tiles of each layer in one transaction.
+    pub fn replace_layers(&mut self, map_id: i64, layers: &[(&str, LayerTiles)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for (layer, tiles) in layers {
+            tx.execute(
+                "DELETE FROM tiles WHERE map_id = ?1 AND layer = ?2 AND level = 0",
+                params![map_id, layer],
+            )?;
+            for ((x, y), r) in tiles {
+                tx.execute(
+                    "INSERT INTO tiles (map_id, layer, level, tx, ty, data, edited)
+                     VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
+                    params![map_id, layer, x, y, r.data, r.edited],
+                )?;
+            }
+        }
+        Ok(tx.commit()?)
+    }
+}
+
+impl Store {
+    pub fn working_copy(&self) -> &Path {
+        &self.working_copy
     }
 }

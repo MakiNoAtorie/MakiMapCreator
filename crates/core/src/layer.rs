@@ -7,20 +7,34 @@ use crate::{Error, Map, MapId, Project, Result};
 /// Width and height of a tile in pixels.
 pub const TILE_SIZE: u32 = 256;
 
-const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
+pub(crate) const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
 /// A raster layer of a map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Layer {
     /// Metres, sea level 0.
     Height,
+    /// Derived: gradient magnitude of height, metres per metre.
+    Slope,
 }
 
 impl Layer {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Layer::Height => "height",
+            Layer::Slope => "slope",
         }
+    }
+
+    pub(crate) const ALL: [Layer; 2] = [Layer::Height, Layer::Slope];
+
+    pub(crate) fn parse(s: &str) -> Option<Layer> {
+        Layer::ALL.into_iter().find(|l| l.as_str() == s)
+    }
+
+    /// Derived layers are written by a pipeline stage, never by commands (ADR-0018).
+    pub fn is_derived(self) -> bool {
+        crate::pipeline::writes(self)
     }
 }
 
@@ -105,6 +119,14 @@ impl Project {
     pub fn edited_tiles(&self, map: MapId, layer: Layer) -> Result<Vec<(u32, u32)>> {
         self.map(map)?;
         Ok(self.store.edited_tiles(map.0, layer.as_str())?)
+    }
+}
+
+impl Project {
+    /// All values of one level-0 tile, row by row; a missing tile is all zeros.
+    pub fn layer_tile(&self, map: MapId, layer: Layer, tx: u32, ty: u32) -> Result<Vec<f32>> {
+        let rec = self.store.tile(&self.map(map)?.tile_key(layer, tx, ty))?;
+        decode(rec.as_ref())
     }
 }
 
