@@ -338,7 +338,7 @@ impl Project {
     }
 
     /// Writes the `after` rows, or the `before` rows when `forward` is false.
-    pub(crate) fn write_entity_changes(&self, c: &EntityChanges, forward: bool) -> Result<()> {
+    pub(crate) fn write_entity_changes(&mut self, c: &EntityChanges, forward: bool) -> Result<()> {
         let entities: Vec<_> = c
             .entities
             .iter()
@@ -349,6 +349,13 @@ impl Project {
             .iter()
             .map(|(r, b, a)| (r.clone(), if forward { *a } else { *b }))
             .collect();
-        Ok(self.store.write_entities(&entities, &relations)?)
+        self.store.write_entities(&entities, &relations)?;
+        for (id, rec) in &entities {
+            match rec {
+                Some(r) => self.names.set(EntityId(*id), &r.name),
+                None => self.names.remove(EntityId(*id)),
+            }
+        }
+        Ok(())
     }
 }

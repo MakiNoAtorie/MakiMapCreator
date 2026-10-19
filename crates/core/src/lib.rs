@@ -17,8 +17,20 @@ pub use layer::{Layer, RootPoint, TILE_SIZE};
 pub use undo::UNDO_LIMIT;
 mod entity;
 pub use entity::{Entity, EntityEdit, EntityId, EntityKind, FieldDef, FieldType, Relation};
+mod anchor;
+pub use anchor::{
+    AnchorEdit, Anchors, DEFAULT_ANCHOR_TOLERANCE, DerivedFeature, FeatureId, FeatureKind,
+};
 mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
+mod search;
+pub use search::{NameHit, TextHit, TextSearch};
+mod paint;
+pub use paint::PaintStroke;
+mod generation;
+pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
+mod kind;
+pub use kind::{Kinds, MapKindModule, Summary, Tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -90,6 +102,9 @@ pub enum Error {
     EntityExists(EntityId),
     InvalidField { key: String, reason: &'static str },
     CorruptEntity,
+    InvalidAnchor(&'static str),
+    UnknownFeature(FeatureId),
+    UnknownGenerator(String),
 }
 
 impl fmt::Display for Error {
@@ -111,6 +126,9 @@ impl fmt::Display for Error {
             Error::EntityExists(id) => write!(f, "an entity with id {} already exists", id.0),
             Error::InvalidField { key, reason } => write!(f, "field {key}: {reason}"),
             Error::CorruptEntity => write!(f, "the file has a damaged entity or field definition"),
+            Error::InvalidAnchor(why) => write!(f, "anchor: {why}"),
+            Error::UnknownFeature(id) => write!(f, "there is no derived feature with id {}", id.0),
+            Error::UnknownGenerator(g) => write!(f, "this map kind has no generator {g}"),
         }
     }
 }
@@ -130,7 +148,9 @@ pub struct Project {
     store: Store,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
+    names: search::NameIndex,
     pipeline: pipeline::Pipeline,
+    anchors: anchor::State,
     saves: save::Saves,
 }
 
@@ -153,7 +173,9 @@ impl Project {
                 settings: root,
             }],
             history: Default::default(),
+            names: Default::default(),
             pipeline: Default::default(),
+            anchors: Default::default(),
             saves: Default::default(),
         })
     }
@@ -181,13 +203,17 @@ impl Project {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok(Project {
+        let mut p = Project {
             store,
             maps,
             history: Default::default(),
+            names: Default::default(),
             pipeline: Default::default(),
+            anchors: Default::default(),
             saves: Default::default(),
-        })
+        };
+        p.names = p.build_name_index()?;
+        Ok(p)
     }
 
     /// Adds a map with no parent and returns its id.

@@ -7,6 +7,8 @@ use std::time::Instant;
 use mmc_core::Project;
 use mmc_fixtures::{LargeMap, Rng};
 
+mod search;
+
 const BUDGETS: &str = include_str!("../budgets.toml");
 const RUNS: usize = 7;
 
@@ -127,7 +129,8 @@ fn json(budgets: &BTreeMap<String, f64>, results: &BTreeMap<String, f64>) -> Str
 
 fn main() {
     let budgets = parse_budgets(BUDGETS);
-    let results = measure();
+    let mut results = measure();
+    search::measure(&mut results);
     let out = json(&budgets, &results);
     print!("{out}");
     if let Some(path) = std::env::args().nth(1) {

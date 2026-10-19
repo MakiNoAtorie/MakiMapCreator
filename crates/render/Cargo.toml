@@ -11,4 +11,5 @@ wgpu = "30.0.1"
 
 [dev-dependencies]
 blake3 = "1.8"
+mmc-kind-world = { version = "0.1.0", path = "../kind-world" }
 tempfile = "3.27.0"

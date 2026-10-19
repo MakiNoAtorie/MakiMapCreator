@@ -4,5 +4,8 @@ open_project = 1000
 # Save start to file written; ADR-0014 gives no number, this is a regression cap.
 save = 2000
 full_rebuild = 1000
+# 10 000 entities; ADR-0014 numbers.
+name_lookup = 16
+full_text_first_results = 50
 # ADR-0014: the user keeps working during a save; median stroke while it runs = one frame.
 save_edit_pause = 16

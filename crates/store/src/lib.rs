@@ -13,6 +13,12 @@ mod entities;
 pub use entities::{EntityKindRecord, EntityRecord, FieldDefRecord, RelationRecord};
 mod pages;
 pub use pages::PageRecord;
+mod anchors;
+pub use anchors::AnchorRecord;
+mod search;
+pub use search::{Reader, TextHit};
+mod generations;
+pub use generations::{GenerationRecord, OutlineRecord};
 mod save;
 pub use save::save_snapshot;
 
@@ -33,6 +39,9 @@ const MIGRATIONS: &[&str] = &[
     tiles::MIGRATION,
     entities::MIGRATION,
     pages::MIGRATION,
+    anchors::MIGRATION,
+    search::MIGRATION,
+    generations::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
