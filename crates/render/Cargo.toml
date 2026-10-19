@@ -1,0 +1,14 @@
+[package]
+name = "mmc-render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mmc-core = { version = "0.1.0", path = "../core" }
+png = "0.18"
+pollster = "1.0"
+wgpu = "30.0.1"
+
+[dev-dependencies]
+blake3 = "1.8"
+tempfile = "3.27.0"

@@ -115,18 +115,16 @@ impl Project {
         Ok(Some(decode(rec.as_ref())?[i]))
     }
 
+    /// All `TILE_SIZE`² values of tile (`tx`, `ty`) of `layer`, row by row.
+    pub fn layer_tile(&self, map: MapId, layer: Layer, tx: u32, ty: u32) -> Result<Vec<f32>> {
+        let map = self.map(map)?;
+        decode(self.store.tile(&map.tile_key(layer, tx, ty))?.as_ref())
+    }
+
     /// Tiles (tx, ty) of `layer` that the user edited by hand, ordered.
     pub fn edited_tiles(&self, map: MapId, layer: Layer) -> Result<Vec<(u32, u32)>> {
         self.map(map)?;
         Ok(self.store.edited_tiles(map.0, layer.as_str())?)
-    }
-}
-
-impl Project {
-    /// All values of one level-0 tile, row by row; a missing tile is all zeros.
-    pub fn layer_tile(&self, map: MapId, layer: Layer, tx: u32, ty: u32) -> Result<Vec<f32>> {
-        let rec = self.store.tile(&self.map(map)?.tile_key(layer, tx, ty))?;
-        decode(rec.as_ref())
     }
 }
 

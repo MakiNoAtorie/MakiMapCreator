@@ -9,8 +9,19 @@ use mmc_store::{LayerTiles, TileConn, TileRecord};
 
 use crate::jobs::{Cancelled, Jobs};
 use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode, tile_of};
-use crate::undo::TileChange;
+use crate::undo::Change;
 use crate::{Error, MapId, Project, Result};
+
+// ponytail: entity changes feed no stage yet; map them to layers when a stage reads entities.
+fn changed_layers(change: &Change) -> Vec<Layer> {
+    match change {
+        Change::Tiles(t) => t
+            .iter()
+            .filter_map(|c| Layer::parse(&c.key.layer))
+            .collect(),
+        Change::Entities(_) => vec![],
+    }
+}
 
 /// Decoded level-0 tiles of a layer; a missing tile is all zeros.
 type Raster = BTreeMap<(u32, u32), Vec<f32>>;
@@ -300,24 +311,16 @@ impl Project {
         Ok(())
     }
 
-    pub(crate) fn refuse_derived(changes: &[TileChange]) -> Result<()> {
-        match changes
-            .iter()
-            .filter_map(|c| Layer::parse(&c.key.layer))
-            .find(|l| l.is_derived())
-        {
+    pub(crate) fn refuse_derived(change: &Change) -> Result<()> {
+        match changed_layers(change).into_iter().find(|l| l.is_derived()) {
             Some(l) => Err(Error::DerivedLayer(l)),
             None => Ok(()),
         }
     }
 
     /// Marks stages downstream of the written layers dirty and starts a rebuild.
-    pub(crate) fn after_write(&mut self, map: MapId, changes: &[TileChange]) {
-        let changed: Vec<Layer> = changes
-            .iter()
-            .filter_map(|c| Layer::parse(&c.key.layer))
-            .collect();
-        self.request(map, dirty(&decls(), &changed));
+    pub(crate) fn after_write(&mut self, map: MapId, change: &Change) {
+        self.request(map, dirty(&decls(), &changed_layers(change)));
     }
 
     fn request(&mut self, map: MapId, dirty: Vec<bool>) {
