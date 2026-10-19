@@ -34,3 +34,17 @@
 
 ## Project skills
 - `.claude/skills/` holds Matt Pocock's skills v1.3.1 (upstream 49dd158). To update, re-copy the folders listed in upstream `.claude-plugin/plugin.json`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for MakiNoAtorie/MakiMapCreator (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
