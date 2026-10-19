@@ -22,6 +22,8 @@ pub use anchor::{
 };
 mod page;
 pub use page::{Document, Link, PageEdit, link_markup};
+mod search;
+pub use search::{NameHit, TextHit, TextSearch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapKind {
@@ -137,6 +139,7 @@ pub struct Project {
     store: Store,
     maps: Vec<Map>,
     history: std::collections::HashMap<MapId, undo::History>,
+    names: search::NameIndex,
     pipeline: pipeline::Pipeline,
     anchors: anchor::State,
 }
@@ -160,6 +163,7 @@ impl Project {
                 settings: root,
             }],
             history: Default::default(),
+            names: Default::default(),
             pipeline: Default::default(),
             anchors: Default::default(),
         })
@@ -184,13 +188,16 @@ impl Project {
                 })
             })
             .collect::<Result<_>>()?;
-        Ok(Project {
+        let mut p = Project {
             store,
             maps,
             history: Default::default(),
+            names: Default::default(),
             pipeline: Default::default(),
             anchors: Default::default(),
-        })
+        };
+        p.names = p.build_name_index()?;
+        Ok(p)
     }
 
     /// Adds a map with no parent and returns its id.
