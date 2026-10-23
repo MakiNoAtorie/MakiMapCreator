@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 mmc-core = { version = "0.1.0", path = "../core" }
-bytemuck = "1.25"
+bytemuck = { version = "1.25", features = ["derive"] }
 png = "0.18"
 pollster = "1.0"
 wgpu = "30.0.1"
@@ -13,6 +13,7 @@ wgpu = "30.0.1"
 [dev-dependencies]
 mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
 blake3 = "1.8"
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
 mmc-kind-world = { version = "0.1.0", path = "../kind-world" }
 tempfile = "3.27.0"

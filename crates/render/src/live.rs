@@ -1,5 +1,4 @@
-//! Live brush (ADR-0025): a GPU copy of the drawn heights that stamps change in the frame they
-//! are made. Display only; the CPU stroke stays the source of truth.
+//! Live brush (ADR-0025): a display-only GPU copy of the drawn heights that stamps change at once.
 
 use mmc_core::{BrushMode, BrushStroke, Layer, MapId};
 use wgpu::util::DeviceExt;
@@ -22,21 +21,67 @@ struct Area {
 }
 
 impl Area {
-    /// Global level-0 pixel sampled for level pixel `x` (`y`): the one right of its centre.
-    fn sample(&self, x: u32, y: u32) -> (i64, i64) {
-        let half = (1i64 << self.level) / 2;
+    /// First global level-0 pixel of level pixel (`x`, `y`).
+    fn block(&self, x: u32, y: u32) -> (i64, i64) {
         (
-            self.origin.0 + ((x as i64) << self.level) + half,
-            self.origin.1 + ((y as i64) << self.level) + half,
+            self.origin.0 + ((x as i64) << self.level),
+            self.origin.1 + ((y as i64) << self.level),
         )
+    }
+
+    /// Global level-0 pixels the copy covers, inclusive, per axis.
+    fn pixels(&self) -> ((i64, i64), (i64, i64)) {
+        let (a, b) = (
+            self.block(self.x0, self.y0),
+            self.block(self.x0 + self.w, self.y0 + self.h),
+        );
+        ((a.0, b.0 - 1), (a.1, b.1 - 1))
     }
 
     /// First pixel of the frame the shader works in: the first detail node, a multiple of 4.
     fn frame(&self) -> (i64, i64) {
-        let (x, y) = self.sample(self.x0, self.y0);
+        let (x, y) = self.block(self.x0, self.y0);
         (x.div_euclid(4) * 4, y.div_euclid(4) * 4)
     }
 }
+
+/// Level-0 pixels per axis a texel averages a stamp over; all of them up to level 2.
+// ponytail: 4 of 2^level from level 3 on; more if zoomed-out hand-overs show texture.
+const SUB_MAX: u32 = 4;
+
+/// `live.wgsl` `Params`, one per dispatch.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    box0: [i32; 2],
+    size: [u32; 2],
+    g0: [i32; 2],
+    level: u32,
+    count: u32,
+    sub: u32,
+    detail: f32,
+    total: f32,
+    octaves: u32,
+}
+
+/// `live.wgsl` `Stamp`; `centre` is in frame pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Stamp {
+    centre: [f32; 2],
+    radius: f32,
+    amount: f32,
+    pressure: f32,
+    core: f32,
+    goal: f32,
+    mode: u32,
+}
+
+/// `live.wgsl` stamp modes.
+const ADD: u32 = 0;
+const RAISE_TO: u32 = 1;
+const LOWER_TO: u32 = 2;
+const ROUGHEN: u32 = 3;
 
 /// One layer of a scene at its drawn level: what a live copy starts from.
 pub struct LiveBase {
@@ -79,6 +124,8 @@ impl Scene {
 struct Copy {
     area: Area,
     texture: wgpu::Texture,
+    /// The texture's values before the running dispatch, which reads neighbours.
+    before: wgpu::Texture,
     shade: wgpu::BindGroup,
 }
 
@@ -99,6 +146,8 @@ pub struct Live {
     view: wgpu::Buffer,
     copy: Option<Copy>,
     tables: Option<Tables>,
+    /// Bound as the tables when a stroke has no noise.
+    no_tables: wgpu::Buffer,
 }
 
 /// What a frame draws from the copy, for a render pass recorded later (an egui callback).
@@ -115,8 +164,6 @@ impl LiveFrame {
         pass.draw(0..3, 0..1);
     }
 }
-
-const STAMP_BYTES: usize = 32;
 
 impl Live {
     /// `shader` is the kind's height pass; `format` the target the copy is drawn into.
@@ -145,6 +192,12 @@ impl Live {
             mapped_at_creation: false,
         });
         let shading = ShaderPass::with_format(&device, shader, format);
+        let no_tables = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("live no tables"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         Live {
             device,
             queue,
@@ -153,6 +206,7 @@ impl Live {
             view,
             copy: None,
             tables: None,
+            no_tables,
         }
     }
 
@@ -182,21 +236,28 @@ impl Live {
             depth_or_array_layers: 1,
         };
         let reuse = self.copy.take().filter(|c| c.texture.size() == size);
-        let texture = match reuse {
-            Some(c) => c.texture,
-            None => self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("live heights"),
+        let make = |label, usage| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
                 size,
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
+                usage,
                 view_formats: &[],
-            }),
+            })
+        };
+        use wgpu::TextureUsages as U;
+        let (texture, before) = match reuse {
+            Some(c) => (c.texture, c.before),
+            None => (
+                make(
+                    "live heights",
+                    U::TEXTURE_BINDING | U::STORAGE_BINDING | U::COPY_DST | U::COPY_SRC,
+                ),
+                make("live before", U::TEXTURE_BINDING | U::COPY_DST),
+            ),
         };
         self.queue.write_texture(
             texture.as_image_copy(),
@@ -213,6 +274,7 @@ impl Live {
         self.copy = Some(Copy {
             area: a,
             texture,
+            before,
             shade,
         });
     }
@@ -238,9 +300,14 @@ impl Live {
         // Global pixel coordinate to texel coordinate, and the box of each stamp.
         let to_texel = |g: f64, o: i64, t0: u32| (g - o as f64) / texel - t0 as f64;
         let (mut lo, mut hi) = ((i64::MAX, i64::MAX), (i64::MIN, i64::MIN));
-        let mut words: Vec<u8> = Vec::with_capacity(s.points.len() * STAMP_BYTES);
-        let raise = s.strength > 0.0;
+        let mut stamps: Vec<Stamp> = Vec::with_capacity(s.points.len());
         let core = mmc_core::brush_core(s.falloff) as f32;
+        let mode = match (s.mode, s.target) {
+            (BrushMode::Roughen, _) => ROUGHEN,
+            (_, None) => ADD,
+            (_, Some(_)) if s.strength > 0.0 => RAISE_TO,
+            _ => LOWER_TO,
+        };
         for p in &s.points {
             let (cx, cy, r) = (p.at.x / a.mpp, p.at.y / a.mpp, p.radius / a.mpp);
             let x0 = to_texel(cx - r, a.origin.0, a.x0).floor() as i64;
@@ -253,31 +320,20 @@ impl Live {
                 continue;
             }
             (lo, hi) = ((lo.0.min(x0), lo.1.min(y0)), (hi.0.max(x1), hi.1.max(y1)));
-            let flags = s.target.is_some() as u32
-                | (raise as u32) << 1
-                | ((s.mode == BrushMode::Roughen) as u32) << 2;
-            let f = [
-                (cx - frame.0 as f64) as f32,
-                (cy - frame.1 as f64) as f32,
-                r as f32,
-                s.strength * p.pressure,
-                p.pressure,
+            stamps.push(Stamp {
+                centre: [(cx - frame.0 as f64) as f32, (cy - frame.1 as f64) as f32],
+                radius: r as f32,
+                amount: s.strength * p.pressure,
+                pressure: p.pressure,
                 core,
-                s.target.unwrap_or(0.0),
-            ];
-            f.iter()
-                .for_each(|v| words.extend_from_slice(&v.to_le_bytes()));
-            words.extend_from_slice(&flags.to_le_bytes());
+                goal: s.target.unwrap_or(0.0),
+                mode,
+            });
         }
-        if words.is_empty() {
+        if stamps.is_empty() {
             return true;
         }
-        let noisy = s.detail.amount > 0.0 || s.mode == BrushMode::Roughen;
-        let detail = if noisy {
-            s.detail.amount.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let noisy = s.noisy();
         if noisy {
             self.tables(seed, s.detail.scale);
         }
@@ -285,28 +341,19 @@ impl Live {
             (Some(t), true) => (t.octaves, t.total),
             _ => (0, 1.0),
         };
-        let sample = a.sample(a.x0, a.y0);
-        let mut params: Vec<u8> = Vec::with_capacity(48);
-        for v in [lo.0 as i32, lo.1 as i32] {
-            params.extend_from_slice(&v.to_le_bytes());
-        }
+        let first = a.block(a.x0, a.y0);
         let size = ((hi.0 - lo.0) as u32, (hi.1 - lo.1) as u32);
-        let ints = [
-            size.0,
-            size.1,
-            (sample.0 - frame.0) as u32,
-            (sample.1 - frame.1) as u32,
-            a.level,
-            (words.len() / STAMP_BYTES) as u32,
-        ];
-        ints.iter()
-            .for_each(|v| params.extend_from_slice(&v.to_le_bytes()));
-        for v in [detail, total] {
-            params.extend_from_slice(&v.to_le_bytes());
-        }
-        for v in [octaves, 0] {
-            params.extend_from_slice(&v.to_le_bytes());
-        }
+        let params = Params {
+            box0: [lo.0 as i32, lo.1 as i32],
+            size: [size.0, size.1],
+            g0: [(first.0 - frame.0) as i32, (first.1 - frame.1) as i32],
+            level: a.level,
+            count: stamps.len() as u32,
+            sub: (1 << a.level).min(SUB_MAX),
+            detail: s.detail.amount(),
+            total,
+            octaves,
+        };
         let d = &self.device;
         let init = |label, contents: &[u8], usage| {
             d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -315,20 +362,25 @@ impl Live {
                 usage,
             })
         };
-        let params = init("live params", &params, wgpu::BufferUsages::UNIFORM);
-        let stamps = init("live stamps", &words, wgpu::BufferUsages::STORAGE);
-        let empty;
+        let params = init(
+            "live params",
+            bytemuck::bytes_of(&params),
+            wgpu::BufferUsages::UNIFORM,
+        );
+        let stamps = init(
+            "live stamps",
+            bytemuck::cast_slice(&stamps),
+            wgpu::BufferUsages::STORAGE,
+        );
         let tables = match &self.tables {
             Some(t) if noisy => &t.buffer,
-            _ => {
-                empty = init("live tables", &[0; 16], wgpu::BufferUsages::STORAGE);
-                &empty
-            }
+            _ => &self.no_tables,
         };
         let Some(copy) = &self.copy else {
             return false;
         };
         let view = copy.texture.create_view(&Default::default());
+        let before = copy.before.create_view(&Default::default());
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("live stamp"),
             layout: &self.stamp.get_bind_group_layout(0),
@@ -349,9 +401,28 @@ impl Live {
                     binding: 3,
                     resource: tables.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&before),
+                },
             ],
         });
         let mut encoder = d.create_command_encoder(&Default::default());
+        // The box and its neighbours.
+        let (bx, by) = ((lo.0 - 1).max(0) as u32, (lo.1 - 1).max(0) as u32);
+        let at = |t| wgpu::TexelCopyTextureInfo {
+            origin: wgpu::Origin3d { x: bx, y: by, z: 0 },
+            ..wgpu::Texture::as_image_copy(t)
+        };
+        encoder.copy_texture_to_texture(
+            at(&copy.texture),
+            at(&copy.before),
+            wgpu::Extent3d {
+                width: ((hi.0 + 1) as u32).min(a.w) - bx,
+                height: ((hi.1 + 1) as u32).min(a.h) - by,
+                depth_or_array_layers: 1,
+            },
+        );
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.stamp);
@@ -363,6 +434,8 @@ impl Live {
     }
 
     /// Builds the detail tables of `seed` and `scale` over the copy unless they are current.
+    /// Per octave 8 words: amp (f32 bits), offsets of node x, node y, cols, rows. Node entries
+    /// are (lattice index, smoothstep f32 bits); cols and rows are u64 (lo, hi).
     fn tables(&mut self, seed: u64, scale: f64) {
         let Some(copy) = &self.copy else { return };
         let key = (seed, scale.to_bits());
@@ -370,11 +443,8 @@ impl Live {
             return;
         }
         let a = copy.area;
-        let (s0, s1) = (
-            a.sample(a.x0, a.y0),
-            a.sample(a.x0 + a.w - 1, a.y0 + a.h - 1),
-        );
-        let t = mmc_core::detail_tables(seed, scale, a.mpp, (s0.0, s1.0), (s0.1, s1.1), a.level);
+        let (xs, ys) = a.pixels();
+        let t = mmc_core::detail_tables(seed, scale, a.mpp, xs, ys);
         let n = t.octaves.len();
         let mut words: Vec<u32> = vec![0; n * 8];
         for (o, oct) in t.octaves.iter().enumerate() {
@@ -514,11 +584,51 @@ impl Live {
             return Ok(vec![]);
         };
         let bytes = read_texture(&self.device, &self.queue, &c.texture, c.area.w, c.area.h)?;
-        Ok(bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect())
+        Ok(bytemuck::pod_collect_to_vec(&bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Params` and `Stamp` have the offsets and sizes of their `live.wgsl` structs.
+    #[test]
+    fn rust_structs_match_the_shader_layout() {
+        let module = naga::front::wgsl::parse_str(include_str!("live.wgsl")).unwrap();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(module.to_ctx()).unwrap();
+        let wgsl = |name: &str| {
+            let (h, ty) = module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some(name))
+                .unwrap();
+            let naga::TypeInner::Struct { members, span } = &ty.inner else {
+                panic!("{name} is a struct")
+            };
+            assert_eq!(layouter[h].size, *span);
+            let m: Vec<(String, u32)> = members
+                .iter()
+                .map(|m| (m.name.clone().unwrap(), m.offset))
+                .collect();
+            (m, *span as usize)
+        };
+        macro_rules! layout {
+            ($t:ty, $($f:ident),*) => {
+                (vec![$((stringify!($f).to_string(), std::mem::offset_of!($t, $f) as u32)),*],
+                 std::mem::size_of::<$t>())
+            };
+        }
+        assert_eq!(
+            wgsl("Params"),
+            layout!(
+                Params, box0, size, g0, level, count, sub, detail, total, octaves
+            )
+        );
+        assert_eq!(
+            wgsl("Stamp"),
+            layout!(Stamp, centre, radius, amount, pressure, core, goal, mode)
+        );
     }
 }

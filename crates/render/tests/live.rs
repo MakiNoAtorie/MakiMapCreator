@@ -136,7 +136,7 @@ fn gpu_stamps_equal_the_cpu_brush_within_the_tolerance() {
     let seed = p.seed().unwrap();
     for s in strokes() {
         assert!(live.stamp(seed, &s), "{:?} runs on the GPU", s.mode);
-        p.apply(map, Command::Brush(s)).unwrap();
+        p.apply(map, Command::Brush(s.clone())).unwrap();
     }
     let gpu = live.heights().unwrap();
     let cpu = r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap();
@@ -163,7 +163,7 @@ fn the_copy_shades_like_the_renderer() {
     let seed = p.seed().unwrap();
     for s in strokes() {
         live.stamp(seed, &s);
-        p.apply(map, Command::Brush(s)).unwrap();
+        p.apply(map, Command::Brush(s.clone())).unwrap();
     }
     let gpu = live.render(v).unwrap();
     let cpu = r.render(&r.scene(&p, v).unwrap(), u32::MAX).unwrap();
@@ -232,4 +232,75 @@ fn pan_and_zoom_draw_the_copy_where_it_is() {
     let img = live.render(past).unwrap();
     let alpha = |x: u32| img.rgba[((100 * img.width + x) * 4 + 3) as usize];
     assert_eq!((alpha(10), alpha(290)), (255, 0));
+}
+
+/// The whole 600x400 map in 150x100 image pixels: level 2, each texel the mean of 4x4 pixels.
+fn zoomed_out(map: MapId) -> View {
+    View {
+        map,
+        min: RootPoint { x: 0.0, y: 0.0 },
+        max: RootPoint {
+            x: 6000.0,
+            y: 4000.0,
+        },
+        width: 150,
+        height: 100,
+    }
+}
+
+#[test]
+fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
+    for s in strokes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut p, map) = fixture(dir.path());
+        let r = renderer();
+        let v = zoomed_out(map);
+        let mut live = Live::new(
+            r.device().clone(),
+            r.queue().clone(),
+            shader(),
+            TARGET_FORMAT,
+        );
+        let base = drawn(&r, &p, v).into_base(Layer::HEIGHT).unwrap();
+        assert_eq!(base.values().len(), 150 * 100, "the map at level 2");
+        live.set_base(base);
+        assert!(live.stamp(p.seed().unwrap(), &s));
+        p.apply(map, Command::Brush(s.clone())).unwrap();
+        let gpu = live.heights().unwrap();
+        let cpu = drawn(&r, &p, v);
+        let rgba = r.render(&cpu, u32::MAX).unwrap().rgba;
+        let cpu = cpu.into_base(Layer::HEIGHT).unwrap();
+        let worst = gpu
+            .iter()
+            .zip(cpu.values())
+            .map(|(g, c)| (g - c).abs())
+            .fold(0.0f32, f32::max);
+        let img = live.render(v).unwrap().rgba;
+        let colour = img
+            .iter()
+            .zip(&rgba)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap();
+        // Add and roughen are linear, so a texel's mean change is exact; raise-to and lower-to
+        // start each pixel on the texel's slope (measured 0.08 m on the 800 m hill).
+        let bound = if s.target.is_some() { 0.1 } else { TOLERANCE };
+        assert!(worst <= bound, "{:?}: worst difference {worst} m", s.mode);
+        assert!(
+            colour <= 1,
+            "{:?}: worst channel difference {colour}",
+            s.mode
+        );
+    }
+}
+
+/// The complete scene the canvas draws: at the view's pyramid level.
+fn drawn(r: &Renderer, p: &Project, v: View) -> mmc_render::Scene {
+    loop {
+        let s = r.scene_cached(p, v).unwrap();
+        if s.is_complete() {
+            return s;
+        }
+        p.wait_tiles();
+    }
 }

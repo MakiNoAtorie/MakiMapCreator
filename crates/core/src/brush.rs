@@ -1,5 +1,4 @@
-//! Brush stamps: falloff with root-space detail (ADR-0008), and the add, smooth, flatten and
-//! roughen modes. `stamp_weight` and `detail_noise` are the reference maths the GPU brush ports.
+//! Brush stamps with root-space detail; `stamp_weight` and `detail_noise` are the reference (ADR-0025).
 
 use std::collections::BTreeSet;
 
@@ -14,11 +13,9 @@ pub enum BrushMode {
     /// `v += strength * p * w`, or with `target` `v += (target - v) * min(1, p * w)`.
     #[default]
     Add,
-    /// `v += (mean - v) * min(1, strength * p * w)`; `mean` is the box mean of the
-    /// `(2k + 1)²` pixels around, `k = max(1, ceil(radius px / 4))`, read before the stamp.
+    /// `v += (mean - v) * min(1, strength * p * w)`, `mean` the box mean around (ADR-0025).
     Smooth,
-    /// `v += (level - v) * min(1, strength * p * w)`; `level` is the layer under the stroke's
-    /// first stamp centre before the stroke.
+    /// `v += (level - v) * min(1, strength * p * w)`, `level` read under the first stamp.
     Flatten,
     /// `v += strength * p * falloff weight * detail_noise`: no net raise, the noise has mean 0.
     Roughen,
@@ -27,7 +24,7 @@ pub enum BrushMode {
 /// Root-space noise on a brush's stamp weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Detail {
-    /// 0 is the smooth falloff; 1 scales the weight by 0 to 2. Clamped to 0..=1.
+    /// 0 is the smooth falloff; 1 scales the weight by 0 to 2. Used clamped (`amount()`).
     pub amount: f32,
     /// Cell of the coarsest octave, metres.
     pub scale: f64,
@@ -38,6 +35,17 @@ impl Detail {
         amount: 0.0,
         scale: 1000.0,
     };
+
+    pub fn amount(self) -> f32 {
+        self.amount.clamp(0.0, 1.0)
+    }
+}
+
+impl BrushStroke {
+    /// The stroke reads detail noise: detail on its weight, or roughen.
+    pub fn noisy(&self) -> bool {
+        self.detail.amount > 0.0 || self.mode == BrushMode::Roughen
+    }
 }
 
 /// `rng` stage of the brush detail noise; the seed is the project seed.
@@ -46,17 +54,20 @@ const OCTAVES: u32 = 4;
 
 /// Detail noise is evaluated every `NODE` global pixels and interpolated between.
 const NODE: i64 = 4;
+/// Octaves with a cell under this many pixels are skipped.
+const MIN_CELL: f64 = (2 * NODE) as f64;
+/// Sum of all octave amplitudes, skipped ones included.
+const TOTAL: f64 = 1.875;
 
-/// Detail noise in -1..1 at the pixel whose centre is root-space `at`, on a map with `mpp`.
-/// Let `g = round(at / mpp - 0.5)` be the global pixel index (x and y). Nodes sit at
-/// `g = NODE * k`, at root-space `(NODE * k + 0.5) * mpp`, with value
-/// `sum(0.5^o * (2 * rng::noise(seed, DETAIL_STAGE, node, scale / 2^o) - 1)) / sum(0.5^o)` over
-/// octaves `o` in 0..4, skipping octaves whose cell is under `2 * NODE * mpp` (8 px). A pixel
-/// is the bilinear mix of its 4 nodes, weights `(g mod NODE) / NODE`, first in y, then in x,
-/// each `a + (b - a) * t`.
-/// `rng::noise` is smoothstep-interpolated value noise on lattice corners
-/// `unit(seed, stage, Key::At(corner))`, a splitmix64 hash of the corner's f64 bits (`rng.rs`).
-/// A port with f32 or another hash agrees within its rounding, not bit for bit.
+/// Octave amplitudes and cells, coarse first; `false` marks a skipped octave.
+fn octaves(scale: f64, mpp: f64) -> impl Iterator<Item = (f64, f64, bool)> {
+    (0..OCTAVES as i32).map(move |o| {
+        let f = 0.5f64.powi(o);
+        (f, scale * f, scale * f >= MIN_CELL * mpp)
+    })
+}
+
+/// Detail noise in -1..1 at the pixel whose centre is `at`; the maths is in ADR-0025.
 pub fn detail_noise(seed: u64, at: RootPoint, scale: f64, mpp: f64) -> f64 {
     let g = (
         (at.x / mpp - 0.5).round() as i64,
@@ -95,20 +106,16 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 }
 
 fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> f64 {
-    let (mut sum, mut total, mut amp, mut cell) = (0.0, 0.0, 1.0, scale);
-    for o in 0..OCTAVES as usize {
-        if cell >= (2 * NODE) as f64 * mpp {
+    let mut sum = 0.0;
+    for (o, (amp, cell, kept)) in octaves(scale, mpp).enumerate() {
+        if kept {
             sum += amp * (2.0 * noise(o, cell) - 1.0);
         }
-        total += amp;
-        amp *= 0.5;
-        cell *= 0.5;
     }
-    sum / total
+    sum / TOTAL
 }
 
-/// `detail_noise` over a range of global pixels as tables, so a port without u64 or f64 (WGSL)
-/// does one hash step per lattice corner and gets the same hash bits.
+/// `detail_noise` over a range of global pixels as tables, for a port without u64 or f64 (WGSL).
 pub struct DetailTables {
     /// Node index of column and row 0 of the node tables.
     pub nx0: i64,
@@ -130,24 +137,20 @@ pub struct OctaveTable {
     pub rows: Vec<u64>,
 }
 
-/// Tables for global pixels `xs` x `ys` (inclusive). `level` > 0 also skips the octaves under 8
-/// pixels of that pyramid level, for a copy drawn at that level.
+/// Tables for global pixels `xs` x `ys` (inclusive).
 pub fn detail_tables(
     seed: u64,
     scale: f64,
     mpp: f64,
     xs: (i64, i64),
     ys: (i64, i64),
-    level: u32,
 ) -> DetailTables {
     let prefix = rng::prefix(seed, DETAIL_STAGE);
     let (nx0, nx1) = (xs.0.div_euclid(NODE), xs.1.div_euclid(NODE) + 1);
     let (ny0, ny1) = (ys.0.div_euclid(NODE), ys.1.div_euclid(NODE) + 1);
-    let min_cell = (2 * NODE) as f64 * mpp * (1u64 << level) as f64;
-    let mut octaves = vec![];
-    let (mut total, mut amp, mut cell) = (0.0, 1.0, scale);
-    for _ in 0..OCTAVES {
-        if cell >= min_cell {
+    let mut tables = vec![];
+    for (amp, cell, kept) in octaves(scale, mpp) {
+        if kept {
             let axis = |n0: i64, n1: i64, at: &dyn Fn(i64) -> f64| {
                 let v: Vec<(f64, f64)> = (n0..=n1).map(|n| rng::axis(at(n), cell)).collect();
                 let i0 = v[0].0;
@@ -156,7 +159,7 @@ pub fn detail_tables(
             };
             let (node_x, ix0, ix1) = axis(nx0, nx1, &|n| node_at(n, 0, mpp).x);
             let (node_y, iy0, iy1) = axis(ny0, ny1, &|n| node_at(0, n, mpp).y);
-            octaves.push(OctaveTable {
+            tables.push(OctaveTable {
                 amp,
                 node_x,
                 node_y,
@@ -166,15 +169,12 @@ pub fn detail_tables(
                 rows: (iy0..=iy1).map(|j| rng::at_y(j as f64 * cell)).collect(),
             });
         }
-        total += amp;
-        amp *= 0.5;
-        cell *= 0.5;
     }
     DetailTables {
         nx0,
         ny0,
-        total,
-        octaves,
+        total: TOTAL,
+        octaves: tables,
     }
 }
 
@@ -207,14 +207,11 @@ fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
 }
 
 /// `w = falloff(d²) * max(0, 1 + amount * n)` in f64, then to f32.
-fn modulate(w: f32, amount: f32, n: f64) -> f32 {
-    (w as f64 * (1.0 + amount.clamp(0.0, 1.0) as f64 * n).max(0.0)) as f32
+fn modulate(w: f32, d: Detail, n: f64) -> f32 {
+    (w as f64 * (1.0 + d.amount() as f64 * n).max(0.0)) as f32
 }
 
-/// Weight of a stamp at `centre` with `radius` (metres) at root-space `at`, 0 outside the disc:
-/// `brush_weight(d², falloff) * max(0, 1 + amount * detail_noise(seed, at, scale, mpp))`, with
-/// `d² = |at - centre|² / radius²`. The weight never goes below 0, so detail never turns a
-/// stamp's effect around. `at` is a pixel centre `((origin / mpp).round() + i + 0.5) * mpp`.
+/// Weight of a stamp at the pixel centre `at`, 0 outside the disc; the maths is in ADR-0025.
 pub fn stamp_weight(
     at: RootPoint,
     centre: RootPoint,
@@ -233,21 +230,28 @@ pub fn stamp_weight(
     } else {
         0.0
     };
-    modulate(weight_in(d2, brush_core(falloff)), detail.amount, n)
+    modulate(weight_in(d2, brush_core(falloff)), detail, n)
 }
 
-/// The detail noise's lattice corners over one stamp, so pixels interpolate without hashing.
-/// Gives the same bits as `detail_noise`.
+/// One octave's hashed lattice corners over a stamp, rows of `w` from (`ix0`, `iy0`).
+struct LatticeOctave {
+    cell: f64,
+    ix0: i64,
+    iy0: i64,
+    w: usize,
+    corners: Vec<f64>,
+}
+
+/// The detail noise's lattice corners over one stamp; same bits as `detail_noise`.
 struct Lattice {
-    octaves: Vec<(f64, i64, i64, usize, Vec<f64>)>,
+    octaves: Vec<LatticeOctave>,
 }
 
 impl Lattice {
     fn new(seed: u64, scale: f64, mpp: f64, lo: RootPoint, hi: RootPoint) -> Lattice {
         let prefix = rng::prefix(seed, DETAIL_STAGE);
-        let mut octaves = vec![];
-        let mut cell = scale;
-        for _ in 0..OCTAVES {
+        let mut list = vec![];
+        for (_, cell, kept) in octaves(scale, mpp) {
             let (ix0, iy0) = (
                 (lo.x / cell).floor() as i64 - 1,
                 (lo.y / cell).floor() as i64 - 1,
@@ -258,10 +262,10 @@ impl Lattice {
             );
             let w = (ix1 - ix0 + 1).max(0) as usize;
             let h = (iy1 - iy0 + 1).max(0) as usize;
-            let mut v = vec![];
-            if cell >= (2 * NODE) as f64 * mpp && w > 0 && h > 0 {
-                v = vec![0.0; w * h];
-                par_rows(&mut v, w, |r, out| {
+            let mut corners = vec![];
+            if kept && w > 0 && h > 0 {
+                corners = vec![0.0; w * h];
+                par_rows(&mut corners, w, |r, out| {
                     let iy = iy0 + r as i64;
                     for (ix, o) in (ix0..).zip(out) {
                         let p = RootPoint {
@@ -272,27 +276,30 @@ impl Lattice {
                     }
                 });
             }
-            octaves.push((cell, ix0, iy0, w, v));
-            cell *= 0.5;
+            list.push(LatticeOctave {
+                cell,
+                ix0,
+                iy0,
+                w,
+                corners,
+            });
         }
-        Lattice { octaves }
+        Lattice { octaves: list }
     }
 
-    /// For each root-space coordinate in `vs`, octave `o`'s corner offset and smoothstep weight
-    /// along x (`y` false) or y; the noise is separable in these, so a grid hashes nothing.
+    /// Per coordinate in `vs`, octave `o`'s corner offset and smoothstep weight along x or y.
     fn axis(&self, o: usize, y: bool, vs: impl Iterator<Item = f64>) -> Vec<(usize, f64)> {
-        let (cell, ix0, iy0, ..) = &self.octaves[o];
-        let i0 = if y { *iy0 } else { *ix0 };
+        let oct = &self.octaves[o];
+        let i0 = if y { oct.iy0 } else { oct.ix0 };
         vs.map(|v| {
-            let (g0, f) = rng::axis(v, *cell);
+            let (g0, f) = rng::axis(v, oct.cell);
             ((g0 as i64 - i0) as usize, f)
         })
         .collect()
     }
 }
 
-/// Detail noise under one stamp: node values mixed in y for each pixel row, so a pixel does
-/// one mix in x. Same bits as `detail_noise`.
+/// Detail noise under one stamp, node values mixed in y per pixel row; same bits as `detail_noise`.
 struct Nodes {
     nx0: i64,
     gy0: i64,
@@ -332,7 +339,7 @@ impl Nodes {
             for (col, o) in out.iter_mut().enumerate() {
                 // Same operations as `rng::noise` at the node, with corners from the lattice.
                 *o = fractal(d.scale, mpp, |oct, _| {
-                    let (lw, lv) = (lattice.octaves[oct].3, &lattice.octaves[oct].4);
+                    let (lw, lv) = (lattice.octaves[oct].w, &lattice.octaves[oct].corners);
                     let ((ix, fx), (iy, fy)) = (axes[oct].0[col], axes[oct].1[r]);
                     let at = iy * lw + ix;
                     rng::mix4([lv[at], lv[at + 1], lv[at + lw], lv[at + lw + 1]], fx, fy)
@@ -386,9 +393,7 @@ fn par_rows(v: &mut [f64], w: usize, f: impl Fn(usize, &mut [f64]) + Sync) {
     });
 }
 
-/// Prefix sums over a pixel box of a layer, for box means. Values are fixed point (`FIXED`
-/// per metre) so sums are exact: a mean does not depend on where the box starts, so
-/// neighbouring maps agree.
+/// Exact fixed-point prefix sums over a pixel box, so a mean does not depend on the box start.
 struct Sums {
     x0: i64,
     y0: i64,
@@ -436,8 +441,7 @@ impl Sums {
 }
 
 impl Project {
-    /// Adds the stroke to `tiles`, loading the ones it reaches first; gives the tiles it changed.
-    /// With `cached`, a tile in the tile cache is taken from it and its record is read later.
+    /// Adds the stroke to `tiles` and gives the tiles it changed; `cached` takes tiles from the cache.
     /// `level` is the stroke's flatten level; `None` samples it under the first stamp.
     pub(crate) fn brush_into(
         &self,
@@ -449,7 +453,7 @@ impl Project {
     ) -> Result<BTreeSet<(u32, u32)>> {
         let mut touched = BTreeSet::new();
         let mpp = map.settings.metres_per_pixel;
-        let noisy = s.detail.amount > 0.0 || s.mode == BrushMode::Roughen;
+        let noisy = s.noisy();
         let seed = if noisy { self.seed()? } else { 0 };
         let (gx, gy) = ((map.origin.x / mpp).round(), (map.origin.y / mpp).round());
         let (gxi, gyi) = (gx as i64, gy as i64);
@@ -527,7 +531,7 @@ impl Project {
                     }
                     let fall = weight_in(d2, core);
                     let n = nodes.as_ref().map_or(0.0, |l| l.at((gxi + x, gyi + y)));
-                    let wt = modulate(fall, s.detail.amount, n);
+                    let wt = modulate(fall, s.detail, n);
                     let old = *v;
                     match s.mode {
                         BrushMode::Add => match s.target {

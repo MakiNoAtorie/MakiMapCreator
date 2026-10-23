@@ -1,41 +1,44 @@
-// Live brush stamps (ADR-0025): the port of `mmc_core::stamp_weight`, `detail_noise` and the add
-// and roughen modes of `brush_into`. Pixel coordinates are global level-0 pixels minus a multiple
-// of 4 (the detail tables' first node), so they stay small. u64 is vec2u (lo, hi).
+// Live brush stamps: the port of the CPU brush in `mmc_core::brush` (ADR-0025).
 
+// Layout: `live::Params` and `live::Stamp`.
 struct Params {
-    // Texels this dispatch covers.
     box0: vec2i,
     size: vec2u,
-    // Pixel sampled for texel (0, 0); texel t samples g0 + (t << level).
     g0: vec2i,
     level: u32,
     count: u32,
-    // Detail amount (0 is none), sum of octave amplitudes, octaves in the tables.
+    sub: u32,
     detail: f32,
     total: f32,
     octaves: u32,
-    _pad: u32,
 }
 
 struct Stamp {
     centre: vec2f,
     radius: f32,
-    // strength * pressure.
     amount: f32,
     pressure: f32,
-    // Squared radius fraction of the hard core.
     core: f32,
     goal: f32,
-    // 1: has a target, 2: raises, 4: roughen.
-    flags: u32,
+    mode: u32,
 }
+
+const ADD = 0u;
+const RAISE_TO = 1u;
+const LOWER_TO = 2u;
+const ROUGHEN = 3u;
 
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var heights: texture_storage_2d<r32float, read_write>;
 @group(0) @binding(2) var<storage, read> stamps: array<Stamp>;
-// Per octave 8 words: amp (f32 bits), offsets of node x, node y, cols, rows. Node entries are
-// (lattice index, smoothstep f32 bits); cols and rows are u64.
+// Layout: `live::Live::tables`.
 @group(0) @binding(3) var<storage, read> tables: array<u32>;
+// The heights before this dispatch.
+@group(0) @binding(4) var before: texture_2d<f32>;
+
+fn before_at(t: vec2i) -> f32 {
+    return textureLoad(before, clamp(t, vec2i(0), vec2i(textureDimensions(before)) - 1), 0).r;
+}
 
 fn mul_wide(a: u32, b: u32) -> vec2u {
     let a0 = a & 0xffffu;
@@ -83,7 +86,7 @@ fn node(kx: u32, ky: u32) -> f32 {
     var sum = 0.0;
     for (var o = 0u; o < p.octaves; o++) {
         let h = o * 8u;
-        let nx = h + 0u;
+        let amp = bitcast<f32>(tables[h]);
         let xa = tables[h + 1u] + 2u * kx;
         let ya = tables[h + 2u] + 2u * ky;
         let ix = tables[xa];
@@ -102,7 +105,7 @@ fn node(kx: u32, ky: u32) -> f32 {
         let d = unit(mix64(x1 ^ y1));
         let top = lerp(a, b, fx);
         let bottom = lerp(c, d, fx);
-        sum += bitcast<f32>(tables[nx]) * (2.0 * lerp(top, bottom, fy) - 1.0);
+        sum += amp * (2.0 * lerp(top, bottom, fy) - 1.0);
     }
     return sum / p.total;
 }
@@ -125,43 +128,75 @@ fn falloff(d2: f32, core: f32) -> f32 {
     return t * t;
 }
 
+// A texel is the mean of its level-0 pixels, as the pyramid: it changes by the mean change of
+// `sub` x `sub` of them, each starting at the texel's value.
 @compute @workgroup_size(8, 8)
 fn stamp(@builtin(global_invocation_id) id: vec3u) {
     if any(id.xy >= p.size) {
         return;
     }
     let t = p.box0 + vec2i(id.xy);
-    let g = p.g0 + (t << vec2u(p.level));
-    let at = vec2f(g) + select(0.5, 0.0, p.level > 0u);
-    var v = textureLoad(heights, t).r;
-    let old = v;
-    var n = 0.0;
-    var have_n = false;
+    let first = p.g0 + (t << vec2u(p.level));
+    let step = (1 << p.level) / i32(p.sub);
+    let n_sub = p.sub * p.sub;
+    let v = before_at(t);
+    // Pixels start on the plane of the neighbours' slope, so their mean is v.
+    var slope = vec2f(0.0);
+    if p.level > 0u {
+        slope = 0.5 * vec2f(
+            before_at(t + vec2i(1, 0)) - before_at(t - vec2i(1, 0)),
+            before_at(t + vec2i(0, 1)) - before_at(t - vec2i(0, 1)),
+        ) / f32(1 << p.level);
+    }
+    let centre = vec2f(first) + 0.5 * f32(1 << p.level);
+    var change: array<f32, 16>;
+    var noise: array<f32, 16>;
+    // Bit k: noise[k] is set.
+    var have = 0u;
+    var changed = false;
     for (var i = 0u; i < p.count; i++) {
         let s = stamps[i];
-        let d = at - s.centre;
-        let d2 = dot(d, d) / (s.radius * s.radius);
-        if d2 >= 1.0 {
-            continue;
-        }
-        let roughen = (s.flags & 4u) != 0u;
-        if !have_n && (p.detail > 0.0 || roughen) {
-            n = detail(g);
-            have_n = true;
-        }
-        let fall = falloff(d2, s.core);
-        if roughen {
-            v += s.amount * fall * n;
-            continue;
-        }
-        let w = fall * max(0.0, 1.0 + p.detail * n);
-        if (s.flags & 1u) == 0u {
-            v += s.amount * w;
-        } else if (v < s.goal) == ((s.flags & 2u) != 0u) && v != s.goal {
-            v += (s.goal - v) * min(1.0, s.pressure * w);
+        let roughen = s.mode == ROUGHEN;
+        let noisy = p.detail > 0.0 || roughen;
+        for (var k = 0u; k < n_sub; k++) {
+            let g = first + step * vec2i(vec2u(k % p.sub, k / p.sub)) + step / 2;
+            let d = vec2f(g) + 0.5 - s.centre;
+            let d2 = dot(d, d) / (s.radius * s.radius);
+            if d2 >= 1.0 {
+                continue;
+            }
+            let fall = falloff(d2, s.core);
+            var n = 0.0;
+            if noisy {
+                if (have & (1u << k)) == 0u {
+                    noise[k] = detail(g);
+                    have |= 1u << k;
+                }
+                n = noise[k];
+            }
+            let w = fall * max(0.0, 1.0 + p.detail * n);
+            let start = v + dot(slope, vec2f(g) + 0.5 - centre);
+            let u = start + change[k];
+            var next = u;
+            if roughen {
+                next = u + s.amount * fall * n;
+            } else if s.mode == ADD {
+                next = u + s.amount * w;
+            } else if (u < s.goal) == (s.mode == RAISE_TO) && u != s.goal {
+                next = u + (s.goal - u) * min(1.0, s.pressure * w);
+            }
+            if next != u {
+                change[k] = next - start;
+                changed = true;
+            }
         }
     }
-    if v != old {
-        textureStore(heights, t, vec4f(v, 0.0, 0.0, 0.0));
+    if !changed {
+        return;
     }
+    var sum = 0.0;
+    for (var k = 0u; k < n_sub; k++) {
+        sum += change[k];
+    }
+    textureStore(heights, t, vec4f(v + sum / f32(n_sub), 0.0, 0.0, 0.0));
 }

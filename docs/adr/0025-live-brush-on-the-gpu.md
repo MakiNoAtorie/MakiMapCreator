@@ -12,6 +12,6 @@ We rejected a GPU copy that is the source of truth (read back for undo and save)
 
 ## Consequences
 
-- GPU and CPU agree within 1e-3 m (measured 2.5e-4 m at 800 m under WARP); the shaded colours within 1 per channel, so the hand-over shows no jump. At pyramid levels above 0 the copy samples one pixel per texel where the CPU render shows 2x2 means, and drops the noise octaves under 8 texels; the difference is fine texture only.
+- GPU and CPU agree within 1e-3 m (measured 2.5e-4 m at 800 m under WARP); the shaded colours within 1 per channel, so the hand-over shows no jump. At pyramid levels above 0 a texel is the mean of its level-0 pixels, as the CPU pyramid: a stamp changes it by the mean change of its pixels (all of them up to level 2, 4x4 of them above), each starting on the plane of the texel's slope. Add and roughen are linear, so they match within 1e-3 m; raise-to and lower-to within 0.1 m (measured 0.08 m at level 2 on an 800 m hill), colours within 1 per channel.
 - A stroke past the copy's edge is drawn there by the canvas image when the CPU has applied it; the commit is the CPU's either way.
 - A failed part, or a part the GPU cannot do, hides the copy until the next complete render.

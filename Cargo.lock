@@ -1987,6 +1987,7 @@ dependencies = [
  "mmc-fixtures",
  "mmc-kind-region",
  "mmc-kind-world",
+ "naga",
  "png",
  "pollster 1.0.1",
  "tempfile",
