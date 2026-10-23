@@ -58,6 +58,8 @@ pub struct Painter {
     drawing: Vec<(u64, Instant)>,
     /// Last known cursor and pressure, for the brush rings.
     cursor: Option<(Pos2, f32)>,
+    /// Where the pen hovers in root space, and whether its tiles were prefetched.
+    hover: Option<(RootPoint, bool)>,
     /// Bumped when an undo or redo changed the project; the app reloads what it shows.
     pub version: u64,
 }
@@ -77,6 +79,7 @@ impl Painter {
             overlay: vec![],
             drawing: vec![],
             cursor: None,
+            hover: None,
             version: 0,
         }
     }
@@ -109,7 +112,11 @@ impl Painter {
             pressure: i.pressure,
         };
         match i.phase {
-            Phase::Hover => {}
+            Phase::Hover => {
+                if self.hover.is_none_or(|(at, _)| at != sample.at) {
+                    self.hover = Some((sample.at, false));
+                }
+            }
             Phase::Down => {
                 self.end();
                 self.next_stroke += 1;
@@ -184,6 +191,16 @@ impl Painter {
 
     /// Sends this frame's parts and ops to the edit worker; drops overlay parts the canvas now shows.
     pub fn flush(&mut self, editor: &Editor, canvas: &Canvas) {
+        // A hovering pen will draw here: its tiles go into the cache first (ADR-0014).
+        if let (Some((at, false)), Some(t)) = (self.hover, self.current()) {
+            self.hover = Some((at, true));
+            self.outbox.push(Op::Prefetch {
+                map: self.map,
+                layer: t.layer,
+                at,
+                radius: self.options.size * 1.25,
+            });
+        }
         self.send_part();
         for op in self.outbox.drain(..) {
             editor.send(op);

@@ -15,6 +15,8 @@ const JOBS_POLL: Duration = Duration::from_millis(100);
 const JOBS_WAIT: Duration = Duration::from_secs(30);
 /// Sum of squared stamp radii, in pixels, applied per project lock; the render fetches between.
 const LOCK_STAMPS: f64 = 2.0 * 256.0 * 256.0;
+/// Prefetch radius around the pen, in brush radii: about the next frame's stamps.
+const PREFETCH_REACH: f64 = 2.0;
 
 pub enum Op {
     /// Part `part` of stroke `stroke`; parts until `End` are one undo step.
@@ -35,6 +37,13 @@ pub enum Op {
     Redo(MapId),
     /// Report when the derived layers being rebuilt are done.
     Watch,
+    /// Load the tiles of `layer` within `radius` metres of `at` into the tile cache.
+    Prefetch {
+        map: MapId,
+        layer: mmc_core::Layer,
+        at: mmc_core::RootPoint,
+        radius: f64,
+    },
     /// Answers once every op sent before it is done.
     Sync(Sender<()>),
 }
@@ -187,6 +196,7 @@ impl Worker {
                         .find(|m| m.id == map)
                         .map_or(1.0, |m| m.settings.metres_per_pixel)
                 };
+                let last = last_point(&cmd);
                 let s = self.stats.entry((map, stroke)).or_default();
                 s.parts += parts.len() as u32;
                 s.mpp = mpp;
@@ -211,6 +221,13 @@ impl Worker {
                 }
                 let s = self.stats.entry((map, stroke)).or_default();
                 s.latency_max = s.latency_max.max(sent.elapsed());
+                // The stroke goes on near its end: load what it will reach before it does.
+                if let (Some(at), Some(l)) = (last, s.layer) {
+                    let guard = lock_project(&self.project, "edit").0;
+                    if let Some(p) = guard.as_ref() {
+                        let _ = p.prefetch(map, l, at, s.radius * PREFETCH_REACH);
+                    }
+                }
                 self.send(Done::Applied {
                     map,
                     stroke,
@@ -278,6 +295,21 @@ impl Worker {
                 self.send(Done::Stepped { map, result });
             }
             Op::Watch => self.watch = Some(Instant::now() + JOBS_WAIT),
+            Op::Prefetch {
+                map,
+                layer,
+                at,
+                radius,
+            } => {
+                // A newer prefetch replaces queued ones.
+                if self.queue.iter().any(|o| matches!(o, Op::Prefetch { .. })) {
+                    return;
+                }
+                let guard = lock_project(&self.project, "edit").0;
+                if let Some(p) = guard.as_ref() {
+                    let _ = p.prefetch(map, layer, at, radius);
+                }
+            }
             Op::Sync(tx) => {
                 let _ = tx.send(());
             }
@@ -380,6 +412,14 @@ fn split(cmd: Command, mpp: f64) -> Vec<Command> {
             })
             .collect(),
         other => vec![other],
+    }
+}
+
+fn last_point(cmd: &Command) -> Option<mmc_core::RootPoint> {
+    match cmd {
+        Command::Brush(b) => b.points.last().map(|p| p.at),
+        Command::Paint(p) => p.points.last().copied(),
+        _ => None,
     }
 }
 

@@ -152,6 +152,37 @@ impl Project {
         Ok(())
     }
 
+    /// Queues the level-0 tiles of `layer` within `radius` metres of `at` for the tile cache, so a
+    /// stroke there takes them from memory. Never blocks; call it while the pen hovers or moves.
+    pub fn prefetch(
+        &self,
+        map: MapId,
+        layer: Layer,
+        at: crate::RootPoint,
+        radius: f64,
+    ) -> Result<()> {
+        let m = self.map(map)?;
+        let (cx, cy) = m.to_pixels(at);
+        let r = radius / m.settings.metres_per_pixel;
+        let t = crate::TILE_SIZE as f64;
+        let (w, h) = (m.settings.width as f64, m.settings.height as f64);
+        let span = |c: f64, size: f64| {
+            let lo = ((c - r).max(0.0) / t).floor() as u32;
+            let hi = ((c + r).min(size - 1.0).max(0.0) / t).floor() as u32;
+            lo..=hi
+        };
+        if cx + r < 0.0 || cy + r < 0.0 || cx - r >= w || cy - r >= h {
+            return Ok(());
+        }
+        let cache = self.tiles();
+        for ty in span(cy, h) {
+            for tx in span(cx, w) {
+                cache.request(m.tile_key(layer, tx, ty));
+            }
+        }
+        Ok(())
+    }
+
     /// Takes the open stroke of `map` for `encode` and `commit_stroke`; `None` when there is none.
     pub fn take_stroke(&mut self, map: MapId) -> Option<EndedStroke> {
         let s = self.strokes.open.remove(&map)?;

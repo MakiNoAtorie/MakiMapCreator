@@ -57,6 +57,7 @@ fn measure() -> BTreeMap<String, f64> {
         })
         .collect();
     // One stamp of the largest brush (512 px) into a stroke session: what the edit worker does per lock.
+    // The pen hovered there first, so the app prefetched the tiles under it.
     let large = (0..RUNS)
         .map(|i| {
             let Command::Brush(mut b) = fixture.stroke(&mut rng) else {
@@ -65,6 +66,11 @@ fn measure() -> BTreeMap<String, f64> {
             b.points.truncate(1);
             b.points[0].radius = 5120.0;
             b.points[0].at.x = 6000.0 + i as f64 * 11000.0;
+            let p = b.points[0];
+            project
+                .prefetch(map, Layer::HEIGHT, p.at, p.radius * 1.25)
+                .unwrap();
+            project.wait_tiles();
             let ms = time_ms(|| project.apply_part(map, Command::Brush(b)).unwrap()).0;
             project.end_stroke(map).unwrap();
             ms

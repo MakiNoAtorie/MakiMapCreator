@@ -158,6 +158,20 @@ fn a_stroke_applied_in_parts_equals_it_whole_and_undoes_in_one_step() {
     let (a, b) = (p.maps()[0].id, p.add_root_map(settings()).unwrap());
     p.apply(b, stroke(5005.0, 105.0, 3.0)).unwrap();
     let xs = [105.0, 2555.0, 2605.0, 4005.0];
+    // Tiles taken from the cache must give what tiles read from storage give.
+    p.apply(a, stroke(2555.0, 2555.0, 0.0)).unwrap();
+    p.undo(a).unwrap();
+    p.prefetch(
+        a,
+        Layer::HEIGHT,
+        RootPoint {
+            x: 2555.0,
+            y: 2555.0,
+        },
+        3000.0,
+    )
+    .unwrap();
+    p.wait_tiles();
     for &x in &xs {
         p.apply_part(a, stroke(x, 2555.0, 10.0)).unwrap();
     }

@@ -219,9 +219,13 @@ impl Project {
                 let half = (r * r - dy).sqrt();
                 let xa = ((cx - 0.5 - half).floor() as i64).max(x0.max(tx * t));
                 let xb = ((cx - 0.5 + half).ceil() as i64 + 1).min(x1.min((tx + 1) * t));
-                for x in xa..xb {
+                if xa >= xb {
+                    continue;
+                }
+                let (a, b) = (row + (xa - tx * t) as usize, row + (xb - tx * t) as usize);
+                for (x, v) in (xa..xb).zip(&mut values[a..b]) {
                     let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
-                    *hit |= f(&mut values[row + (x - tx * t) as usize], dist2);
+                    *hit |= f(v, dist2);
                 }
             }
         };
