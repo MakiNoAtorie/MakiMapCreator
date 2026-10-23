@@ -65,6 +65,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Targets are `Rgba8Unorm`. Pass shaders start with `VIEW_WGSL` and use absolute image pixels, so a tiled render equals a single render.
 - The screen takes tiles under the project lock (`fetch_cached`), builds the scene after, and redraws until `is_complete()` (pyramid settled too). Export renders bands, locking per tile read. Windows prefers DX12 (`preferred_backends`).
 - Image hashes are per backend, recorded for WARP. `Renderer::warp()` shares one WARP device per process; never make another.
+- Terrain shading lives once in `mmc-render` (`terrain.rs` tables `PALETTE`/`COAST`, `terrain.wgsl`), prepended to every pass; a kind's height pass calls `terrain(heights, pos.xy)`. Change colours only in `PALETTE`.
+- Shading reads heights bilinearly with slopes in metres per metre (`metres_per_pixel` of the drawn level); scenes fetch 2 map pixels of margin.
 
 ## Pages and anchors
 

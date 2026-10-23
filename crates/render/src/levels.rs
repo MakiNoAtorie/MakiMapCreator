@@ -74,11 +74,11 @@ impl Renderer {
     ) -> Result<Fetched> {
         let s = map.settings;
         let m = s.metres_per_pixel * (1u64 << level) as f64;
-        // One pixel of margin for neighbour reads (hillshade).
+        // Two pixels of margin: bilinear reads one more texel, the hillshade its neighbours.
         let range = |min: f64, max: f64, size: u32| {
             let size = size.div_ceil(1 << level) as f64;
-            let lo = ((min / m).floor() - 1.0).clamp(0.0, size) as u32;
-            let hi = ((max / m).ceil() + 1.0).clamp(0.0, size) as u32;
+            let lo = ((min / m).floor() - 2.0).clamp(0.0, size) as u32;
+            let hi = ((max / m).ceil() + 2.0).clamp(0.0, size) as u32;
             (lo, hi)
         };
         let (x0, x1) = range(view.min.x, view.max.x, s.width);

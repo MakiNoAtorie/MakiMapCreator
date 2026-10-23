@@ -15,6 +15,8 @@ const BAND_MARGIN: f64 = 4.0;
 mod pass;
 pub use pass::ShaderPass;
 mod kind;
+mod terrain;
+pub use terrain::{COAST, PALETTE};
 mod summary;
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
