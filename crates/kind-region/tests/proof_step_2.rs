@@ -3,10 +3,10 @@
 
 use mmc_core::{
     APP_VERSION, BrushStroke, Command, Error, GenRun, Generation, Kinds, Layer, MapId,
-    MapKindModule, MapSettings, NewEntity, PaintStroke, Project, RootPoint, StrokePoint,
+    MapKindModule, MapSettings, NewEntity, Project, RootPoint, StrokePoint,
 };
 use mmc_kind_region::{REGION, RegionKind};
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_kind_world::{WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
 
@@ -30,13 +30,8 @@ fn world(size: u32) -> MapSettings {
     }
 }
 
-fn paint(c: RootPoint, radius_km: f64, value: f32) -> Command {
-    Command::Paint(PaintStroke {
-        layer: LAND,
-        points: vec![c],
-        radius: radius_km * KM,
-        value,
-    })
+fn paint(c: RootPoint, radius_km: f64, land: bool) -> Command {
+    mmc_kind_world::paint(vec![c], radius_km * KM, land)
 }
 
 fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<RootPoint> {
@@ -47,7 +42,7 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<RootPoint> {
 fn two_regions(dir: &std::path::Path) -> (Project, MapId) {
     let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world(32)).unwrap();
     let w = p.maps()[0].id;
-    p.apply(w, paint(at(12.0, 0.0), 11.0, 1.0)).unwrap();
+    p.apply(w, paint(at(12.0, 0.0), 11.0, true)).unwrap();
     let region = |name: &str, outline| NewEntity {
         kind: "region".into(),
         name: name.into(),
@@ -78,6 +73,7 @@ fn brush(at: RootPoint, radius: f64) -> Command {
         }],
         strength: 5.0,
         falloff: 1.0,
+        target: None,
     })
 }
 
@@ -92,7 +88,7 @@ fn proof_step_2_child_region_map_from_parent_context() {
     let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world(64)).unwrap();
     let w = p.maps()[0].id;
     assert_eq!(p.maps()[0].origin, at(0.0, 0.0));
-    p.apply(w, paint(at(32.0, 32.0), 20.0, 1.0)).unwrap();
+    p.apply(w, paint(at(32.0, 32.0), 20.0, true)).unwrap();
     let cmd = WorldKind
         .generate(&p, w, &GenRun::new("regions", 7))
         .unwrap();
@@ -159,17 +155,20 @@ fn proof_step_2_child_region_map_from_parent_context() {
         x: c.0 / n,
         y: c.1 / n,
     };
-    let land = p.layer_value(w, LAND, centre).unwrap().unwrap();
+    let land = p.layer_value(w, Layer::HEIGHT, centre).unwrap().unwrap();
     let h = p
         .layer_value(child, Layer::HEIGHT, centre)
         .unwrap()
         .unwrap();
-    assert_eq!(h > 0.0, land > 0.5, "height {h} on land {land}");
+    assert_eq!(h > 0.0, land > 0.0, "height {h} on parent height {land}");
 
     // The snapshot does not follow later parent edits.
-    let ctx = p.parent_context(child, LAND).unwrap().unwrap();
-    p.apply(w, paint(at(32.0, 32.0), 64.0, 0.0)).unwrap();
-    assert_eq!(p.parent_context(child, LAND).unwrap().unwrap(), ctx);
+    let ctx = p.parent_context(child, Layer::HEIGHT).unwrap().unwrap();
+    p.apply(w, paint(at(32.0, 32.0), 64.0, false)).unwrap();
+    assert_eq!(
+        p.parent_context(child, Layer::HEIGHT).unwrap().unwrap(),
+        ctx
+    );
     assert_eq!(ctx.sample(centre), land);
 
     // Save and reopen keep the transform, outline and snapshot.
@@ -180,7 +179,10 @@ fn proof_step_2_child_region_map_from_parent_context() {
     p.close().unwrap();
     let p = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
     assert_eq!(p.maps(), before.as_slice());
-    assert_eq!(p.parent_context(child, LAND).unwrap().unwrap(), ctx);
+    assert_eq!(
+        p.parent_context(child, Layer::HEIGHT).unwrap().unwrap(),
+        ctx
+    );
     assert_eq!(
         p.layer_value(child, Layer::HEIGHT, centre).unwrap(),
         Some(h)

@@ -2,9 +2,9 @@
 
 use std::time::Instant;
 
-use mmc_core::{Command, Error, GenRun, MAX_CHILD_SIZE, MapKindModule, PaintStroke, RootPoint};
+use mmc_core::{Error, GenRun, MAX_CHILD_SIZE, MapKindModule, RootPoint};
 use mmc_kind_region::RegionKind;
-use mmc_kind_world::{LAND, WorldKind};
+use mmc_kind_world::WorldKind;
 
 #[test]
 fn a_default_scale_child_of_a_world_region_fits_the_cap_and_generates() {
@@ -12,16 +12,12 @@ fn a_default_scale_child_of_a_world_region_fits_the_cap_and_generates() {
     let mut p =
         mmc_fixtures::create(&dir.path().join("wc.sqlite"), WorldKind.default_settings()).unwrap();
     let w = p.maps()[0].id;
-    let paint = PaintStroke {
-        layer: LAND,
-        points: vec![RootPoint {
-            x: 2_048_000.0,
-            y: 2_048_000.0,
-        }],
-        radius: 1_500_000.0,
-        value: 1.0,
+    let c = RootPoint {
+        x: 2_048_000.0,
+        y: 2_048_000.0,
     };
-    p.apply(w, Command::Paint(paint)).unwrap();
+    p.apply(w, mmc_kind_world::paint(vec![c], 1_500_000.0, true))
+        .unwrap();
     let cmd = WorldKind
         .generate(&p, w, &GenRun::new("regions", 7))
         .unwrap();

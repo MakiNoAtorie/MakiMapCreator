@@ -33,6 +33,7 @@ fn stroke_at(i: usize) -> Command {
         }],
         strength: 10.0,
         falloff: 1.0,
+        target: None,
     })
 }
 

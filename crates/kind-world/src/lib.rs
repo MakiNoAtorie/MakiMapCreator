@@ -1,14 +1,16 @@
-//! Crude world map kind (Phase 0): paint land and sea, split land into Voronoi regions.
+//! Crude world map kind: paint coarse height for land and sea (ADR-0024), split land into Voronoi regions.
 
 use mmc_core::{
     ChildDecl, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind,
     MapKindModule, MapSettings, NewEntity, Param, Project, RenderPass, Result, RootPoint, Tool,
-    ToolAction, rng,
+    ToolAction, WATER_LEVEL, rng,
 };
 
 pub const WORLD: MapKind = MapKind::new("world");
-/// Authored: 1 is land, 0 is sea.
-pub const LAND: Layer = Layer::new("land");
+/// Height the land tool raises to, metres.
+pub const LAND_HEIGHT: f32 = 200.0;
+/// Height the sea tool lowers to, metres.
+pub const SEA_DEPTH: f32 = -200.0;
 
 /// Region sites per map side.
 const GRID: Param = Param {
@@ -35,21 +37,24 @@ impl MapKindModule for WorldKind {
     }
 
     fn layers(&self) -> &'static [Layer] {
-        &[LAND]
+        &[Layer::HEIGHT]
     }
 
     fn render_passes(&self) -> &'static [RenderPass] {
         &[RenderPass {
-            layer: LAND,
-            shader: include_str!("land.wgsl"),
+            layer: Layer::HEIGHT,
+            shader: include_str!("height.wgsl"),
         }]
     }
 
     fn tools(&self) -> &'static [Tool] {
         &[Tool {
             id: "paint-land",
-            layer: LAND,
-            action: ToolAction::Paint { on: 1.0, off: 0.0 },
+            layer: Layer::HEIGHT,
+            action: ToolAction::Target {
+                raise: LAND_HEIGHT,
+                lower: SEA_DEPTH,
+            },
         }]
     }
 
@@ -90,7 +95,7 @@ impl MapKindModule for WorldKind {
                     x: cell.x + rng::unit(seed, "world.regions.x", key) * w / grid as f64,
                     y: cell.y + rng::unit(seed, "world.regions.y", key) * h / grid as f64,
                 };
-                if project.layer_value(map, LAND, p)? > Some(0.5) {
+                if project.layer_value(map, Layer::HEIGHT, p)? > Some(WATER_LEVEL) {
                     sites.push(p);
                 }
             }
@@ -129,7 +134,7 @@ impl MapKindModule for WorldKind {
         Some(ChildDecl {
             kind: MapKind::new("region"),
             scale_factor: 100.0,
-            context: &[LAND],
+            context: &[Layer::HEIGHT],
         })
     }
 }
@@ -156,4 +161,22 @@ fn closer_to(poly: &[RootPoint], a: RootPoint, b: RootPoint) -> Vec<RootPoint> {
         }
     }
     out
+}
+
+/// A hard-edged, full-pressure stroke of the land tool (`land`) or the sea tool.
+pub fn paint(points: Vec<RootPoint>, radius: f64, land: bool) -> Command {
+    Command::Brush(mmc_core::BrushStroke {
+        layer: Layer::HEIGHT,
+        points: points
+            .into_iter()
+            .map(|at| mmc_core::StrokePoint {
+                at,
+                pressure: 1.0,
+                radius,
+            })
+            .collect(),
+        strength: if land { 1.0 } else { -1.0 },
+        falloff: 0.0,
+        target: Some(if land { LAND_HEIGHT } else { SEA_DEPTH }),
+    })
 }

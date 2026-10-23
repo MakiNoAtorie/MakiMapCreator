@@ -131,6 +131,7 @@ impl LargeMap {
             points,
             strength: (rng.unit() * 40.0 - 20.0) as f32,
             falloff: 1.0,
+            target: None,
         })
     }
 

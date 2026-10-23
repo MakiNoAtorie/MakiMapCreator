@@ -18,7 +18,7 @@ impl Layer {
         Layer(id)
     }
 
-    /// Metres, sea level 0.
+    /// Metres; above `WATER_LEVEL` is land (ADR-0024).
     pub const HEIGHT: Layer = Layer("height");
     /// Authored: above 0.5 locks the pixel against re-sync and regeneration (ADR-0022).
     pub const LOCK: Layer = Layer("lock");
@@ -29,6 +29,9 @@ impl Layer {
         self.0
     }
 }
+
+/// Height in metres that splits land (above) from sea; one level for every map for now.
+pub const WATER_LEVEL: f32 = 0.0;
 
 /// A point in root space, in metres.
 #[derive(Debug, Clone, Copy, PartialEq)]

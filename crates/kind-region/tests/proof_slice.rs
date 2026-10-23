@@ -9,7 +9,7 @@ use mmc_core::{
 };
 use mmc_fixtures::{ManyEntities, Rng};
 use mmc_kind_region::{REGION, RegionKind};
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_kind_world::{WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
 
@@ -39,6 +39,7 @@ fn brush(c: RootPoint) -> Command {
         }],
         strength: 50.0,
         falloff: 1.0,
+        target: None,
     })
 }
 
@@ -68,8 +69,11 @@ fn proof_slice_steps_1_2_4_5_6_7_8() {
     let w = p.maps()[0].id;
 
     // Step 1: paint land, generate crude regions as entities.
-    p.apply(w, paint(LAND, at(32.0, 32.0), 20.0 * KM, 1.0))
-        .unwrap();
+    p.apply(
+        w,
+        mmc_kind_world::paint(vec![at(32.0, 32.0)], 20.0 * KM, true),
+    )
+    .unwrap();
     let cmd = WorldKind
         .generate(&p, w, &GenRun::new("regions", 7))
         .unwrap();
@@ -173,8 +177,8 @@ fn proof_slice_steps_1_2_4_5_6_7_8() {
 
     // Step 8: edit the world inside the region; the child is out of date; re-sync keeps edits.
     assert!(!p.is_out_of_date(child).unwrap());
-    let land = p.layer_value(w, LAND, centre).unwrap().unwrap();
-    p.apply(w, paint(LAND, centre, 1.5 * KM, 1.0 - land.round()))
+    let h = p.layer_value(w, Layer::HEIGHT, centre).unwrap().unwrap();
+    p.apply(w, mmc_kind_world::paint(vec![centre], 1.5 * KM, h <= 0.0))
         .unwrap();
     assert!(p.is_out_of_date(child).unwrap());
     let tiles = |p: &Project| {

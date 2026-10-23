@@ -1,11 +1,10 @@
 //! Proof step 4 (seam 2): the world map draws each child's summary inside its outline.
 
 use mmc_core::{
-    Command, GenRun, Generation, Kinds, MapKindModule, MapSettings, NewEntity, PaintStroke,
-    RootPoint,
+    Command, GenRun, Generation, Kinds, MapKindModule, MapSettings, NewEntity, RootPoint,
 };
 use mmc_kind_region::RegionKind;
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_kind_world::{WORLD, WorldKind};
 use mmc_render::{Renderer, View};
 
 const KM: f64 = 1000.0;
@@ -31,12 +30,7 @@ fn the_world_render_tints_each_child_outline_with_its_summary() {
     let w = p.maps()[0].id;
     p.apply(
         w,
-        Command::Paint(PaintStroke {
-            layer: LAND,
-            points: vec![at(20.0, 20.0)],
-            radius: 15.0 * KM,
-            value: 1.0,
-        }),
+        mmc_kind_world::paint(vec![at(20.0, 20.0)], 15.0 * KM, true),
     )
     .unwrap();
     p.apply(

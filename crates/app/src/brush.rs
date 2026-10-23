@@ -5,7 +5,7 @@ use mmc_core::{
     BrushStroke, Command, Layer, PaintStroke, RootPoint, StrokePoint, ToolAction, brush_weight,
 };
 
-/// Raise adds (brush) or paints the tool's "on" value; lower subtracts or paints "off".
+/// Raise adds (brush), raises to the target or paints the tool's "on" value; lower the opposite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
     Raise,
@@ -110,28 +110,32 @@ pub fn plan(
     if stamps.is_empty() {
         return None;
     }
+    let up = dir == Direction::Raise;
+    let sign = if up { 1.0 } else { -1.0 };
+    let brush = |strength: f32, target: Option<f32>| {
+        Command::Brush(BrushStroke {
+            layer,
+            points: stamps
+                .iter()
+                .map(|s| StrokePoint {
+                    at: s.at,
+                    pressure: o.pressure_for(s.pressure),
+                    radius: o.radius_at(s.pressure),
+                })
+                .collect(),
+            strength,
+            falloff: o.falloff,
+            target,
+        })
+    };
     Some(match action {
-        ToolAction::Brush => {
-            let sign = if dir == Direction::Raise { 1.0 } else { -1.0 };
-            Command::Brush(BrushStroke {
-                layer,
-                points: stamps
-                    .iter()
-                    .map(|s| StrokePoint {
-                        at: s.at,
-                        pressure: o.pressure_for(s.pressure),
-                        radius: o.radius_at(s.pressure),
-                    })
-                    .collect(),
-                strength: sign * o.strength * SPACING as f32,
-                falloff: o.falloff,
-            })
-        }
+        ToolAction::Brush => brush(sign * o.strength * SPACING as f32, None),
+        ToolAction::Target { raise, lower } => brush(sign, Some(if up { raise } else { lower })),
         ToolAction::Paint { on, off } => Command::Paint(PaintStroke {
             layer,
             points: stamps.iter().map(|s| s.at).collect(),
             radius: o.size,
-            value: if dir == Direction::Raise { on } else { off },
+            value: if up { on } else { off },
         }),
     })
 }
@@ -343,6 +347,29 @@ mod tests {
         for (dir, want) in [(Direction::Raise, 1.0), (Direction::Lower, 0.0)] {
             match plan(action, lock, dir, &o, 1.0, &path) {
                 Some(Command::Paint(s)) => assert_eq!((s.layer, s.value), (lock, want)),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_target_tool_raises_to_or_lowers_to_with_the_falloff() {
+        let mut o = Options::for_map(1.0);
+        o.falloff = 0.3;
+        let action = ToolAction::Target {
+            raise: 200.0,
+            lower: -200.0,
+        };
+        let path = [p(0.0, 1.0)];
+        for (dir, sign, want) in [
+            (Direction::Raise, 1.0, 200.0),
+            (Direction::Lower, -1.0, -200.0),
+        ] {
+            match plan(action, Layer::HEIGHT, dir, &o, 1.0, &path) {
+                Some(Command::Brush(b)) => assert_eq!(
+                    (b.strength.signum(), b.target, b.falloff),
+                    (sign, Some(want), 0.3)
+                ),
                 other => panic!("{other:?}"),
             }
         }

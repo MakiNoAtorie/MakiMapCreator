@@ -30,6 +30,11 @@ pub struct ParentContext {
 impl ParentContext {
     /// Bilinear sample at a root-space point; global parent pixel indices make snapshots agree.
     pub fn sample(&self, at: RootPoint) -> f32 {
+        self.sample_by(at, |v| v)
+    }
+
+    /// As `sample`, with `f` applied to each parent pixel before interpolation.
+    pub fn sample_by(&self, at: RootPoint, f: impl Fn(f32) -> f32) -> f32 {
         let m = self.metres_per_pixel;
         let gx = (at.x - self.origin.x) / m - 0.5;
         let gy = (at.y - self.origin.y) / m - 0.5;
@@ -37,7 +42,7 @@ impl ParentContext {
         let (tx, ty) = ((gx - fx) as f32, (gy - fy) as f32);
         let ix = |g: f64| (g as i64 - self.x0 as i64).clamp(0, self.width as i64 - 1) as usize;
         let iy = |g: f64| (g as i64 - self.y0 as i64).clamp(0, self.height as i64 - 1) as usize;
-        let v = |x: f64, y: f64| self.values[iy(y) * self.width as usize + ix(x)];
+        let v = |x: f64, y: f64| f(self.values[iy(y) * self.width as usize + ix(x)]);
         let top = v(fx, fy) + (v(fx + 1.0, fy) - v(fx, fy)) * tx;
         let bottom = v(fx, fy + 1.0) + (v(fx + 1.0, fy + 1.0) - v(fx, fy + 1.0)) * tx;
         top + (bottom - top) * ty

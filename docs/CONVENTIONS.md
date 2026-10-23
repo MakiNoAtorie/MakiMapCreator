@@ -33,6 +33,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Layers, commands and undo
 
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and the object layer `Layer::OUTLINES`; kind crates define the rest.
+- Land is `height > WATER_LEVEL` (core, 0 m); no kind stores a land mask (ADR-0024). Old `land` layers migrate on open (`core/src/migrate.rs`); never add a layer named `land`.
+- `BrushStroke::target` raises to or lowers to a value (sign of `strength`), never the other way; `ToolAction::Target` makes such tools.
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3; core owns the format. A missing tile is zeros, not edited. Level `l` pixels are 2x2 means of `l-1`; the top tile is the overview; only level 0 is ever edited.
 - Write tiles through `Project::write_rows`: it feeds the cache and the pyramid worker. Tests use `wait_tiles()`.
 - Every edit is a `Command` giving one `undo::Change` with before and after records; `apply_part` parts are one change until `end_stroke`. On a map without an outline a stroke stays decoded in memory (`stroke.rs`), shown through the cache, and is written once at pen up (`take_stroke`, `encode` unlocked, `commit_stroke`); edits, undo and save write an open stroke first. Undo is per map, in memory, bounded by `UNDO_LIMIT`. Deleting map M goes to M's parent history, a root map to `undo_project`; child map creation to the parent history.

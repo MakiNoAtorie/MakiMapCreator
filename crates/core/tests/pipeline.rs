@@ -23,6 +23,7 @@ fn stroke(layer: Layer, x: f64, y: f64, strength: f32) -> Command {
         }],
         strength,
         falloff: 1.0,
+        target: None,
     })
 }
 

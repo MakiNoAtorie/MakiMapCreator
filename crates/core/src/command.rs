@@ -28,7 +28,8 @@ pub enum Command {
     Object(crate::ObjectEdit),
 }
 
-/// Adds `strength * pressure * weight` to `layer` around each point; one stroke is one command.
+/// Adds `strength * pressure * weight` to `layer` around each point, or with `target` moves each
+/// pixel that part of the way to it; one stroke is one command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrushStroke {
     pub layer: Layer,
@@ -37,6 +38,9 @@ pub struct BrushStroke {
     pub strength: f32,
     /// 0 is a hard disc; 1 is the smooth `(1 - d²)²` profile; between, a hard core then that profile.
     pub falloff: f32,
+    /// Raise to (`strength` > 0) or lower to (`strength` < 0) this value; each stamp moves a pixel
+    /// `pressure * weight` of the way and never the other way. `None` adds.
+    pub target: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,6 +120,7 @@ impl Project {
             let (cx, cy) = map.to_pixels(p.at);
             let amount = s.strength * p.pressure;
             let (core, r2) = (brush_core(s.falloff), r * r);
+            let raise = s.strength > 0.0;
             self.disc(
                 map,
                 s.layer,
@@ -128,7 +133,14 @@ impl Project {
                     if d2 >= 1.0 {
                         return false;
                     }
-                    *v += amount * weight_in(d2, core);
+                    let w = weight_in(d2, core);
+                    match s.target {
+                        None => *v += amount * w,
+                        Some(t) if (*v < t) == raise && *v != t => {
+                            *v += (t - *v) * (p.pressure * w).min(1.0)
+                        }
+                        Some(_) => return false,
+                    }
                     true
                 },
             )?;

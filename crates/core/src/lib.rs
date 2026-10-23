@@ -6,6 +6,7 @@ mod cache;
 mod command;
 mod jobs;
 mod layer;
+mod migrate;
 pub mod persist;
 mod pipeline;
 pub use pipeline::{Raster, Stage, StageInput, par_map};
@@ -18,7 +19,7 @@ pub use stroke::{EncodedStroke, EndedStroke};
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint, brush_weight};
-pub use layer::{Layer, RootPoint, TILE_SIZE};
+pub use layer::{Layer, RootPoint, TILE_SIZE, WATER_LEVEL};
 pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;
 mod entities;
@@ -274,6 +275,7 @@ impl Project {
         };
         p.names = p.build_name_index()?;
         p.load_child_outlines()?;
+        p.migrate_land()?;
         Ok(p)
     }
 

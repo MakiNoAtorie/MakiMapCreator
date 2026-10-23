@@ -35,6 +35,7 @@ fn fixture(dir: &std::path::Path) -> (Project, MapId) {
                 }],
                 strength: s,
                 falloff: 1.0,
+                target: None,
             }),
         )
         .unwrap();

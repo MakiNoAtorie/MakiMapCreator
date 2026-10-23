@@ -9,6 +9,8 @@ pub enum ToolAction {
     Brush,
     /// Sets the layer to `on` (raise) or `off` (lower) inside the stamp.
     Paint { on: f32, off: f32 },
+    /// Soft stamps that raise the layer to `raise` or lower it to `lower` (`BrushStroke::target`).
+    Target { raise: f32, lower: f32 },
 }
 
 /// An edit tool a kind offers; the app maps `id` to its strings and input.

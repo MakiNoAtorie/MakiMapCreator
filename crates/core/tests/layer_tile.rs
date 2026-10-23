@@ -24,6 +24,7 @@ fn layer_tile_returns_a_whole_tile_matching_point_reads() {
             }],
             strength: 100.0,
             falloff: 1.0,
+            target: None,
         }),
     )
     .unwrap();

@@ -12,7 +12,7 @@ use mmc_core::{
 const WORLD: MapKind = MapKind::new("world");
 const REGION: MapKind = MapKind::new("region");
 const SETTLEMENT: MapKind = MapKind::new("settlement");
-const LAND: Layer = Layer::new("land");
+const LAND: Layer = Layer::new("cover");
 
 /// A kind defined only in this test: no edit in core is needed for it.
 struct TestKind(MapKind, Option<MapKind>);

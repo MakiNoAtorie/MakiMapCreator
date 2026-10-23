@@ -6,7 +6,7 @@ use mmc_core::{
     MapSettings, NewEntity, PaintStroke, Project, RootPoint, StrokePoint,
 };
 use mmc_kind_region::{REGION, RegionKind, SUMMARY_ALPHA};
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_kind_world::{LAND_HEIGHT, SEA_DEPTH, WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
 /// Child scale: 480 px for a 12 km child, so 2 × 2 tiles.
@@ -36,6 +36,10 @@ fn paint(layer: Layer, c: RootPoint, radius_km: f64, value: f32) -> Command {
     })
 }
 
+fn land(c: RootPoint, radius_km: f64, land: bool) -> Command {
+    mmc_kind_world::paint(vec![c], radius_km * KM, land)
+}
+
 fn brush(c: RootPoint) -> Command {
     Command::Brush(BrushStroke {
         layer: Layer::HEIGHT,
@@ -46,6 +50,7 @@ fn brush(c: RootPoint) -> Command {
         }],
         strength: 50.0,
         falloff: 1.0,
+        target: None,
     })
 }
 
@@ -67,7 +72,7 @@ fn setup(dir: &std::path::Path) -> (Project, MapId, MapId, MapId) {
     };
     let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world).unwrap();
     let w = p.maps()[0].id;
-    p.apply(w, paint(LAND, at(12.0, 0.0), 11.0, 1.0)).unwrap();
+    p.apply(w, land(at(12.0, 0.0), 11.0, true)).unwrap();
     let region = |name: &str, outline| NewEntity {
         kind: "region".into(),
         name: name.into(),
@@ -126,11 +131,11 @@ fn a_parent_edit_inside_a_childs_area_marks_only_that_child_out_of_date() {
     assert!(!p.is_out_of_date(w).unwrap());
 
     // Outside both children's areas: nothing is flagged.
-    p.apply(w, paint(LAND, at(28.0, 28.0), 1.5, 1.0)).unwrap();
+    p.apply(w, land(at(28.0, 28.0), 1.5, true)).unwrap();
     assert!(!p.is_out_of_date(west).unwrap() && !p.is_out_of_date(east).unwrap());
 
     // Inside West's margin (outside its outline), but not East's area.
-    p.apply(w, paint(LAND, at(2.5, 8.0), 0.6, 1.0)).unwrap();
+    p.apply(w, land(at(2.5, 8.0), 0.6, true)).unwrap();
     assert!(p.is_out_of_date(west).unwrap());
     assert!(!p.is_out_of_date(east).unwrap());
 
@@ -187,7 +192,7 @@ fn proof_step_8_resync_keeps_edited_tiles_and_locked_pixels() {
     assert!(locked > 0.0 && free > 0.0);
 
     // The world turns the land around (6, 6) km into sea, under both points, in tile (0, 0).
-    p.apply(w, paint(LAND, at(6.0, 6.0), 1.2, 0.0)).unwrap();
+    p.apply(w, land(at(6.0, 6.0), 1.2, false)).unwrap();
     assert!(p.is_out_of_date(west).unwrap());
 
     // The preview lists what changes and what is kept, and writes nothing.
@@ -210,8 +215,8 @@ fn proof_step_8_resync_keeps_edited_tiles_and_locked_pixels() {
     assert_eq!(p.layer_tile(west, Layer::HEIGHT, 1, 1).unwrap(), edited);
     assert_eq!(p.edited_tiles(west, Layer::HEIGHT).unwrap(), vec![(1, 1)]);
     // The new snapshot is the parent's sea.
-    let ctx = p.parent_context(west, LAND).unwrap().unwrap();
-    assert_eq!(ctx.sample(at(6.5, 6.5)), 0.0);
+    let ctx = p.parent_context(west, Layer::HEIGHT).unwrap().unwrap();
+    assert_eq!(ctx.sample(at(6.5, 6.5)), SEA_DEPTH);
     assert_eq!(p.generations(west).unwrap().last().unwrap().run.seed, 5);
 
     // One command: undo brings back the old ground, snapshot and flag.
@@ -219,11 +224,11 @@ fn proof_step_8_resync_keeps_edited_tiles_and_locked_pixels() {
     assert_eq!(height(&p, west, 6.5, 6.5), free);
     assert!(p.is_out_of_date(west).unwrap());
     assert_eq!(
-        p.parent_context(west, LAND)
+        p.parent_context(west, Layer::HEIGHT)
             .unwrap()
             .unwrap()
             .sample(at(6.5, 6.5)),
-        1.0
+        LAND_HEIGHT
     );
     assert!(p.redo(west).unwrap());
     assert!(height(&p, west, 6.5, 6.5) < 0.0);
@@ -280,7 +285,7 @@ fn a_moved_outline_generates_gained_ground_and_clears_lost_ground_only_on_confir
     // The parent turns gained ground at (3.5, 8.5) km into land.
     let gained = height(&p, west, 3.5, 8.5);
     assert!(gained < 0.0);
-    p.apply(w, paint(LAND, at(3.5, 8.5), 0.4, 1.0)).unwrap();
+    p.apply(w, land(at(3.5, 8.5), 0.4, true)).unwrap();
 
     let moved = rect(3.0, 4.0, 11.0, 12.0);
     let plan = p.preview_resync(west, Some(moved.clone())).unwrap();
@@ -369,7 +374,7 @@ fn a_plan_the_map_changed_under_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let _kinds = kinds();
     let (mut p, w, west, _) = setup(dir.path());
-    p.apply(w, paint(LAND, at(6.0, 6.0), 2.0, 0.0)).unwrap();
+    p.apply(w, land(at(6.0, 6.0), 2.0, false)).unwrap();
     let plan = p.preview_resync(west, None).unwrap();
     p.apply(west, brush(at(6.0, 6.0))).unwrap();
     let err = p.apply_plan(plan, false).unwrap_err();

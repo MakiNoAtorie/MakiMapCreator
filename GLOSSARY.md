@@ -77,6 +77,10 @@ A layer the user edits and the project stores as truth, such as height or biome 
 A layer recomputed from authored layers after each edit, such as drainage rivers or climate. It is never edited directly.
 _Avoid_: Generated layer (generation also writes authored layers)
 
+**Water level**:
+The height that splits land (above) from sea (at or below). It is 0 m on every map for now; there is no separate land layer.
+_Avoid_: Sea mask, land layer
+
 **Lock mask**:
 An authored layer that marks areas that masked regeneration and re-sync must not change.
 

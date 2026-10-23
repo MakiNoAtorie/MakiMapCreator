@@ -1,10 +1,10 @@
-//! Proof step 1 (seam 1): a root world map, paint land and sea, generate crude regions as entities.
+//! Proof step 1 (seam 1): a root world map, paint land and sea as height, generate crude regions as entities.
 
 use mmc_core::{
-    APP_VERSION, Command, Error, GenRun, Kinds, MapId, MapKind, MapKindModule, MapSettings,
-    PaintStroke, Project, RootPoint,
+    APP_VERSION, Command, Error, GenRun, Kinds, Layer, MapId, MapKind, MapKindModule, MapSettings,
+    Project, RootPoint, ToolAction,
 };
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_kind_world::{LAND_HEIGHT, SEA_DEPTH, WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
 
@@ -24,19 +24,14 @@ fn at(x: f64, y: f64) -> RootPoint {
     }
 }
 
-fn paint(c: RootPoint, radius_km: f64, value: f32) -> Command {
-    Command::Paint(PaintStroke {
-        layer: LAND,
-        points: vec![c],
-        radius: radius_km * KM,
-        value,
-    })
+fn paint(c: RootPoint, radius_km: f64, land: bool) -> Command {
+    mmc_kind_world::paint(vec![c], radius_km * KM, land)
 }
 
 /// A round continent of radius 150 km at (200 km, 250 km), with a lake in its middle.
 fn paint_continent(p: &mut Project, map: MapId) {
-    p.apply(map, paint(at(200.0, 250.0), 150.0, 1.0)).unwrap();
-    p.apply(map, paint(at(200.0, 250.0), 10.0, 0.0)).unwrap();
+    p.apply(map, paint(at(200.0, 250.0), 150.0, true)).unwrap();
+    p.apply(map, paint(at(200.0, 250.0), 10.0, false)).unwrap();
 }
 
 fn inside(poly: &[RootPoint], p: RootPoint) -> bool {
@@ -58,9 +53,19 @@ fn world_kind_declares_its_layers_tools_generators_and_entity_kinds() {
     let kinds = kinds();
     let w = kinds.get(WORLD).unwrap();
     assert!(kinds.get(MapKind::new("settlement")).is_none());
-    assert!(w.layers().contains(&LAND));
-    assert!(w.render_passes().iter().any(|p| p.layer == LAND));
-    assert!(w.tools().iter().any(|t| t.layer == LAND));
+    assert_eq!(w.layers(), [Layer::HEIGHT], "no land layer: height decides");
+    assert!(w.render_passes().iter().any(|p| p.layer == Layer::HEIGHT));
+    let tool = w.tools().iter().find(|t| t.id == "paint-land").unwrap();
+    assert_eq!(tool.layer, Layer::HEIGHT);
+    assert_eq!(
+        tool.action,
+        ToolAction::Target {
+            raise: LAND_HEIGHT,
+            lower: SEA_DEPTH
+        }
+    );
+    const { assert!(LAND_HEIGHT > mmc_core::WATER_LEVEL && SEA_DEPTH < mmc_core::WATER_LEVEL) };
+    assert_eq!(w.child().unwrap().context, [Layer::HEIGHT]);
     let gens: Vec<_> = w.generators().iter().map(|g| g.id).collect();
     assert_eq!(gens, ["regions"]);
     assert_eq!(w.entity_kinds(), ["region"]);
@@ -121,7 +126,7 @@ fn proof_step_1_paint_land_and_generate_regions() {
     );
 
     // One-shot: a later land edit leaves the generated regions alone.
-    p.apply(map, paint(at(200.0, 250.0), 400.0, 0.0)).unwrap();
+    p.apply(map, paint(at(200.0, 250.0), 400.0, false)).unwrap();
     assert_eq!(p.outlines(map).unwrap(), outlines);
 
     // The generation is one command on the map's history.

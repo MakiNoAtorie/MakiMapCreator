@@ -1,5 +1,5 @@
-use mmc_core::{Command, MapSettings, PaintStroke, RootPoint};
-use mmc_kind_world::{LAND, WORLD, WorldKind};
+use mmc_core::{MapSettings, RootPoint};
+use mmc_kind_world::{WORLD, WorldKind, paint};
 use mmc_render::{Renderer, View};
 
 #[test]
@@ -15,15 +15,14 @@ fn a_world_map_draws_land_and_sea_through_its_kind_passes() {
     let map = p.maps()[0].id;
     p.apply(
         map,
-        Command::Paint(PaintStroke {
-            layer: LAND,
-            points: vec![RootPoint {
+        paint(
+            vec![RootPoint {
                 x: 50_000.0,
                 y: 50_000.0,
             }],
-            radius: 40_000.0,
-            value: 1.0,
-        }),
+            40_000.0,
+            true,
+        ),
     )
     .unwrap();
     let mut r = Renderer::warp().unwrap();

@@ -292,9 +292,7 @@ impl Painter {
         if let Some((pos, pressure)) = self.cursor.filter(|(p, _)| rect.contains(*p)) {
             let r = to_pt(self.options.radius_at(pressure));
             painter.circle_stroke(pos, r, Stroke::new(1.0, t.text));
-            let soft = self
-                .current()
-                .is_some_and(|t| t.action == ToolAction::Brush);
+            let soft = self.current().is_some_and(|t| soft(t.action));
             if soft {
                 let half = r * self.options.half_radius();
                 painter.circle_stroke(pos, half, Stroke::new(1.0, t.text_weak));
@@ -323,7 +321,7 @@ impl Painter {
         };
         for (i, tool) in self.tools.iter().enumerate() {
             let name = tr(&format!("tool-{}", tool.id));
-            let brush = tool.action == ToolAction::Brush;
+            let brush = soft(tool.action);
             let draw = move |p: &egui::Painter, r: Rect, s: Stroke| tool_icon(p, r, brush, s);
             if button(ui, self.tool == i, name, &draw) {
                 self.tool = i;
@@ -347,9 +345,8 @@ impl Painter {
     pub fn options_bar(&mut self, ui: &mut egui::Ui) {
         let mpp = self.mpp;
         let (lo, hi) = Options::size_limits(mpp);
-        let brush = self
-            .current()
-            .is_some_and(|t| t.action == ToolAction::Brush);
+        let action = self.current().map(|t| t.action);
+        let brush = action.is_some_and(soft);
         ui.horizontal(|ui| {
             ui.label(tr("options-size"));
             // The slider shows pixels; the option is metres.
@@ -363,12 +360,14 @@ impl Painter {
             if !brush {
                 return;
             }
-            ui.separator();
-            ui.label(tr("options-strength"));
-            ui.add(egui::Slider::new(
-                &mut self.options.strength,
-                0.0..=MAX_STRENGTH,
-            ));
+            if action == Some(ToolAction::Brush) {
+                ui.separator();
+                ui.label(tr("options-strength"));
+                ui.add(egui::Slider::new(
+                    &mut self.options.strength,
+                    0.0..=MAX_STRENGTH,
+                ));
+            }
             ui.separator();
             ui.label(tr("options-falloff"));
             ui.add(egui::Slider::new(&mut self.options.falloff, 0.0..=1.0));
@@ -380,6 +379,11 @@ impl Painter {
             );
         });
     }
+}
+
+/// Whether a tool stamps with the brush falloff.
+fn soft(action: ToolAction) -> bool {
+    matches!(action, ToolAction::Brush | ToolAction::Target { .. })
 }
 
 /// A brush tool: a hill. A paint tool: a filled disc.
