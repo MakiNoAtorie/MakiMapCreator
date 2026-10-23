@@ -5,97 +5,88 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Build
 
 - Cargo workspace, `members = ["crates/*"]`; add a crate as `crates/<name>`, package `mmc-<name>`.
-- Crates: `mmc-core` (headless API, seam 1), `mmc-store` (SQLite), `mmc-render` (wgpu, seam 2), `mmc-page`, `mmc-kind-<name>`, `mmc-fixtures` (seeded test and bench data), `mmc-bench` (gate), `mmc-app` (egui).
-- Rust stable, edition 2024, Windows x86_64 MSVC. Warnings are errors in CI.
-- Dev profile: dependencies at opt-level 3, workspace at 1 (the owner runs debug builds).
-- Before a push, as CI: `cargo fmt --all --check`, `cargo build --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and the release gate `cargo run -p mmc-bench --release -- bench-results.json`.
+- Crates: `mmc-core` (headless API, seam 1), `mmc-store` (SQLite), `mmc-render` (wgpu, seam 2), `mmc-page`, `mmc-kind-<name>`, `mmc-fixtures` (test and bench data), `mmc-bench` (gate), `mmc-app` (egui).
+- Rust stable, edition 2024, Windows x86_64 MSVC. Warnings are errors. Dev profile: dependencies at opt-level 3, workspace at 1.
+- Before a push, as CI: `cargo fmt --all --check`, `cargo build --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo run -p mmc-bench --release -- bench-results.json`.
 
 ## Architecture
 
 - Only `mmc-store` uses SQL or names SQLite in its `Cargo.toml`.
 - Core defines the persistence port (`mmc_core::persist`); `mmc-store` implements it. Callers pass a `Box<dyn Storage>` and the `Kinds` (tests: `mmc_fixtures::create`/`open`/`restore`).
-- Core has no UI, no SQL, no global state. Paths the app owns are parameters.
-- `core/src/entities/` (entities, fields, relations, pages, search, anchors) uses only core types and the port, never maps.
-- Errors: one enum per crate, hand-written English `Display` for logs, no error crates. Variants carry data; the app words each in `app/src/errors.rs` through Fluent.
+- Core has no UI, no SQL, no global state. Paths the app owns are parameters. `core/src/entities/` never uses maps.
+- Errors: one enum per crate, hand-written English `Display`, no error crates. Variants carry data; the app words each through Fluent (`app/src/errors.rs`).
 - Comments: rare, one line, objective; state constraints and why.
 
 ## Project file
 
 - One SQLite file. `application_id` `0x4D4D4331`; `user_version` = migrations applied. Open refuses another id or a newer version.
-- Migrations: append to `MIGRATIONS` in `store/src/lib.rs`, never edit or reorder. Store feature code lives in `store/src/<feature>.rs` with its `MIGRATION`. Seed data goes in migrations.
-- Open copies the file to the working copy (plain copy under a read lock); the working copy uses WAL, `synchronous = NORMAL`.
-- Save runs on a worker (`save`, `poll_save`, `wait_for_save`): `VACUUM INTO <file>.tmp`, then rename. Nothing else is written next to the project file. Tests that reopen call `wait_for_save` first.
-- An open store holds an OS lock on `<working copy>-lock`; close deletes the working copy. Restore, discard and the launch prompt skip a locked (live) working copy.
-- One edit is one transaction. Tile-only edits go to the edit writer (`core/src/writer.rs`) and its overlay; core and worker reads see the overlay, so an edit never waits for SQLite. Other writes flush the writer first; save, close and `wait_for_jobs` flush too.
-- Edits use `BEGIN IMMEDIATE` and a 100 µs busy handler. Worker connections (`Storage::tile_opener`) write at most 1 MiB per transaction, start none while an edit's transaction waits and end theirs after the current row; they alone checkpoint the WAL.
-- Deleted maps are flagged until the next open; a new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`. Ids of entities and map objects come from AUTOINCREMENT and are never reused.
+- Migrations: append to `MIGRATIONS` in `store/src/lib.rs`, never edit or reorder; feature code and its `MIGRATION` in `store/src/<feature>.rs`. Seed data goes in migrations.
+- Open copies the file to a WAL working copy, locked while open; save is `VACUUM INTO <file>.tmp` then rename, on a worker. Nothing else is written next to the project file. Tests that reopen call `wait_for_save` first.
+- One edit is one transaction. Tile-only edits go to the edit writer (`core/src/writer.rs`), whose overlay reads see, so an edit never waits for SQLite. Other writes, save, close and `wait_for_jobs` flush it first.
+- Worker connections (`Storage::tile_opener`) write at most 1 MiB per transaction and yield to a waiting edit; they alone checkpoint the WAL.
+- Deleted maps are flagged until the next open; a new table keyed by map or entity adds its rows to `PURGE` (`store/src/delete.rs`). Entity and object ids are never reused.
 
 ## Layers, commands and undo
 
-- `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and the object layer `Layer::OUTLINES`; kind crates define the rest.
-- Land is `height > WATER_LEVEL` (core, 0 m); no kind stores a land mask (ADR-0024). Old `land` layers migrate on open (`core/src/migrate.rs`); never add a layer named `land`.
-- `BrushStroke::target` raises to or lowers to a value (sign of `strength`), never the other way; `ToolAction::Target` makes such tools (fixed direction).
-- Brush maths: `stamp_weight` and `detail_noise` (`core/src/brush.rs`) are the reference; the CPU hot path and `detail_tables` give the same bits, `render/src/live.wgsl` ports them (change both; `render/tests/live.rs` holds them within 1e-3 m). Stamps use root-space global pixel centres and project-seed noise (stage `brush-detail`). Detail is evaluated every 4 global pixels (octaves under 8 px skipped) and interpolated bilinearly.
-- Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3; core owns the format. A missing tile is zeros, not edited. Level `l` pixels are 2x2 means of `l-1`; the top tile is the overview; only level 0 is ever edited.
-- Write tiles through `Project::write_rows`: it feeds the cache and the pyramid worker. Tests use `wait_tiles()`.
-- Every edit is a `Command` giving one `undo::Change` with before and after records; `apply_part` parts are one change until `end_stroke`. On a map without an outline a stroke stays decoded in memory (`stroke.rs`), shown through the cache, and is written once at pen up (`take_stroke`, `encode` unlocked, `commit_stroke`); edits, undo and save write an open stroke first. Undo is per map, in memory, bounded by `UNDO_LIMIT`. Deleting map M goes to M's parent history, a root map to `undo_project`; child map creation to the parent history.
-- Map objects (point, path, polygon) live on the kind's `object_layers` plus `OUTLINES` (entity outlines).
-- Search: FTS tables in `store/src/search.rs`, written with entity and page rows; the name index lives in `Project`.
+- `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and `Layer::OUTLINES`; kind crates define the rest.
+- Land and sea come from height (ADR-0024); never add a layer named `land`. Coarse land and sea are `WATER_LEVEL ± COAST_RELIEF`.
+- `BrushStroke::target` raises to or lowers to a value, never the other way; `ToolAction::Target` makes such tools.
+- Brush maths: `core/src/brush.rs` is the reference (ADR-0025); its fast paths and `detail_tables` give the same bits. Change it and `render/src/live.wgsl` together; `render/tests/live.rs` holds them within 1e-3 m.
+- Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3, decoded only by `layer::decode*`. A missing tile is zeros. Level `l` pixels are 2x2 means of `l-1`; only level 0 is edited.
+- Write tiles through `Project::write_rows`, one call per transaction: it feeds the cache and the pyramid. Drop a layer with `Write::DropLayer`. Tests use `wait_tiles()`.
+- Every edit is a `Command` giving one `undo::Change`; `apply_part` parts are one change until `end_stroke`. Without an outline a stroke stays decoded in memory (`stroke.rs`) until pen up; edits, undo and save write it first. Undo is per map, bounded by `UNDO_LIMIT`; deleting a map goes to its parent's history, a root map to `undo_project`.
+- Map objects live on the kind's `object_layers` plus `OUTLINES`. Search: FTS tables in `store/src/search.rs`; the name index lives in `Project`.
 
 ## Map kinds
 
-- A kind crate implements `MapKindModule`: default settings, layers, stages, render passes (WGSL text), tools, generators with `Param`s, child decl (kind, scale factor, context layers), summary, entity kinds. A new kind edits neither core nor render.
+- A kind crate implements `MapKindModule`; a new kind edits neither core nor render.
 - A layer is derived when a stage of the map's kind writes it; commands on it fail with `DerivedLayer`.
-- A generator takes a `GenRun` (generator, seed, params) and returns one `Command::Generate`; core assigns ids and records the run with `APP_VERSION`. Runs default to the project seed.
-- Maps have a root-space `origin`; generators compute pixel centres from global indices `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree. Generated tiles are not edited.
-- Children are at most `MAX_CHILD_SIZE` px a side; a default scale doubles until the child fits.
-- Regeneration and re-sync preview a `RegenPlan`, then `apply_plan` writes one command; a changed map gives `StalePlan`. Edited tiles and locked pixels (`LOCK` > 0.5) are kept. Lost ground keeps its data until confirmed, then clears to 0. An outline past the map grows it by whole tiles (`Write::ShiftTiles`).
+- A generator takes a `GenRun` and returns one `Command::Generate`; core records the run with `APP_VERSION`. Runs default to the project seed.
+- Pixel centres come from global indices `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree. Generated tiles are not edited.
+- Children are at most `MAX_CHILD_SIZE` px a side. Regeneration and re-sync: ADR-0022, through a `RegenPlan` and `apply_plan`.
 - Every tile write flags the child maps it touches out of date.
 
 ## Pipeline and jobs
 
 - Stage work goes through `par_map` (item order), so output never depends on thread count. Long reads check cancel per row.
-- Randomness only through `mmc_core::rng` (stateless hash). Exception: `mmc_fixtures::Rng` makes seeded test and bench input, never map content.
-- Deleting a map stops its jobs; undo of the deletion rebuilds it.
+- Randomness only through `mmc_core::rng`; `mmc_fixtures::Rng` makes test and bench input, never map content.
 - Tests wait through the API (`wait_for_jobs`, `wait_tiles`), never sleep.
-- Core worker threads run below normal priority; their write transactions (`holding_write_lock`) at normal. `Jobs` runs one job at a time per owner; a submit replaces the waiting one.
+- Core workers run below normal priority, their writes (`holding_write_lock`) at normal. `Jobs` runs one job per owner; a submit replaces the waiting one.
 
 ## Render
 
-- `mmc-render` uses eframe's wgpu; the app shares its device through `Renderer::from_device`.
-- Targets are `Rgba8Unorm`. Pass shaders start with `VIEW_WGSL` and use absolute image pixels, so a tiled render equals a single render.
-- The screen takes tiles under the project lock (`fetch_cached`), builds the scene after, and redraws until `is_complete()` (pyramid settled too). Export renders bands, locking per tile read. Windows prefers DX12 (`preferred_backends`).
-- Image hashes are per backend, recorded for WARP. `Renderer::warp()` shares one WARP device per process; never make another.
-- Terrain shading lives once in `mmc-render` (`terrain.rs` tables `PALETTE`/`COAST`, `terrain.wgsl`), prepended to every pass; a kind's height pass calls `terrain(heights, pos.xy)`. Change colours only in `PALETTE`.
-- Shading reads heights bilinearly with slopes in metres per metre (`metres_per_pixel` of the drawn level); scenes fetch 2 map pixels of margin.
-- Live brush (ADR-0025): display only. The edit worker writes `live::Applied` under the project lock; the render worker reads it there, so a complete render knows the stamps it shows.
+- `mmc-render` uses eframe's wgpu; the app shares its device (`Renderer::from_device`). Windows prefers DX12 (`preferred_backends`).
+- Targets are `Rgba8Unorm`. Pass shaders start with `VIEW_WGSL` and use absolute image pixels, so a tiled render equals a single one.
+- The screen takes tiles under the project lock (`fetch_cached`), builds the scene after, and redraws until `is_complete()`. Export locks per tile read.
+- Image hashes are recorded for WARP. `Renderer::warp()` shares one WARP device per process; never make another.
+- Terrain shading lives once in `mmc-render` (`terrain.rs`, `terrain.wgsl`); a kind's height pass calls `terrain(heights, pos.xy)`. Colours change only in `PALETTE`.
+- GPU structs are `#[repr(C)]` bytemuck structs, tested against their WGSL layout (naga).
+- Live brush: ADR-0025. `live::Applied` is written and read under the project lock.
 
 ## Pages and anchors
 
 - `mmc-page` depends on neither core nor store; ported code keeps its MIT notice.
-- Links are stored as `[[id|label]]`; labels are never rewritten. Link markup in code is text. Core parses links; the link index is written with the page.
+- Links are stored as `[[id|label]]`; labels are never rewritten. Core parses links; the link index is written with the page.
 - Anchor edits are commands; matching follows derived data and is not undoable. A stage that finds features calls `set_derived_features` before it commits.
 
 ## Tests
 
 - Test behaviour through public seams. Core tests use only the `mmc-core` API; store tests may use `rusqlite`.
-- The proof slice (steps 1, 2, 4–8) runs in `kind-region/tests/proof_slice.rs`; step 9 in `render/tests/render.rs`. A proof-relevant feature extends it.
-- Fixtures are generated in the test, in `tempfile::tempdir()`. Timing asserts loosen 10x in debug builds.
+- The proof slice runs in `kind-region/tests/proof_slice.rs`, step 9 in `render/tests/render.rs`; a proof-relevant feature extends it.
+- Fixtures are generated in `tempfile::tempdir()`. Timing asserts loosen 10x in debug builds.
 
 ## Benchmark gate
 
-- `mmc-bench` measures through core's API on `mmc-fixtures` data and fails on any exceeded budget; results are JSON name to `median_ms`, `budget_ms`, `ok`.
-- A budget is one line in `bench/budgets.toml` plus one entry in `measure()`; a budget with no result fails. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit. GPU budgets time until the frame is drawn: on WARP (`Renderer::warp`) at a small viewport, and as `*_gpu` on a hardware adapter when there is one (no result is no failure).
+- `mmc-bench` measures through core's API on `mmc-fixtures` data; results are JSON name to `median_ms`, `budget_ms`, `ok`.
+- A budget is one line in `bench/budgets.toml` plus one result; a budget without a result fails, except `*_gpu` without a hardware adapter. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit.
+- GPU budgets time until the frame is drawn: WARP at a small viewport, `*_gpu` at full HD.
 
 ## App
 
-- The app logs to `%LOCALAPPDATA%/MakiMapCreator/logs/mmc.log` (previous: `mmc.prev.log`) via `log`: info for user actions and results and per-stroke timings, warn for messages shown and stalls over 50 ms; dependencies log warnings only.
-- eframe on wgpu (ADR-0013). Pen input reaches the app only as `input::PenEvent` (client physical pixels); Win32 code stays in `pen_win.rs` behind `cfg(windows)`, on eframe's `windows-sys`.
-- WinTab: large queue, drained with `WTPacketsGet`. Contact is the tip state (Ink: `POINTER_FLAG_INCONTACT`), not pressure.
-- The pen API is a setting in `%LOCALAPPDATA%/MakiMapCreator/settings.txt` (`pen = wintab|ink`), read at start; a first argument overrides it.
-- UI strings live in `app/i18n/en-US/main.ftl` (`tr`, `tr_args`); numbers are formatted before they go in. Fonts in `app/fonts/` (`theme::FONT_FILES`).
-- The project is in `Arc<Mutex<Option<Project>>>`; the UI thread only uses `try_lock` (except open and close) and reads a `Snapshot`; workers lock with `canvas::lock_project` (logs waits over 50 ms).
-- Edits, undo and redo run in order on the edit worker (`edit.rs`). A stroke goes as one part per frame, applied a few stamps per lock; a part's overlay stays until a render requested after it was applied lands.
-- `main.rs` holds `App` and the frame; `impl App` blocks by concern live in their own files. Panels draw and return `Intent`s; `App::apply` applies them.
-- Slow work runs through `App::spawn`; export on its own thread. Generate lists only generators that `runs_on` the shown map.
+- Logs via `log` to `%LOCALAPPDATA%/MakiMapCreator/logs/`: info for user actions and stroke timings, warn for messages shown and stalls over 50 ms.
+- Pen input reaches the app only as `input::PenEvent`; Win32 code stays in `pen_win.rs` behind `cfg(windows)`. Contact is the tip state, not pressure.
+- UI strings, units too, live in `app/i18n/en-US/main.ftl` (`tr`, `tr_args`); numbers are formatted first.
+- The UI thread only `try_lock`s the project (except open and close) and reads a `Snapshot`; workers use `canvas::lock_project`.
+- Edits, undo and redo run in order on the edit worker (`edit.rs`), one stroke part per frame.
+- Panels draw and return `Intent`s; `App::apply` applies them. Slow work runs through `App::spawn`.
 - Timing harnesses: `cargo test -p mmc-app perf -- --ignored --nocapture`.
