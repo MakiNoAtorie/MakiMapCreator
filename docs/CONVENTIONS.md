@@ -26,8 +26,8 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Open copies the file to the working copy (plain copy under a read lock); the working copy uses WAL, `synchronous = NORMAL`.
 - Save runs on a worker (`save`, `poll_save`, `wait_for_save`): `VACUUM INTO <file>.tmp`, then rename. Nothing else is written next to the project file. Tests that reopen call `wait_for_save` first.
 - An open store holds an OS lock on `<working copy>-lock`; close deletes the working copy. Restore, discard and the launch prompt skip a locked (live) working copy.
-- One edit is one `Storage::write` batch of `persist::Write` rows, one transaction.
-- Edits use `BEGIN IMMEDIATE` and a 100 µs busy handler. Worker connections (`Storage::tile_opener`) write about 1 MiB per transaction, wait while an edit is pending, and alone checkpoint the WAL.
+- One edit is one transaction. Tile-only edits go to the edit writer (`core/src/writer.rs`) and its overlay; core and worker reads see the overlay, so an edit never waits for SQLite. Other writes flush the writer first; save, close and `wait_for_jobs` flush too.
+- Edits use `BEGIN IMMEDIATE` and a 100 µs busy handler. Worker connections (`Storage::tile_opener`) write at most 1 MiB per transaction, start none while an edit's transaction waits and end theirs after the current row; they alone checkpoint the WAL.
 - Deleted maps are flagged until the next open; a new table keyed by map or entity adds its rows to `PURGE` in `store/src/delete.rs`. Ids of entities and map objects come from AUTOINCREMENT and are never reused.
 
 ## Layers, commands and undo
@@ -55,7 +55,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Randomness only through `mmc_core::rng` (stateless hash). Exception: `mmc_fixtures::Rng` makes seeded test and bench input, never map content.
 - Deleting a map stops its jobs; undo of the deletion rebuilds it.
 - Tests wait through the API (`wait_for_jobs`, `wait_tiles`), never sleep.
-- Core worker threads run below normal priority; their write transactions (`holding_write_lock`) at normal.
+- Core worker threads run below normal priority; their write transactions (`holding_write_lock`) at normal. `Jobs` runs one job at a time per owner; a submit replaces the waiting one.
 
 ## Render
 
