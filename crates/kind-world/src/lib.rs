@@ -1,16 +1,16 @@
 //! Crude world map kind: paint coarse height for land and sea (ADR-0024), split land into Voronoi regions.
 
 use mmc_core::{
-    ChildDecl, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind,
-    MapKindModule, MapSettings, NewEntity, Param, Project, RenderPass, Result, RootPoint, Tool,
-    ToolAction, WATER_LEVEL, rng,
+    COAST_RELIEF, ChildDecl, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId,
+    MapKind, MapKindModule, MapSettings, NewEntity, Param, Project, RenderPass, Result, RootPoint,
+    Tool, ToolAction, WATER_LEVEL, rng,
 };
 
 pub const WORLD: MapKind = MapKind::new("world");
 /// Height the land tool raises to, metres.
-pub const LAND_HEIGHT: f32 = 200.0;
+pub const LAND_HEIGHT: f32 = WATER_LEVEL + COAST_RELIEF;
 /// Height the sea tool lowers to, metres.
-pub const SEA_DEPTH: f32 = -200.0;
+pub const SEA_DEPTH: f32 = WATER_LEVEL - COAST_RELIEF;
 
 /// Region sites per map side.
 const GRID: Param = Param {

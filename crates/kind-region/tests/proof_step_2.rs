@@ -197,6 +197,61 @@ fn proof_step_2_child_region_map_from_parent_context() {
 }
 
 #[test]
+fn low_parent_land_keeps_its_relief_and_flat_sea_makes_no_islands() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), world(32)).unwrap();
+    let w = p.maps()[0].id;
+    let island = Command::Brush(BrushStroke {
+        falloff: 0.0,
+        strength: 50.0,
+        ..match brush(at(8.0, 8.0), 6.0 * KM) {
+            Command::Brush(b) => b,
+            _ => unreachable!(),
+        }
+    });
+    p.apply(w, island).unwrap();
+    let id = p.next_entity_id().unwrap();
+    p.apply(
+        w,
+        Command::Generate(Generation {
+            run: GenRun::new("test", 1),
+            entities: vec![NewEntity {
+                kind: "region".into(),
+                name: "R".into(),
+                outline: rect(1.0, 1.0, 15.0, 15.0),
+            }],
+            rasters: vec![],
+        }),
+    )
+    .unwrap();
+    let child = p.create_child_map(w, id, None).unwrap();
+    let cmd = RegionKind
+        .generate(&p, child, &GenRun::new("from-parent", 3))
+        .unwrap();
+    p.apply(child, cmd).unwrap();
+    let (mut land, mut n) = (0.0, 0);
+    for i in 0..60 {
+        for j in 0..60 {
+            let (x, y) = (1.5 + i as f64 * 0.22, 1.5 + j as f64 * 0.22);
+            let d = ((x - 8.0).powi(2) + (y - 8.0).powi(2)).sqrt();
+            let h = height(&p, child, x, y).unwrap();
+            if d < 4.0 {
+                assert!(h > 0.0, "land at {x},{y}: {h}");
+                land += h as f64;
+                n += 1;
+            } else if d > 8.0 {
+                assert!(h <= 0.0, "sea at {x},{y}: {h}");
+            }
+        }
+    }
+    let mean = land / n as f64;
+    assert!(
+        (30.0..90.0).contains(&mean),
+        "mean land height {mean} on 50 m"
+    );
+}
+
+#[test]
 fn a_child_owns_only_its_outline() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, w) = two_regions(dir.path());

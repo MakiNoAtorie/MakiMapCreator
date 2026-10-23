@@ -1,18 +1,16 @@
 //! Crude region map kind: height from the parent's height plus root-space noise (ADR-0008, ADR-0024).
 
 use mmc_core::{
-    Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind, MapKindModule,
-    MapSettings, Param, Project, RenderPass, Result, RootPoint, Stage, Summary, TILE_SIZE, Tool,
-    ToolAction, WATER_LEVEL, par_map, rng,
+    COAST_RELIEF, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind,
+    MapKindModule, MapSettings, Param, Project, RenderPass, Result, RootPoint, Stage, Summary,
+    TILE_SIZE, Tool, ToolAction, WATER_LEVEL, par_map, rng,
 };
 
 mod slope;
 pub use slope::SLOPE;
 
 pub const REGION: MapKind = MapKind::new("region");
-/// Height step across the parent coast, metres: parent land is at least +RELIEF/2, sea at most -RELIEF/2.
-const RELIEF: f32 = 400.0;
-/// Noise amplitude, metres. At most RELIEF/2, so a coast moves at most about one parent cell.
+/// Noise amplitude, metres. At most `COAST_RELIEF`, so a coast moves at most about one parent cell.
 const AMPLITUDE: Param = Param {
     id: "amplitude",
     default: 200.0,
@@ -124,7 +122,15 @@ impl MapKindModule for RegionKind {
                         .iter()
                         .map(|&(cell, w)| w * rng::noise(seed, "region.height", at, cell) as f32)
                         .sum();
-                    parent.sample_by(at, coast) + (n - 0.5) * amplitude
+                    let noise = (n - 0.5) * amplitude;
+                    let land = parent.sample_by(at, coast) + noise > WATER_LEVEL;
+                    let h = parent.sample(at) + noise;
+                    // Only ground on the wrong side of the coast moves, just across it.
+                    match (land, h > WATER_LEVEL) {
+                        (true, false) => WATER_LEVEL + SHORE,
+                        (false, true) => WATER_LEVEL - SHORE,
+                        _ => h,
+                    }
                 })
                 .collect::<Vec<f32>>()
         })
@@ -186,16 +192,18 @@ impl MapKindModule for RegionKind {
     }
 }
 
-/// Parent height with land raised to and sea lowered to `RELIEF / 2`, so the noise moves a coast
-/// about one parent cell and never makes islands in flat parent sea.
-// ponytail: flattens parent ground within 200 m of water level; keep it once brushes add detail (#26).
+/// The parent's land as +`COAST_RELIEF` and sea as -`COAST_RELIEF`: with the noise, where the coast
+/// goes, about one parent cell from the parent's, and never an island in flat parent sea.
 fn coast(h: f32) -> f32 {
     if h > WATER_LEVEL {
-        h.max(WATER_LEVEL + RELIEF / 2.0)
+        WATER_LEVEL + COAST_RELIEF
     } else {
-        h.min(WATER_LEVEL - RELIEF / 2.0)
+        WATER_LEVEL - COAST_RELIEF
     }
 }
+
+/// Metres from water level of ground moved across the coast.
+const SHORE: f32 = 0.5;
 
 /// Summary sample spacing in pixels.
 const SUMMARY_STEP: usize = 8;
