@@ -45,7 +45,7 @@ impl Options {
             strength: 20.0,
             falloff: 1.0,
             detail: 0.5,
-            detail_scale: 16.0 * mpp,
+            detail_scale: 32.0 * mpp,
             pressure_size: false,
             pressure_strength: true,
         }
@@ -55,9 +55,9 @@ impl Options {
         (mpp, 512.0 * mpp)
     }
 
-    /// Detail scale range; core skips octaves under 2 px, so the smallest has one octave.
+    /// Detail scale range; core skips octaves under 8 px, so the smallest has one octave.
     pub fn detail_scale_limits(mpp: f64) -> (f64, f64) {
-        (2.0 * mpp, 1024.0 * mpp)
+        (8.0 * mpp, 1024.0 * mpp)
     }
 
     /// Radius for a pen `pressure`.
@@ -414,7 +414,7 @@ mod tests {
             match plan(action, Layer::HEIGHT, Direction::Lower, &o, 10.0, &path) {
                 Some(Command::Brush(b)) => assert_eq!(
                     (b.mode, b.strength, b.detail.amount, b.detail.scale),
-                    (mode, strength, 0.7, 160.0)
+                    (mode, strength, 0.7, 320.0)
                 ),
                 other => panic!("{other:?}"),
             }

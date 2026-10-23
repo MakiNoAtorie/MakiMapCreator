@@ -42,7 +42,7 @@ fn detailed(cmd: Command, mpp: f64) -> Command {
         Command::Brush(b) => Command::Brush(mmc_core::BrushStroke {
             detail: mmc_core::Detail {
                 amount: 0.5,
-                scale: 16.0 * mpp,
+                scale: 32.0 * mpp,
             },
             ..b
         }),

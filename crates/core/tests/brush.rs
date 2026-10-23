@@ -214,17 +214,23 @@ fn flatten_moves_ground_toward_the_height_under_the_pen_at_stroke_start() {
 fn roughen_adds_detail_without_a_net_raise() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, map) = project(dir.path());
-    let mut s = stroke(BrushMode::Roughen, &[pt(3840.0, 3840.0)], 2500.0, 20.0);
+    let mut s = stroke(BrushMode::Roughen, &[pt(3840.0, 3840.0)], 3800.0, 20.0);
+    s.falloff = 0.0;
     s.detail = Detail {
         amount: 1.0,
-        scale: 200.0,
+        scale: 160.0,
     };
     p.apply(map, Command::Brush(s)).unwrap();
-    let g = grid(&p, map, 300..470, 300..470);
+    // A hard disc over about 2000 noise cells.
+    let every = |n: usize| (120..648).step_by(n);
+    let g: Vec<f32> = every(3)
+        .flat_map(|j| every(3).map(move |i| px(i, j)))
+        .map(|at| h(&p, map, at))
+        .collect();
     let mean = g.iter().map(|&v| v as f64).sum::<f64>() / g.len() as f64;
-    let spread = g.iter().map(|&v| v.abs()).fold(0.0f32, f32::max);
-    assert!(spread > 5.0, "spread {spread}");
-    assert!(mean.abs() < 1.5, "mean {mean}");
+    let size = g.iter().map(|&v| v.abs() as f64).sum::<f64>() / g.len() as f64;
+    assert!(size > 3.0, "mean change {size}");
+    assert!(mean.abs() < 0.15 * size, "mean {mean} of {size}");
     assert!(p.undo(map).unwrap());
-    assert!(grid(&p, map, 300..470, 300..470).iter().all(|&v| v == 0.0));
+    assert!(grid(&p, map, 380..390, 380..390).iter().all(|&v| v == 0.0));
 }

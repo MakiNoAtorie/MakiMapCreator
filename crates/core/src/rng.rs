@@ -66,13 +66,29 @@ pub fn noise(seed: u64, stage: &str, at: RootPoint, cell: f64) -> f64 {
 
 /// `noise` with the lattice value at integer lattice coordinates (`cx`, `cy`) from `corner`.
 pub(crate) fn noise_with(at: RootPoint, cell: f64, corner: impl Fn(f64, f64) -> f64) -> f64 {
-    let (gx, gy) = (at.x / cell, at.y / cell);
-    let (x0, y0) = (gx.floor(), gy.floor());
+    let ((x0, fx), (y0, fy)) = (axis(at.x, cell), axis(at.y, cell));
     let corner = |i: f64, j: f64| corner(x0 + i, y0 + j);
-    let s = |t: f64| t * t * (3.0 - 2.0 * t);
-    let (fx, fy) = (s(gx - x0), s(gy - y0));
-    let top = corner(0.0, 0.0) + (corner(1.0, 0.0) - corner(0.0, 0.0)) * fx;
-    let bottom = corner(0.0, 1.0) + (corner(1.0, 1.0) - corner(0.0, 1.0)) * fx;
+    let c = [
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    ];
+    mix4(c, fx, fy)
+}
+
+/// Lattice coordinate below `v` and the smoothstep weight toward the next one.
+pub(crate) fn axis(v: f64, cell: f64) -> (f64, f64) {
+    let g = v / cell;
+    let g0 = g.floor();
+    let t = g - g0;
+    (g0, t * t * (3.0 - 2.0 * t))
+}
+
+/// Corners `[x0y0, x1y0, x0y1, x1y1]` mixed in x, then y.
+pub(crate) fn mix4([a, b, c, d]: [f64; 4], fx: f64, fy: f64) -> f64 {
+    let top = a + (b - a) * fx;
+    let bottom = c + (d - c) * fx;
     top + (bottom - top) * fy
 }
 

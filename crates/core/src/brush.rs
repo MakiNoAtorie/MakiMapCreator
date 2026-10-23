@@ -44,22 +44,60 @@ impl Detail {
 pub const DETAIL_STAGE: &str = "brush-detail";
 const OCTAVES: u32 = 4;
 
-/// Fractal value noise in -1..1 at root-space `at`:
-/// `sum(0.5^o * (2 * rng::noise(seed, DETAIL_STAGE, at, scale / 2^o) - 1)) / sum(0.5^o)` for
-/// octaves `o` in 0..4, skipping octaves whose cell is under 2 `mpp` (no sub-pixel detail; this
-/// also bounds the work per stamp). `rng::noise` is smoothstep-interpolated value noise on lattice
-/// corners `unit(seed, stage, Key::At(corner))`, a splitmix64 hash of the corner's f64 bits (`rng.rs`).
+/// Detail noise is evaluated every `NODE` global pixels and interpolated between.
+const NODE: i64 = 4;
+
+/// Detail noise in -1..1 at the pixel whose centre is root-space `at`, on a map with `mpp`.
+/// Let `g = round(at / mpp - 0.5)` be the global pixel index (x and y). Nodes sit at
+/// `g = NODE * k`, at root-space `(NODE * k + 0.5) * mpp`, with value
+/// `sum(0.5^o * (2 * rng::noise(seed, DETAIL_STAGE, node, scale / 2^o) - 1)) / sum(0.5^o)` over
+/// octaves `o` in 0..4, skipping octaves whose cell is under `2 * NODE * mpp` (8 px). A pixel
+/// is the bilinear mix of its 4 nodes, weights `(g mod NODE) / NODE`, first in y, then in x,
+/// each `a + (b - a) * t`.
+/// `rng::noise` is smoothstep-interpolated value noise on lattice corners
+/// `unit(seed, stage, Key::At(corner))`, a splitmix64 hash of the corner's f64 bits (`rng.rs`).
 /// A port with f32 or another hash agrees within its rounding, not bit for bit.
 pub fn detail_noise(seed: u64, at: RootPoint, scale: f64, mpp: f64) -> f64 {
-    fractal(scale, mpp, |_, cell| {
-        rng::noise(seed, DETAIL_STAGE, at, cell)
+    let g = (
+        (at.x / mpp - 0.5).round() as i64,
+        (at.y / mpp - 0.5).round() as i64,
+    );
+    interpolate(g, |nx, ny| {
+        let node = node_at(nx, ny, mpp);
+        fractal(scale, mpp, |_, cell| {
+            rng::noise(seed, DETAIL_STAGE, node, cell)
+        })
     })
+}
+
+fn node_at(nx: i64, ny: i64, mpp: f64) -> RootPoint {
+    RootPoint {
+        x: ((nx * NODE) as f64 + 0.5) * mpp,
+        y: ((ny * NODE) as f64 + 0.5) * mpp,
+    }
+}
+
+/// Bilinear mix at global pixel `g` of the node values `node(kx, ky)`.
+fn interpolate((gx, gy): (i64, i64), node: impl Fn(i64, i64) -> f64) -> f64 {
+    let (nx, ny) = (gx.div_euclid(NODE), gy.div_euclid(NODE));
+    let f = NODE as f64;
+    let (fx, fy) = (
+        gx.rem_euclid(NODE) as f64 / f,
+        gy.rem_euclid(NODE) as f64 / f,
+    );
+    let left = lerp(node(nx, ny), node(nx, ny + 1), fy);
+    let right = lerp(node(nx + 1, ny), node(nx + 1, ny + 1), fy);
+    lerp(left, right, fx)
+}
+
+fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
 }
 
 fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> f64 {
     let (mut sum, mut total, mut amp, mut cell) = (0.0, 0.0, 1.0, scale);
     for o in 0..OCTAVES as usize {
-        if cell >= 2.0 * mpp {
+        if cell >= (2 * NODE) as f64 * mpp {
             sum += amp * (2.0 * noise(o, cell) - 1.0);
         }
         total += amp;
@@ -109,8 +147,6 @@ pub fn stamp_weight(
 /// Gives the same bits as `detail_noise`.
 struct Lattice {
     octaves: Vec<(f64, i64, i64, usize, Vec<f64>)>,
-    scale: f64,
-    mpp: f64,
 }
 
 impl Lattice {
@@ -130,9 +166,10 @@ impl Lattice {
             let w = (ix1 - ix0 + 1).max(0) as usize;
             let h = (iy1 - iy0 + 1).max(0) as usize;
             let mut v = vec![];
-            if cell >= 2.0 * mpp && w > 0 && h > 0 {
+            if cell >= (2 * NODE) as f64 * mpp && w > 0 && h > 0 {
                 v = vec![0.0; w * h];
-                let row = |iy: i64, out: &mut [f64]| {
+                par_rows(&mut v, w, |r, out| {
+                    let iy = iy0 + r as i64;
                     for (ix, o) in (ix0..).zip(out) {
                         let p = RootPoint {
                             x: ix as f64 * cell,
@@ -140,42 +177,120 @@ impl Lattice {
                         };
                         *o = rng::to_unit(rng::hash_from(prefix, Key::At(p)));
                     }
-                };
-                // A fine octave under a large stamp has as many corners as the stamp has pixels.
-                let threads = if w * h >= 1 << 14 { threads() } else { 1 };
-                let per = h.div_ceil(threads);
-                std::thread::scope(|sc| {
-                    for (c, chunk) in v.chunks_mut(per * w).enumerate() {
-                        sc.spawn(move || {
-                            for (r, out) in chunk.chunks_mut(w).enumerate() {
-                                row(iy0 + (c * per + r) as i64, out);
-                            }
-                        });
-                    }
                 });
             }
             octaves.push((cell, ix0, iy0, w, v));
             cell *= 0.5;
         }
-        Lattice {
-            octaves,
-            scale,
-            mpp,
-        }
+        Lattice { octaves }
     }
 
-    fn noise(&self, at: RootPoint) -> f64 {
-        fractal(self.scale, self.mpp, |o, cell| {
-            let (_, ix0, iy0, w, v) = &self.octaves[o];
-            rng::noise_with(at, cell, |cx, cy| {
-                v[(cy as i64 - iy0) as usize * w + (cx as i64 - ix0) as usize]
-            })
+    /// For each root-space coordinate in `vs`, octave `o`'s corner offset and smoothstep weight
+    /// along x (`y` false) or y; the noise is separable in these, so a grid hashes nothing.
+    fn axis(&self, o: usize, y: bool, vs: impl Iterator<Item = f64>) -> Vec<(usize, f64)> {
+        let (cell, ix0, iy0, ..) = &self.octaves[o];
+        let i0 = if y { *iy0 } else { *ix0 };
+        vs.map(|v| {
+            let (g0, f) = rng::axis(v, *cell);
+            ((g0 as i64 - i0) as usize, f)
         })
+        .collect()
     }
 }
 
-fn threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+/// Detail noise under one stamp: node values mixed in y for each pixel row, so a pixel does
+/// one mix in x. Same bits as `detail_noise`.
+struct Nodes {
+    nx0: i64,
+    gy0: i64,
+    w: usize,
+    /// Row `gy - gy0`, node column `nx - nx0`.
+    rows: Vec<f64>,
+}
+
+impl Nodes {
+    /// Nodes for global pixels `gx0..=gx1` x `gy0..=gy1`.
+    fn new(
+        seed: u64,
+        d: Detail,
+        mpp: f64,
+        (gx0, gx1): (i64, i64),
+        (gy0, gy1): (i64, i64),
+    ) -> Nodes {
+        let (nx0, ny0) = (gx0.div_euclid(NODE), gy0.div_euclid(NODE));
+        let (nx1, ny1) = (gx1.div_euclid(NODE) + 1, gy1.div_euclid(NODE) + 1);
+        let lattice = Lattice::new(
+            seed,
+            d.scale,
+            mpp,
+            node_at(nx0, ny0, mpp),
+            node_at(nx1, ny1, mpp),
+        );
+        let w = (nx1 - nx0 + 1) as usize;
+        let axes: Vec<_> = (0..OCTAVES as usize)
+            .map(|o| {
+                let xs = (nx0..=nx1).map(|n| node_at(n, 0, mpp).x);
+                let ys = (ny0..=ny1).map(|n| node_at(0, n, mpp).y);
+                (lattice.axis(o, false, xs), lattice.axis(o, true, ys))
+            })
+            .collect();
+        let mut v = vec![0.0; w * (ny1 - ny0 + 1) as usize];
+        par_rows(&mut v, w, |r, out| {
+            for (col, o) in out.iter_mut().enumerate() {
+                // Same operations as `rng::noise` at the node, with corners from the lattice.
+                *o = fractal(d.scale, mpp, |oct, _| {
+                    let (lw, lv) = (lattice.octaves[oct].3, &lattice.octaves[oct].4);
+                    let ((ix, fx), (iy, fy)) = (axes[oct].0[col], axes[oct].1[r]);
+                    let at = iy * lw + ix;
+                    rng::mix4([lv[at], lv[at + 1], lv[at + lw], lv[at + lw + 1]], fx, fy)
+                });
+            }
+        });
+        let mut rows = vec![0.0; w * (gy1 - gy0 + 1) as usize];
+        par_rows(&mut rows, w, |r, out| {
+            let gy = gy0 + r as i64;
+            let fy = gy.rem_euclid(NODE) as f64 / NODE as f64;
+            let at = (gy.div_euclid(NODE) - ny0) as usize * w;
+            let (a, c) = (&v[at..at + w], &v[at + w..at + 2 * w]);
+            for ((o, a), c) in out.iter_mut().zip(a).zip(c) {
+                *o = lerp(*a, *c, fy);
+            }
+        });
+        Nodes { nx0, gy0, w, rows }
+    }
+
+    /// Detail noise at global pixel `g`.
+    fn at(&self, (gx, gy): (i64, i64)) -> f64 {
+        let i = (gy - self.gy0) as usize * self.w + (gx.div_euclid(NODE) - self.nx0) as usize;
+        let fx = gx.rem_euclid(NODE) as f64 / NODE as f64;
+        lerp(self.rows[i], self.rows[i + 1], fx)
+    }
+}
+
+/// Fills `v`, rows of `w`, with `f(row, values)`; on scoped threads when it is large.
+fn par_rows(v: &mut [f64], w: usize, f: impl Fn(usize, &mut [f64]) + Sync) {
+    let rows = v.len() / w;
+    let threads = if v.len() >= 1 << 13 {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        1
+    };
+    // A thread costs tens of µs; small stamps run here.
+    if threads <= 1 || rows <= 1 {
+        v.chunks_mut(w).enumerate().for_each(|(r, out)| f(r, out));
+        return;
+    }
+    let per = rows.div_ceil(threads).max(1);
+    let f = &f;
+    std::thread::scope(|sc| {
+        for (c, chunk) in v.chunks_mut(per * w).enumerate() {
+            sc.spawn(move || {
+                for (r, out) in chunk.chunks_mut(w).enumerate() {
+                    f(c * per + r, out);
+                }
+            });
+        }
+    });
 }
 
 /// Prefix sums over a pixel box of a layer, for box means. Values are fixed point (`FIXED`
@@ -244,6 +359,7 @@ impl Project {
         let noisy = s.detail.amount > 0.0 || s.mode == BrushMode::Roughen;
         let seed = if noisy { self.seed()? } else { 0 };
         let (gx, gy) = ((map.origin.x / mpp).round(), (map.origin.y / mpp).round());
+        let (gxi, gyi) = (gx as i64, gy as i64);
         let root = |x: i64, y: i64| RootPoint {
             x: (gx + x as f64 + 0.5) * mpp,
             y: (gy + y as f64 + 0.5) * mpp,
@@ -256,18 +372,10 @@ impl Project {
         for p in &s.points {
             let r = p.radius / mpp;
             let (cx, cy) = map.to_pixels(p.at);
-            let lattice = noisy.then(|| {
-                let (lo, hi) = (
-                    RootPoint {
-                        x: p.at.x - p.radius,
-                        y: p.at.y - p.radius,
-                    },
-                    RootPoint {
-                        x: p.at.x + p.radius,
-                        y: p.at.y + p.radius,
-                    },
-                );
-                Lattice::new(seed, s.detail.scale, mpp, lo, hi)
+            let nodes = noisy.then(|| {
+                let xs = (gxi + (cx - r).floor() as i64, gxi + (cx + r).ceil() as i64);
+                let ys = (gyi + (cy - r).floor() as i64, gyi + (cy + r).ceil() as i64);
+                Nodes::new(seed, s.detail, mpp, xs, ys)
             });
             // Tiles loaded here only to read; those the stamp does not change are dropped after.
             let mut read = BTreeSet::new();
@@ -325,7 +433,7 @@ impl Project {
                         return false;
                     }
                     let fall = weight_in(d2, core);
-                    let n = lattice.as_ref().map_or(0.0, |l| l.noise(at));
+                    let n = nodes.as_ref().map_or(0.0, |l| l.at((gxi + x, gyi + y)));
                     let wt = modulate(fall, s.detail.amount, n);
                     let old = *v;
                     match s.mode {
