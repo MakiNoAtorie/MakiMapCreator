@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use mmc_core::{Layer, TileId};
+use mmc_core::{Command, Layer, TileId};
 use mmc_fixtures::{LargeMap, Rng};
 
 mod search;
@@ -54,6 +54,20 @@ fn measure() -> BTreeMap<String, f64> {
         .map(|_| {
             let cmd = fixture.stroke(&mut rng);
             time_ms(|| project.apply(map, cmd).unwrap()).0
+        })
+        .collect();
+    // One stamp of the largest brush (512 px) into a stroke session: what the edit worker does per lock.
+    let large = (0..RUNS)
+        .map(|i| {
+            let Command::Brush(mut b) = fixture.stroke(&mut rng) else {
+                unreachable!()
+            };
+            b.points.truncate(1);
+            b.points[0].radius = 5120.0;
+            b.points[0].at.x = 6000.0 + i as f64 * 11000.0;
+            let ms = time_ms(|| project.apply_part(map, Command::Brush(b)).unwrap()).0;
+            project.end_stroke(map).unwrap();
+            ms
         })
         .collect();
     // Save and open time the fixture as built; strokes during a save grow the file by machine speed.
@@ -146,6 +160,7 @@ fn measure() -> BTreeMap<String, f64> {
     BTreeMap::from([
         ("full_rebuild".into(), median(rebuild)),
         ("brush_stroke".into(), median(brush)),
+        ("large_brush_stamp".into(), median(large)),
         ("open_project".into(), median(open)),
         ("open_first_frame".into(), median(first_frame)),
         ("pan_stand_in".into(), median(stand_in)),

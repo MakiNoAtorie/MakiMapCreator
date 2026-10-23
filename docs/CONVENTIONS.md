@@ -35,7 +35,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and the object layer `Layer::OUTLINES`; kind crates define the rest.
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3; core owns the format. A missing tile is zeros, not edited. Level `l` pixels are 2x2 means of `l-1`; the top tile is the overview; only level 0 is ever edited.
 - Write tiles through `Project::write_rows`: it feeds the cache and the pyramid worker. Tests use `wait_tiles()`.
-- Every edit is a `Command` giving one `undo::Change` with before and after records; `apply_part` parts merge into one until `end_stroke`, which starts the derived rebuild. Undo is per map, in memory, bounded by `UNDO_LIMIT`. Deleting map M goes to M's parent history, a root map to `undo_project`; child map creation to the parent history.
+- Every edit is a `Command` giving one `undo::Change` with before and after records; `apply_part` parts are one change until `end_stroke`. On a map without an outline a stroke stays decoded in memory (`stroke.rs`), shown through the cache, and is written once at pen up (`take_stroke`, `encode` unlocked, `commit_stroke`); edits, undo and save write an open stroke first. Undo is per map, in memory, bounded by `UNDO_LIMIT`. Deleting map M goes to M's parent history, a root map to `undo_project`; child map creation to the parent history.
 - Map objects (point, path, polygon) live on the kind's `object_layers` plus `OUTLINES` (entity outlines).
 - Search: FTS tables in `store/src/search.rs`, written with entity and page rows; the name index lives in `Project`.
 
@@ -55,6 +55,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Randomness only through `mmc_core::rng` (stateless hash). Exception: `mmc_fixtures::Rng` makes seeded test and bench input, never map content.
 - Deleting a map stops its jobs; undo of the deletion rebuilds it.
 - Tests wait through the API (`wait_for_jobs`, `wait_tiles`), never sleep.
+- Core worker threads run below normal priority; their write transactions (`holding_write_lock`) at normal.
 
 ## Render
 
@@ -88,7 +89,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - The pen API is a setting in `%LOCALAPPDATA%/MakiMapCreator/settings.txt` (`pen = wintab|ink`), read at start; a first argument overrides it.
 - UI strings live in `app/i18n/en-US/main.ftl` (`tr`, `tr_args`); numbers are formatted before they go in. Fonts in `app/fonts/` (`theme::FONT_FILES`).
 - The project is in `Arc<Mutex<Option<Project>>>`; the UI thread only uses `try_lock` (except open and close) and reads a `Snapshot`; workers lock with `canvas::lock_project` (logs waits over 50 ms).
-- Edits, undo and redo run in order on the edit worker (`edit.rs`). A stroke goes as one part per frame; a part's overlay stays until a render requested after it was applied lands.
+- Edits, undo and redo run in order on the edit worker (`edit.rs`). A stroke goes as one part per frame, applied a few stamps per lock; a part's overlay stays until a render requested after it was applied lands.
 - `main.rs` holds `App` and the frame; `impl App` blocks by concern live in their own files. Panels draw and return `Intent`s; `App::apply` applies them.
 - Slow work runs through `App::spawn`; export on its own thread. Generate lists only generators that `runs_on` the shown map.
 - Timing harnesses: `cargo test -p mmc-app perf -- --ignored --nocapture`.

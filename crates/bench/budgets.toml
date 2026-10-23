@@ -14,3 +14,5 @@ name_lookup = 16
 full_text_first_results = 50
 # ADR-0014: the user keeps working during a save; median stroke while it runs = one frame.
 save_edit_pause = 16
+# ADR-0014 one frame: one 512 px stamp into an open stroke, the edit worker's work per project lock.
+large_brush_stamp = 16
