@@ -51,6 +51,16 @@ impl Storage for Store {
         Ok(Store::tile(self, key)?)
     }
 
+    fn tile_range(
+        &self,
+        map_id: i64,
+        layer: Layer,
+        x: std::ops::Range<u32>,
+        y: std::ops::Range<u32>,
+    ) -> R<LayerTiles> {
+        Ok(Store::tile_range(self, map_id, layer.as_str(), x, y)?)
+    }
+
     fn edited_tiles(&self, map_id: i64, layer: Layer) -> R<Vec<(u32, u32)>> {
         Ok(Store::edited_tiles(self, map_id, layer.as_str())?)
     }

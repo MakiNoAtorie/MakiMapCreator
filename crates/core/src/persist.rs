@@ -249,6 +249,14 @@ pub trait Storage: Send {
     /// The project seed, set once when the project is made.
     fn seed(&self) -> Result<u64>;
     fn tile(&self, key: &TileKey) -> Result<Option<TileRecord>>;
+    /// The stored level-0 tiles of a layer with `tx` in `x` and `ty` in `y`, in one query.
+    fn tile_range(
+        &self,
+        map_id: i64,
+        layer: Layer,
+        x: std::ops::Range<u32>,
+        y: std::ops::Range<u32>,
+    ) -> Result<LayerTiles>;
     /// Level-0 tiles of a layer that the user edited by hand, ordered by (tx, ty).
     fn edited_tiles(&self, map_id: i64, layer: Layer) -> Result<Vec<(u32, u32)>>;
 

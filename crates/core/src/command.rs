@@ -50,7 +50,15 @@ pub struct StrokePoint {
 
 /// Brush weight at `d2`, the squared distance as a fraction of the radius (`d2 < 1`).
 pub fn brush_weight(d2: f64, falloff: f32) -> f32 {
-    let core = (1.0 - falloff.clamp(0.0, 1.0) as f64).powi(2);
+    weight_in(d2, brush_core(falloff))
+}
+
+/// Squared radius fraction of the hard core of a brush with `falloff`.
+fn brush_core(falloff: f32) -> f64 {
+    (1.0 - falloff.clamp(0.0, 1.0) as f64).powi(2)
+}
+
+fn weight_in(d2: f64, core: f64) -> f32 {
     if d2 <= core {
         return 1.0;
     }
@@ -107,6 +115,7 @@ impl Project {
             let r = p.radius / map.settings.metres_per_pixel;
             let (cx, cy) = map.to_pixels(p.at);
             let amount = s.strength * p.pressure;
+            let (core, r2) = (brush_core(s.falloff), r * r);
             self.disc(
                 map,
                 s.layer,
@@ -115,11 +124,11 @@ impl Project {
                 (tiles, cached),
                 &mut touched,
                 |v, dist2| {
-                    let d2 = dist2 / (r * r);
+                    let d2 = dist2 / r2;
                     if d2 >= 1.0 {
                         return false;
                     }
-                    *v += amount * brush_weight(d2, s.falloff);
+                    *v += amount * weight_in(d2, core);
                     true
                 },
             )?;
@@ -138,7 +147,7 @@ impl Project {
         r: f64,
         (tiles, cached): (&mut EditTiles, bool),
         touched: &mut BTreeSet<(u32, u32)>,
-        mut f: impl FnMut(&mut f32, f64) -> bool,
+        f: impl Fn(&mut f32, f64) -> bool,
     ) -> Result<()> {
         let (w, h) = (map.settings.width as i64, map.settings.height as i64);
         let (x0, x1) = (
@@ -153,40 +162,77 @@ impl Project {
             return Ok(());
         }
         let t = TILE_SIZE as i64;
-        for ty in y0 / t..=(y1 - 1) / t {
-            for tx in x0 / t..=(x1 - 1) / t {
+        let (xs, ys) = (x0 / t..(x1 - 1) / t + 1, y0 / t..(y1 - 1) / t + 1);
+        // Tiles not loaded yet: from the cache, else from storage in one query.
+        let mut missing = vec![];
+        let mut loaded: BTreeSet<(u32, u32)> = BTreeSet::new();
+        for ty in ys.clone() {
+            for tx in xs.clone() {
                 let key = (tx as u32, ty as u32);
-                let loaded = !tiles.contains_key(&key);
-                if loaded {
-                    let k = map.tile_key(layer, key.0, key.1);
-                    // Cached level-0 tiles equal the stored ones; reading a record costs more than a copy.
-                    let hit = cached.then(|| self.tiles().get(&k)).flatten();
-                    let entry = match hit {
-                        Some(t) => (None, t.to_vec()),
-                        None => {
-                            let before = self.tile_record(&k)?;
-                            let values = decode(before.as_ref())?;
-                            (Some(before), values)
-                        }
-                    };
-                    tiles.insert(key, entry);
+                if tiles.contains_key(&key) {
+                    continue;
                 }
-                let values = &mut tiles.get_mut(&key).expect("inserted").1;
-                let mut hit = false;
-                for y in y0.max(ty * t)..y1.min((ty + 1) * t) {
-                    let dy = (y as f64 + 0.5 - cy).powi(2);
-                    let row = ((y - ty * t) * t) as usize;
-                    for x in x0.max(tx * t)..x1.min((tx + 1) * t) {
-                        let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
-                        hit |= f(&mut values[row + (x - tx * t) as usize], dist2);
+                let k = map.tile_key(layer, key.0, key.1);
+                // Cached level-0 tiles equal the stored ones; a record costs more to read than a copy.
+                match cached.then(|| self.tiles().get(&k)).flatten() {
+                    Some(v) => {
+                        tiles.insert(key, (None, v.to_vec()));
+                        loaded.insert(key);
                     }
+                    None => missing.push(key),
                 }
-                if hit {
-                    touched.insert(key);
-                } else if loaded {
-                    // Only the box reaches this tile; it stays unedited.
-                    tiles.remove(&key);
+            }
+        }
+        if !missing.is_empty() {
+            let range = |r: std::ops::Range<i64>| r.start as u32..r.end as u32;
+            let mut stored: BTreeMap<(u32, u32), TileRecord> = self
+                .store
+                .tile_range(map.id.0, layer, range(xs.clone()), range(ys.clone()))?
+                .into_iter()
+                .collect();
+            for key in missing {
+                let k = map.tile_key(layer, key.0, key.1);
+                let before = match self.writer.get().and_then(|w| w.overlay().get(&k)) {
+                    Some(rec) => rec,
+                    None => stored.remove(&key),
+                };
+                let values = decode(before.as_ref())?;
+                tiles.insert(key, (Some(before), values));
+                loaded.insert(key);
+            }
+        }
+        let in_box = |k: &(u32, u32)| xs.contains(&(k.0 as i64)) && ys.contains(&(k.1 as i64));
+        let mut work: Vec<((u32, u32), &mut Vec<f32>, bool)> = tiles
+            .iter_mut()
+            .filter(|(k, _)| in_box(k))
+            .map(|(k, v)| (*k, &mut v.1, false))
+            .collect();
+        let one = |((tx, ty), values, hit): &mut ((u32, u32), &mut Vec<f32>, bool)| {
+            let (tx, ty) = (*tx as i64, *ty as i64);
+            for y in y0.max(ty * t)..y1.min((ty + 1) * t) {
+                let dy = (y as f64 + 0.5 - cy).powi(2);
+                if dy >= r * r {
+                    continue;
                 }
+                let row = ((y - ty * t) * t) as usize;
+                // Only the row's chord can be inside; `f` still tests each pixel.
+                let half = (r * r - dy).sqrt();
+                let xa = ((cx - 0.5 - half).floor() as i64).max(x0.max(tx * t));
+                let xb = ((cx - 0.5 + half).ceil() as i64 + 1).min(x1.min((tx + 1) * t));
+                for x in xa..xb {
+                    let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
+                    *hit |= f(&mut values[row + (x - tx * t) as usize], dist2);
+                }
+            }
+        };
+        work.iter_mut().for_each(one);
+        let hits: Vec<((u32, u32), bool)> = work.into_iter().map(|(k, _, h)| (k, h)).collect();
+        for (key, hit) in hits {
+            if hit {
+                touched.insert(key);
+            } else if loaded.contains(&key) {
+                // Only the box reaches this tile; it stays unedited.
+                tiles.remove(&key);
             }
         }
         Ok(())

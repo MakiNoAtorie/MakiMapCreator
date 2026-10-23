@@ -41,6 +41,34 @@ impl Store {
         tile(&self.conn, key)
     }
 
+    /// The level-0 tiles of a layer with `tx` in `x` and `ty` in `y`.
+    pub fn tile_range(
+        &self,
+        map_id: i64,
+        layer: &str,
+        x: std::ops::Range<u32>,
+        y: std::ops::Range<u32>,
+    ) -> Result<LayerTiles> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT tx, ty, data, edited FROM tiles
+             WHERE map_id = ?1 AND layer = ?2 AND level = 0
+               AND tx >= ?3 AND tx < ?4 AND ty >= ?5 AND ty < ?6",
+        )?;
+        let rows = stmt.query_map(
+            params![map_id, layer, x.start, x.end, y.start, y.end],
+            |r| {
+                Ok((
+                    (r.get(0)?, r.get(1)?),
+                    TileRecord {
+                        data: r.get(2)?,
+                        edited: r.get(3)?,
+                    },
+                ))
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Level-0 tiles of a layer that the user edited by hand, ordered by (tx, ty).
     pub fn edited_tiles(&self, map_id: i64, layer: &str) -> Result<Vec<(u32, u32)>> {
         let mut stmt = self.conn.prepare(
