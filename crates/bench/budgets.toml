@@ -20,6 +20,6 @@ large_brush_stamp = 20
 # WARP at 320x180, within budget on 2 cores (its upload costs about 85 ns a texel, its full-HD draw 20 ms); `_gpu` on a hardware adapter at 1920x1080.
 stamp_to_visible = 16
 stamp_to_visible_gpu = 16
-# The same with the copy uploaded at pen down.
-stroke_start_to_visible = 20
+# The same with the copy uploaded at pen down. WARP varies 13–20 ms on CI (software upload); the `_gpu` budget holds one frame.
+stroke_start_to_visible = 30
 stroke_start_to_visible_gpu = 16
