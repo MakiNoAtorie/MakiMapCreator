@@ -162,6 +162,23 @@ impl Renderer {
         Ok(Renderer::from_device(device, queue))
     }
 
+    /// A renderer on a hardware adapter, `None` when there is none.
+    pub fn hardware() -> Option<Renderer> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: preferred_backends(wgpu::Backends::PRIMARY),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .ok()
+        .filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu)?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        Some(Renderer::from_device(device, queue))
+    }
+
     /// A renderer on a device the caller owns, for example the app window's device.
     pub fn from_device(device: wgpu::Device, queue: wgpu::Queue) -> Renderer {
         Renderer {

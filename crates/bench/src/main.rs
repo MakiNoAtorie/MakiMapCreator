@@ -28,11 +28,14 @@ fn median(mut v: Vec<f64>) -> f64 {
     v[v.len() / 2]
 }
 
-/// Names of budgets that are exceeded or have no result.
+/// Names of budgets that are exceeded or have no result; `*_gpu` has none without a GPU.
 fn failures(budgets: &BTreeMap<String, f64>, results: &BTreeMap<String, f64>) -> Vec<String> {
     budgets
         .iter()
-        .filter(|(k, max)| results.get(*k).is_none_or(|ms| ms > max))
+        .filter(|(k, max)| match results.get(*k) {
+            Some(ms) => ms > max,
+            None => !k.ends_with("_gpu"),
+        })
         .map(|(k, _)| k.clone())
         .collect()
 }
@@ -93,7 +96,8 @@ fn measure() -> BTreeMap<String, f64> {
             ms
         })
         .collect();
-    let (stamp_visible, start_visible) = live::measure(&project, map, &fixture, &mut rng);
+    let mut gpu = BTreeMap::new();
+    live::measure(&project, map, &fixture, &mut rng, &mut gpu);
     // Save and open time the fixture as built; strokes during a save grow the file by machine speed.
     project.wait_for_jobs().unwrap();
     let save = (0..RUNS)
@@ -181,7 +185,7 @@ fn measure() -> BTreeMap<String, f64> {
         .collect();
     project.close().unwrap();
 
-    BTreeMap::from([
+    gpu.extend([
         ("full_rebuild".into(), median(rebuild)),
         ("brush_stroke".into(), median(brush)),
         ("large_brush_stamp".into(), median(large)),
@@ -191,14 +195,14 @@ fn measure() -> BTreeMap<String, f64> {
         ("pan_full_tiles".into(), median(full)),
         ("save".into(), median(save)),
         ("save_edit_pause".into(), median(pause)),
-        ("stamp_to_visible".into(), stamp_visible),
-        ("stroke_start_to_visible".into(), start_visible),
-    ])
+    ]);
+    gpu
 }
 
 fn json(budgets: &BTreeMap<String, f64>, results: &BTreeMap<String, f64>) -> String {
     let rows: Vec<String> = budgets
         .iter()
+        .filter(|(k, _)| results.contains_key(*k) || !k.ends_with("_gpu"))
         .map(|(k, max)| {
             let ms = results.get(k).copied().unwrap_or(f64::NAN);
             let ok = ms <= *max;
@@ -230,7 +234,7 @@ mod tests {
 
     #[test]
     fn gate_flags_over_budget_and_missing_results() {
-        let b = parse_budgets("a = 10 # c\n\nb = 5\nc = 1\n");
+        let b = parse_budgets("a = 10 # c\n\nb = 5\nc = 1\nd_gpu = 1\n");
         let r = BTreeMap::from([("a".to_string(), 10.0), ("b".to_string(), 5.1)]);
         assert_eq!(failures(&b, &r), ["b", "c"]);
     }

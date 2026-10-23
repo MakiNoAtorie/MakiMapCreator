@@ -85,7 +85,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Benchmark gate
 
 - `mmc-bench` measures through core's API on `mmc-fixtures` data and fails on any exceeded budget; results are JSON name to `median_ms`, `budget_ms`, `ok`.
-- A budget is one line in `bench/budgets.toml` plus one entry in `measure()`; a budget with no result fails. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit. GPU budgets run on WARP (`Renderer::warp`) up to the frame's queue submission; the frame's own draw is not timed.
+- A budget is one line in `bench/budgets.toml` plus one entry in `measure()`; a budget with no result fails. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit. GPU budgets time until the frame is drawn: on WARP (`Renderer::warp`) at a small viewport, and as `*_gpu` on a hardware adapter when there is one (no result is no failure).
 
 ## App
 
