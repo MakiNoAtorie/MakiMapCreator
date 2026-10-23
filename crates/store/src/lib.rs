@@ -321,6 +321,12 @@ impl Store {
                     Write::ShiftTiles { map_id, dx, dy } => {
                         tiles::shift_tiles(tx, *map_id, *dx, *dy)?
                     }
+                    Write::DropLayer { map_id, layer } => {
+                        tx.execute(
+                            "DELETE FROM tiles WHERE map_id = ?1 AND layer = ?2",
+                            rusqlite::params![map_id, layer.as_str()],
+                        )?;
+                    }
                 }
             }
             Ok(())

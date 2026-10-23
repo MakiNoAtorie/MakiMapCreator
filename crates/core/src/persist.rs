@@ -217,6 +217,11 @@ pub enum Write {
         dx: i64,
         dy: i64,
     },
+    /// Deletes every tile of a map's layer at all levels.
+    DropLayer {
+        map_id: i64,
+        layer: Layer,
+    },
 }
 
 /// Writes a snapshot of the project to a file; runs on a worker.

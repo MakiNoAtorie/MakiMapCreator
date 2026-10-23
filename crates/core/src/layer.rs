@@ -32,6 +32,8 @@ impl Layer {
 
 /// Height in metres that splits land (above) from sea; one level for every map for now.
 pub const WATER_LEVEL: f32 = 0.0;
+/// Metres above and below `WATER_LEVEL` that coarse land and sea take (ADR-0024).
+pub const COAST_RELIEF: f32 = 200.0;
 
 /// A point in root space, in metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,11 +69,16 @@ pub(crate) fn tile_of(x: u32, y: u32) -> ((u32, u32), usize) {
 
 /// A missing tile is all zeros (sea level) and was never edited.
 pub(crate) fn decode(rec: Option<&TileRecord>) -> Result<Vec<f32>> {
-    let Some(rec) = rec else {
-        return Ok(vec![0.0; TILE_LEN]);
-    };
-    let bytes = zstd::decode_all(rec.data.as_slice()).map_err(|_| Error::CorruptTile)?;
-    if bytes.len() != TILE_LEN * 4 {
+    match rec {
+        Some(rec) => decode_values(&rec.data, TILE_LEN),
+        None => Ok(vec![0.0; TILE_LEN]),
+    }
+}
+
+/// `len` f32 LE values from a zstd blob.
+pub(crate) fn decode_values(data: &[u8], len: usize) -> Result<Vec<f32>> {
+    let bytes = zstd::decode_all(data).map_err(|_| Error::CorruptTile)?;
+    if bytes.len() != len * 4 {
         return Err(Error::CorruptTile);
     }
     Ok(bytes

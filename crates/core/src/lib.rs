@@ -24,7 +24,7 @@ pub use stroke::{EncodedStroke, EndedStroke};
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint, brush_core, brush_weight};
-pub use layer::{Layer, RootPoint, TILE_SIZE, WATER_LEVEL};
+pub use layer::{COAST_RELIEF, Layer, RootPoint, TILE_SIZE, WATER_LEVEL};
 pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;
 mod entities;

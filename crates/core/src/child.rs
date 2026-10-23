@@ -244,14 +244,8 @@ impl Project {
                 None => return Ok(None),
             },
         };
-        let bytes = zstd::decode_all(r.data.as_slice()).map_err(|_| Error::CorruptTile)?;
-        let values: Vec<f32> = bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|b| f32::from_le_bytes(*b))
-            .collect();
-        if values.len() != (r.width * r.height) as usize || values.is_empty() {
+        let values = crate::layer::decode_values(&r.data, (r.width * r.height) as usize)?;
+        if values.is_empty() {
             return Err(Error::CorruptTile);
         }
         Ok(Some(ParentContext {
