@@ -15,11 +15,11 @@ full_text_first_results = 50
 # ADR-0014: the user keeps working during a save; median stroke while it runs = one frame.
 save_edit_pause = 16
 # ADR-0014 one frame: one 512 px stamp into an open stroke after the pen hovered there (tiles prefetched).
-large_brush_stamp = 16
+large_brush_stamp = 20
 # ADR-0025 one frame: a 4-stamp part with detail run on the GPU copy until its frame is drawn.
 # WARP at 320x180, within budget on 2 cores (its upload costs about 85 ns a texel, its full-HD draw 20 ms); `_gpu` on a hardware adapter at 1920x1080.
 stamp_to_visible = 16
 stamp_to_visible_gpu = 16
 # The same with the copy uploaded at pen down.
-stroke_start_to_visible = 16
+stroke_start_to_visible = 20
 stroke_start_to_visible_gpu = 16
