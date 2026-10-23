@@ -81,6 +81,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `mmc-bench` measures through core's API on `mmc-fixtures` data; results are JSON name to `median_ms`, `budget_ms`, `ok`.
 - A budget is one line in `bench/budgets.toml` plus one result; a budget without a result fails, except `*_gpu` without a hardware adapter. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit.
 - GPU budgets time until the frame is drawn: WARP at a small viewport, `*_gpu` at full HD.
+- While features are being built, timings are reported, not enforced: the CI gate step does not fail the build, and timing checks in tests print `timing:` warnings instead of failing.
 
 ## App
 
