@@ -8,11 +8,13 @@ pub struct ShaderPass {
 }
 
 impl ShaderPass {
-    /// `shader` has `vs` and `fs` entry points; `VIEW_WGSL` is prepended.
+    /// `shader` has `vs` and `fs` entry points; `VIEW_WGSL` and the terrain shading are prepended.
     pub fn new(device: &wgpu::Device, shader: &str) -> ShaderPass {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pass"),
-            source: wgpu::ShaderSource::Wgsl(format!("{VIEW_WGSL}{shader}").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{VIEW_WGSL}{}{shader}", crate::terrain::wgsl()).into(),
+            ),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pass"),
