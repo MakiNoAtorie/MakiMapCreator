@@ -11,6 +11,12 @@ pub enum ToolAction {
     Paint { on: f32, off: f32 },
     /// Soft stamps that raise the layer to `raise` or lower it to `lower` (`BrushStroke::target`).
     Target { raise: f32, lower: f32 },
+    /// Soft stamps toward the local mean (`BrushMode::Smooth`).
+    Smooth,
+    /// Soft stamps toward the height under the pen at stroke start (`BrushMode::Flatten`).
+    Flatten,
+    /// Soft stamps of detail noise with no net raise (`BrushMode::Roughen`).
+    Roughen,
 }
 
 /// An edit tool a kind offers; the app maps `id` to its strings and input.

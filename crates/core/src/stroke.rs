@@ -13,6 +13,8 @@ use crate::{Command, Error, MapId, Project, Result};
 struct Session {
     layer: Layer,
     tiles: EditTiles,
+    /// Flatten level, sampled by the stroke's first stamp.
+    level: Option<f32>,
 }
 
 // ponytail: a stroke over the whole map keeps every tile decoded (256 KiB each); flush early if that hurts.
@@ -124,10 +126,11 @@ impl Project {
         let mut s = self.strokes.open.remove(&map).unwrap_or(Session {
             layer,
             tiles: EditTiles::new(),
+            level: None,
         });
         let m = self.map(map)?;
         let touched = match cmd {
-            Command::Brush(b) => self.brush_into(m, b, &mut s.tiles, true),
+            Command::Brush(b) => self.brush_into(m, b, &mut s.tiles, true, &mut s.level),
             Command::Paint(p) => self.paint_into(m, p, &mut s.tiles, true),
             _ => unreachable!(),
         };

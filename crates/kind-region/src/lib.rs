@@ -61,6 +61,21 @@ impl MapKindModule for RegionKind {
                 action: ToolAction::Brush,
             },
             Tool {
+                id: "smooth-height",
+                layer: Layer::HEIGHT,
+                action: ToolAction::Smooth,
+            },
+            Tool {
+                id: "flatten-height",
+                layer: Layer::HEIGHT,
+                action: ToolAction::Flatten,
+            },
+            Tool {
+                id: "roughen-height",
+                layer: Layer::HEIGHT,
+                action: ToolAction::Roughen,
+            },
+            Tool {
                 id: "paint-lock",
                 layer: Layer::LOCK,
                 action: ToolAction::Paint { on: 1.0, off: 0.0 },

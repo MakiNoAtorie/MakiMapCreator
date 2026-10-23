@@ -24,6 +24,7 @@ fn stroke(x: f64, y: f64, strength: f32) -> Command {
         strength,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     })
 }
 
@@ -78,6 +79,7 @@ fn brush_raises_height_inside_radius_only_and_scales_with_pressure() {
         strength: 10.0,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     });
     p.apply(map, half).unwrap();
     assert_eq!(height(&p, map, 6005.0, 2005.0), centre / 2.0);
@@ -191,6 +193,7 @@ fn a_stroke_applied_in_parts_equals_it_whole_and_undoes_in_one_step() {
         strength: 10.0,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     });
     p.apply(b, whole).unwrap();
     for &x in &xs {
@@ -314,6 +317,7 @@ fn each_point_has_its_own_radius_and_falloff_shapes_the_stamp() {
             strength: 10.0,
             falloff,
             target: None,
+            ..Default::default()
         })
     };
     // One command: a small stamp at x = 1005 and a large one at x = 4005.

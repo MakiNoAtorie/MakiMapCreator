@@ -36,7 +36,7 @@ impl Project {
                 r,
                 (tiles, cached),
                 &mut touched,
-                |v, dist2| {
+                |v, dist2, _, _| {
                     if dist2 >= r * r {
                         return false;
                     }

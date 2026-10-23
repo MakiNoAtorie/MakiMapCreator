@@ -360,7 +360,7 @@ impl Painter {
             if !brush {
                 return;
             }
-            if action == Some(ToolAction::Brush) {
+            if !matches!(action, Some(ToolAction::Target { .. })) {
                 ui.separator();
                 ui.label(tr("options-strength"));
                 ui.add(egui::Slider::new(
@@ -371,6 +371,21 @@ impl Painter {
             ui.separator();
             ui.label(tr("options-falloff"));
             ui.add(egui::Slider::new(&mut self.options.falloff, 0.0..=1.0));
+            ui.separator();
+            // Roughen is all detail; its amount is the strength.
+            if action != Some(ToolAction::Roughen) {
+                ui.label(tr("options-detail"));
+                ui.add(egui::Slider::new(&mut self.options.detail, 0.0..=1.0));
+            }
+            ui.label(tr("options-detail-scale"));
+            let (lo, hi) = Options::detail_scale_limits(mpp);
+            let mut px = self.options.detail_scale / mpp;
+            ui.add(
+                egui::Slider::new(&mut px, lo / mpp..=hi / mpp)
+                    .logarithmic(true)
+                    .suffix(" px"),
+            );
+            self.options.detail_scale = px * mpp;
             ui.separator();
             ui.checkbox(&mut self.options.pressure_size, tr("options-pressure-size"));
             ui.checkbox(
@@ -383,7 +398,7 @@ impl Painter {
 
 /// Whether a tool stamps with the brush falloff.
 fn soft(action: ToolAction) -> bool {
-    matches!(action, ToolAction::Brush | ToolAction::Target { .. })
+    !matches!(action, ToolAction::Paint { .. })
 }
 
 /// A brush tool: a hill. A paint tool: a filled disc.

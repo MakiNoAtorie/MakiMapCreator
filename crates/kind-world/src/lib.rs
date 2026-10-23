@@ -178,5 +178,6 @@ pub fn paint(points: Vec<RootPoint>, radius: f64, land: bool) -> Command {
         strength: if land { 1.0 } else { -1.0 },
         falloff: 0.0,
         target: Some(if land { LAND_HEIGHT } else { SEA_DEPTH }),
+        ..Default::default()
     })
 }

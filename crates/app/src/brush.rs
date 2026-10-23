@@ -2,7 +2,8 @@
 
 use eframe::egui::{Key, Modifiers};
 use mmc_core::{
-    BrushStroke, Command, Layer, PaintStroke, RootPoint, StrokePoint, ToolAction, brush_weight,
+    BrushMode, BrushStroke, Command, Detail, Layer, PaintStroke, RootPoint, StrokePoint,
+    ToolAction, brush_weight,
 };
 
 /// Raise adds (brush), raises to the target or paints the tool's "on" value; lower the opposite.
@@ -20,6 +21,10 @@ pub struct Options {
     pub strength: f32,
     /// 0 hard edge, 1 soft (see `mmc_core::brush_weight`).
     pub falloff: f32,
+    /// Root-space detail on soft stamps, 0..=1; 0 is the smooth falloff.
+    pub detail: f32,
+    /// Coarsest detail cell in metres.
+    pub detail_scale: f64,
     pub pressure_size: bool,
     pub pressure_strength: bool,
 }
@@ -39,6 +44,8 @@ impl Options {
             size: 24.0 * mpp,
             strength: 20.0,
             falloff: 1.0,
+            detail: 0.5,
+            detail_scale: 16.0 * mpp,
             pressure_size: false,
             pressure_strength: true,
         }
@@ -46,6 +53,11 @@ impl Options {
 
     pub fn size_limits(mpp: f64) -> (f64, f64) {
         (mpp, 512.0 * mpp)
+    }
+
+    /// Detail scale range; core skips octaves under 2 px, so the smallest has one octave.
+    pub fn detail_scale_limits(mpp: f64) -> (f64, f64) {
+        (2.0 * mpp, 1024.0 * mpp)
     }
 
     /// Radius for a pen `pressure`.
@@ -112,7 +124,7 @@ pub fn plan(
     }
     let up = dir == Direction::Raise;
     let sign = if up { 1.0 } else { -1.0 };
-    let brush = |strength: f32, target: Option<f32>| {
+    let brush = |strength: f32, target: Option<f32>, mode: BrushMode| {
         Command::Brush(BrushStroke {
             layer,
             points: stamps
@@ -126,11 +138,23 @@ pub fn plan(
             strength,
             falloff: o.falloff,
             target,
+            mode,
+            detail: Detail {
+                amount: o.detail,
+                scale: o.detail_scale,
+            },
         })
     };
+    // Smooth and flatten move a fraction of the way per stamp; full strength is all the way.
+    let rate = o.strength / MAX_STRENGTH;
     Some(match action {
-        ToolAction::Brush => brush(sign * o.strength * SPACING as f32, None),
-        ToolAction::Target { raise, lower } => brush(sign, Some(if up { raise } else { lower })),
+        ToolAction::Brush => brush(sign * o.strength * SPACING as f32, None, BrushMode::Add),
+        ToolAction::Target { raise, lower } => {
+            brush(sign, Some(if up { raise } else { lower }), BrushMode::Add)
+        }
+        ToolAction::Smooth => brush(rate, None, BrushMode::Smooth),
+        ToolAction::Flatten => brush(rate, None, BrushMode::Flatten),
+        ToolAction::Roughen => brush(sign * o.strength * SPACING as f32, None, BrushMode::Roughen),
         ToolAction::Paint { on, off } => Command::Paint(PaintStroke {
             layer,
             points: stamps.iter().map(|s| s.at).collect(),
@@ -369,6 +393,28 @@ mod tests {
                 Some(Command::Brush(b)) => assert_eq!(
                     (b.strength.signum(), b.target, b.falloff),
                     (sign, Some(want), 0.3)
+                ),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn shaping_tools_plan_their_mode_with_the_detail_options() {
+        let mut o = Options::for_map(10.0);
+        o.detail = 0.7;
+        o.strength = 50.0;
+        let path = [p(0.0, 1.0)];
+        for (action, mode, strength) in [
+            (ToolAction::Smooth, BrushMode::Smooth, 0.25),
+            (ToolAction::Flatten, BrushMode::Flatten, 0.25),
+            (ToolAction::Roughen, BrushMode::Roughen, -12.5),
+            (ToolAction::Brush, BrushMode::Add, -12.5),
+        ] {
+            match plan(action, Layer::HEIGHT, Direction::Lower, &o, 10.0, &path) {
+                Some(Command::Brush(b)) => assert_eq!(
+                    (b.mode, b.strength, b.detail.amount, b.detail.scale),
+                    (mode, strength, 0.7, 160.0)
                 ),
                 other => panic!("{other:?}"),
             }

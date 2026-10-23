@@ -30,6 +30,7 @@ fn project(dir: &std::path::Path) -> (Project, MapId) {
             strength: 50.0,
             falloff: 1.0,
             target: None,
+            ..Default::default()
         }),
     )
     .unwrap();
@@ -174,6 +175,7 @@ fn derived_layers_get_pyramids_and_rebuilds_replace_cached_tiles() {
             strength: 80.0,
             falloff: 1.0,
             target: None,
+            ..Default::default()
         }),
     )
     .unwrap();

@@ -47,13 +47,15 @@ pub(crate) struct History {
     undone: Vec<Change>,
     /// The last `done` entry is a stroke that `apply_part` still extends.
     open_stroke: bool,
+    /// Flatten level of the open stroke.
+    level: Option<f32>,
 }
 
 impl Project {
     /// Applies `cmd` to `map` in the working copy and records it in the map's history.
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
         self.finish_strokes()?;
-        let changes = self.changes(self.map(map)?, &cmd)?;
+        let changes = self.changes(self.map(map)?, &cmd, &mut None)?;
         let changes = self.clip_to_outline(map, changes)?;
         self.refuse_derived(map, &changes)?;
         self.record(map, changes)
@@ -87,7 +89,12 @@ impl Project {
             return self.stroke_part(map, &cmd);
         }
         self.finish_strokes()?;
-        let changes = self.changes(self.map(map)?, &cmd)?;
+        let mut level = self
+            .history
+            .get(&map)
+            .filter(|h| h.open_stroke)
+            .and_then(|h| h.level);
+        let changes = self.changes(self.map(map)?, &cmd, &mut level)?;
         let changes = self.clip_to_outline(map, changes)?;
         self.refuse_derived(map, &changes)?;
         let key = crate::delete::history_key(map, &changes);
@@ -97,7 +104,9 @@ impl Project {
             (true, Some(Change::Tiles(done)), Change::Tiles(part)) => merge_tiles(done, part),
             (_, _, changes) => self.push(key, changes),
         }
-        self.history.entry(key).or_default().open_stroke = true;
+        let h = self.history.entry(key).or_default();
+        h.open_stroke = true;
+        h.level = level;
         Ok(())
     }
 

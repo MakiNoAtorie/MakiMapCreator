@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+mod brush;
+pub use brush::{BrushMode, DETAIL_STAGE, Detail, detail_noise, stamp_weight};
 mod cache;
 mod command;
 mod jobs;

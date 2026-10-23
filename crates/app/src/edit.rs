@@ -443,7 +443,8 @@ fn layer(cmd: &Command) -> Option<mmc_core::Layer> {
 fn joinable(a: &Command, b: &Command) -> bool {
     match (a, b) {
         (Command::Brush(a), Command::Brush(b)) => {
-            (a.layer, a.strength, a.falloff, a.target) == (b.layer, b.strength, b.falloff, b.target)
+            (a.layer, a.strength, a.falloff, a.target, a.mode, a.detail)
+                == (b.layer, b.strength, b.falloff, b.target, b.mode, b.detail)
         }
         (Command::Paint(a), Command::Paint(b)) => {
             (a.layer, a.radius, a.value) == (b.layer, b.radius, b.value)

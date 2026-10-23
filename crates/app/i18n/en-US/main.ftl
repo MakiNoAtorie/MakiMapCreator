@@ -15,6 +15,8 @@ tool-tip = { $name } ({ $key })
 options-size = Size
 options-strength = Strength
 options-falloff = Falloff
+options-detail = Detail
+options-detail-scale = Detail scale
 options-pressure-size = Pressure: size
 options-pressure-strength = Pressure: strength
 
@@ -169,5 +171,8 @@ regen-summary = { $tiles } tiles change. Edited tiles kept: { $edited }. Tiles w
 regen-apply = Apply
 regen-cancel = Cancel
 tool-brush-height = Height brush
+tool-smooth-height = Smooth
+tool-flatten-height = Flatten
+tool-roughen-height = Roughen
 tool-paint-lock = Lock mask
 tool-paint-land = Land and sea

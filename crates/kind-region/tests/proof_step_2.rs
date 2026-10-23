@@ -5,6 +5,7 @@ use mmc_core::{
     APP_VERSION, BrushStroke, Command, Error, GenRun, Generation, Kinds, Layer, MapId,
     MapKindModule, MapSettings, NewEntity, Project, RootPoint, StrokePoint,
 };
+use mmc_core::{BrushMode, Detail};
 use mmc_kind_region::{REGION, RegionKind};
 use mmc_kind_world::{WORLD, WorldKind};
 
@@ -40,6 +41,11 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<RootPoint> {
 
 /// A world with two square regions sharing the edge x = 12 km and a coast through both.
 fn two_regions(dir: &std::path::Path) -> (Project, MapId) {
+    regions(dir, 12.0, 12.0)
+}
+
+/// Regions West (x 4 to `west_end` km) and East (x `east_start` to 20 km), a coast through both.
+fn regions(dir: &std::path::Path, west_end: f64, east_start: f64) -> (Project, MapId) {
     let mut p = mmc_fixtures::create(&dir.join("wc.sqlite"), world(32)).unwrap();
     let w = p.maps()[0].id;
     p.apply(w, paint(at(12.0, 0.0), 11.0, true)).unwrap();
@@ -53,8 +59,8 @@ fn two_regions(dir: &std::path::Path) -> (Project, MapId) {
         Command::Generate(Generation {
             run: GenRun::new("test", 1),
             entities: vec![
-                region("West", rect(4.0, 4.0, 12.0, 12.0)),
-                region("East", rect(12.0, 4.0, 20.0, 12.0)),
+                region("West", rect(4.0, 4.0, west_end, 12.0)),
+                region("East", rect(east_start, 4.0, 20.0, 12.0)),
             ],
             rasters: vec![],
         }),
@@ -74,6 +80,7 @@ fn brush(at: RootPoint, radius: f64) -> Command {
         strength: 5.0,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     })
 }
 
@@ -242,4 +249,61 @@ fn neighbouring_children_agree_in_their_shared_strip() {
         }
     }
     assert!(n > 1000 && land > 100 && sea > 100, "{n} {land} {sea}");
+}
+
+#[test]
+fn a_detailed_stroke_gives_neighbouring_children_the_same_ground_where_both_own_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // The outlines overlap from x = 11 km to 13 km, so both maps own that ground. Smooth is
+    // left out: it reads ground next to the stamp, which differs past an outline (ADR-0008).
+    let (mut p, w) = regions(dir.path(), 13.0, 11.0);
+    let kinds = kinds();
+    let ids: Vec<_> = p.outlines(w).unwrap().iter().map(|o| o.0).collect();
+    let west = p.create_child_map(w, ids[0], Some(100.0)).unwrap();
+    let east = p.create_child_map(w, ids[1], Some(100.0)).unwrap();
+    let region = kinds.get(REGION).unwrap();
+    for m in [west, east] {
+        let cmd = region
+            .generate(&p, m, &GenRun::new("from-parent", 9))
+            .unwrap();
+        p.apply(m, cmd).unwrap();
+        for (mode, strength, y) in [(BrushMode::Add, 80.0, 6.0), (BrushMode::Roughen, 30.0, 8.0)] {
+            let points: Vec<StrokePoint> = (0..9)
+                .map(|i| StrokePoint {
+                    at: at(11.2 + i as f64 * 0.2, y + (i % 3) as f64 * 0.3),
+                    pressure: 0.4 + i as f32 * 0.05,
+                    radius: 900.0,
+                })
+                .collect();
+            for part in points.chunks(4) {
+                let s = BrushStroke {
+                    points: part.to_vec(),
+                    strength,
+                    mode,
+                    detail: Detail {
+                        amount: 0.9,
+                        scale: 600.0,
+                    },
+                    ..Default::default()
+                };
+                p.apply_part(m, Command::Brush(s)).unwrap();
+            }
+            p.end_stroke(m).unwrap();
+        }
+    }
+
+    let (mut n, mut changed) = (0, 0);
+    for i in 0..40 {
+        for j in 0..60 {
+            let (x, y) = (11.53 + i as f64 * 0.025, 5.0 + j as f64 * 0.075);
+            let (a, b) = (height(&p, west, x, y), height(&p, east, x, y));
+            let (Some(a), Some(b)) = (a, b) else { continue };
+            assert_eq!(a, b, "at ({x}, {y}) km");
+            n += 1;
+            if a.abs() > 100.0 {
+                changed += 1;
+            }
+        }
+    }
+    assert!(n == 2400 && changed > 500, "{n} {changed}");
 }

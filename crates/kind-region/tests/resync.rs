@@ -51,6 +51,7 @@ fn brush(c: RootPoint) -> Command {
         strength: 50.0,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     })
 }
 

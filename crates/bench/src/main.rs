@@ -36,6 +36,20 @@ fn failures(budgets: &BTreeMap<String, f64>, results: &BTreeMap<String, f64>) ->
         .collect()
 }
 
+/// A fixture stroke with the app's default detail, so brush budgets include the detail noise.
+fn detailed(cmd: Command, mpp: f64) -> Command {
+    match cmd {
+        Command::Brush(b) => Command::Brush(mmc_core::BrushStroke {
+            detail: mmc_core::Detail {
+                amount: 0.5,
+                scale: 16.0 * mpp,
+            },
+            ..b
+        }),
+        other => other,
+    }
+}
+
 fn time_ms<T>(f: impl FnOnce() -> T) -> (f64, T) {
     let t = Instant::now();
     let out = f();
@@ -52,7 +66,7 @@ fn measure() -> BTreeMap<String, f64> {
     let mut rng = Rng::new(99);
     let brush = (0..RUNS)
         .map(|_| {
-            let cmd = fixture.stroke(&mut rng);
+            let cmd = detailed(fixture.stroke(&mut rng), fixture.metres_per_pixel);
             time_ms(|| project.apply(map, cmd).unwrap()).0
         })
         .collect();
@@ -60,7 +74,9 @@ fn measure() -> BTreeMap<String, f64> {
     // The pen hovered there first, so the app prefetched the tiles under it.
     let large = (0..RUNS)
         .map(|i| {
-            let Command::Brush(mut b) = fixture.stroke(&mut rng) else {
+            let Command::Brush(mut b) =
+                detailed(fixture.stroke(&mut rng), fixture.metres_per_pixel)
+            else {
                 unreachable!()
             };
             b.points.truncate(1);

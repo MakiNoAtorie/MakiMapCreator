@@ -29,18 +29,38 @@ pub enum Command {
 }
 
 /// Adds `strength * pressure * weight` to `layer` around each point, or with `target` moves each
-/// pixel that part of the way to it; one stroke is one command.
+/// pixel that part of the way to it; `mode` gives the other effects (`BrushMode`), `weight` is
+/// `stamp_weight`. One stroke is one command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrushStroke {
     pub layer: Layer,
     pub points: Vec<StrokePoint>,
-    /// Layer units at the centre at full pressure; negative lowers.
+    /// Layer units at the centre at full pressure; negative lowers. Smooth and flatten: the
+    /// fraction of the way a pixel moves per stamp at the centre at full pressure.
     pub strength: f32,
     /// 0 is a hard disc; 1 is the smooth `(1 - d²)²` profile; between, a hard core then that profile.
     pub falloff: f32,
     /// Raise to (`strength` > 0) or lower to (`strength` < 0) this value; each stamp moves a pixel
     /// `pressure * weight` of the way and never the other way. `None` adds.
     pub target: Option<f32>,
+    pub mode: crate::BrushMode,
+    /// Root-space noise on the stamp weight; the noise roughen adds.
+    pub detail: crate::Detail,
+}
+
+impl Default for BrushStroke {
+    /// An empty smooth height brush with no detail.
+    fn default() -> BrushStroke {
+        BrushStroke {
+            layer: Layer::HEIGHT,
+            points: vec![],
+            strength: 0.0,
+            falloff: 1.0,
+            target: None,
+            mode: crate::BrushMode::Add,
+            detail: crate::Detail::NONE,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,11 +78,11 @@ pub fn brush_weight(d2: f64, falloff: f32) -> f32 {
 }
 
 /// Squared radius fraction of the hard core of a brush with `falloff`.
-fn brush_core(falloff: f32) -> f64 {
+pub(crate) fn brush_core(falloff: f32) -> f64 {
     (1.0 - falloff.clamp(0.0, 1.0) as f64).powi(2)
 }
 
-fn weight_in(d2: f64, core: f64) -> f32 {
+pub(crate) fn weight_in(d2: f64, core: f64) -> f32 {
     if d2 <= core {
         return 1.0;
     }
@@ -71,11 +91,17 @@ fn weight_in(d2: f64, core: f64) -> f32 {
 }
 
 impl Project {
-    pub(crate) fn changes(&self, map: &Map, cmd: &Command) -> Result<Change> {
+    /// `level` is the flatten level of the stroke `cmd` belongs to; `None` samples it.
+    pub(crate) fn changes(
+        &self,
+        map: &Map,
+        cmd: &Command,
+        level: &mut Option<f32>,
+    ) -> Result<Change> {
         match cmd {
             Command::Brush(s) => {
                 let mut tiles = EditTiles::new();
-                self.brush_into(map, s, &mut tiles, false)?;
+                self.brush_into(map, s, &mut tiles, false, level)?;
                 Ok(Change::Tiles(tile_changes(map, s.layer, tiles)))
             }
             Command::Entity(e @ EntityEdit::DeleteWithMap { .. }) => {
@@ -105,51 +131,8 @@ impl Project {
         }
     }
 
-    /// Adds the stroke to `tiles`, loading the ones it reaches first; gives the tiles it changed.
-    /// With `cached`, a tile in the tile cache is taken from it and its record is read later.
-    pub(crate) fn brush_into(
-        &self,
-        map: &Map,
-        s: &BrushStroke,
-        tiles: &mut EditTiles,
-        cached: bool,
-    ) -> Result<BTreeSet<(u32, u32)>> {
-        let mut touched = BTreeSet::new();
-        for p in &s.points {
-            let r = p.radius / map.settings.metres_per_pixel;
-            let (cx, cy) = map.to_pixels(p.at);
-            let amount = s.strength * p.pressure;
-            let (core, r2) = (brush_core(s.falloff), r * r);
-            let raise = s.strength > 0.0;
-            self.disc(
-                map,
-                s.layer,
-                (cx, cy),
-                r,
-                (tiles, cached),
-                &mut touched,
-                |v, dist2| {
-                    let d2 = dist2 / r2;
-                    if d2 >= 1.0 {
-                        return false;
-                    }
-                    let w = weight_in(d2, core);
-                    match s.target {
-                        None => *v += amount * w,
-                        Some(t) if (*v < t) == raise && *v != t => {
-                            *v += (t - *v) * (p.pressure * w).min(1.0)
-                        }
-                        Some(_) => return false,
-                    }
-                    true
-                },
-            )?;
-        }
-        Ok(touched)
-    }
-
-    /// Calls `f(value, squared px distance)` for each pixel of `layer` in the box of the disc at `c`
-    /// with radius `r` px, tile by tile; `f` gives whether it changed the pixel.
+    /// Calls `f(value, squared px distance, x, y)` for each pixel (`x`, `y`) of `layer` in the box
+    /// of the disc at `c` with radius `r` px, tile by tile; `f` gives whether it changed the pixel.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn disc(
         &self,
@@ -159,7 +142,7 @@ impl Project {
         r: f64,
         (tiles, cached): (&mut EditTiles, bool),
         touched: &mut BTreeSet<(u32, u32)>,
-        f: impl Fn(&mut f32, f64) -> bool,
+        f: impl Fn(&mut f32, f64, i64, i64) -> bool + Sync,
     ) -> Result<()> {
         let (w, h) = (map.settings.width as i64, map.settings.height as i64);
         let (x0, x1) = (
@@ -175,6 +158,72 @@ impl Project {
         }
         let t = TILE_SIZE as i64;
         let (xs, ys) = (x0 / t..(x1 - 1) / t + 1, y0 / t..(y1 - 1) / t + 1);
+        let loaded = self.load_tiles(map, layer, (xs.clone(), ys.clone()), (tiles, cached))?;
+        let in_box = |k: &(u32, u32)| xs.contains(&(k.0 as i64)) && ys.contains(&(k.1 as i64));
+        let mut work: Vec<((u32, u32), &mut Vec<f32>, bool)> = tiles
+            .iter_mut()
+            .filter(|(k, _)| in_box(k))
+            .map(|(k, v)| (*k, &mut v.1, false))
+            .collect();
+        let one = |((tx, ty), values, hit): &mut ((u32, u32), &mut Vec<f32>, bool)| {
+            let (tx, ty) = (*tx as i64, *ty as i64);
+            for y in y0.max(ty * t)..y1.min((ty + 1) * t) {
+                let dy = (y as f64 + 0.5 - cy).powi(2);
+                if dy >= r * r {
+                    continue;
+                }
+                let row = ((y - ty * t) * t) as usize;
+                // Only the row's chord can be inside; `f` still tests each pixel.
+                let half = (r * r - dy).sqrt();
+                let xa = ((cx - 0.5 - half).floor() as i64).max(x0.max(tx * t));
+                let xb = ((cx - 0.5 + half).ceil() as i64 + 1).min(x1.min((tx + 1) * t));
+                if xa >= xb {
+                    continue;
+                }
+                let (a, b) = (row + (xa - tx * t) as usize, row + (xb - tx * t) as usize);
+                for (x, v) in (xa..xb).zip(&mut values[a..b]) {
+                    let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
+                    *hit |= f(v, dist2, x, y);
+                }
+            }
+        };
+        // Large stamps (detail noise costs tens of ns a pixel) run tile by tile on scoped threads.
+        let threads = if (x1 - x0) * (y1 - y0) >= 1 << 16 {
+            std::thread::available_parallelism().map_or(1, |n| n.get())
+        } else {
+            1
+        };
+        if threads <= 1 || work.len() <= 1 {
+            work.iter_mut().for_each(one);
+        } else {
+            let n = work.len().div_ceil(threads);
+            std::thread::scope(|sc| {
+                for chunk in work.chunks_mut(n) {
+                    sc.spawn(|| chunk.iter_mut().for_each(one));
+                }
+            });
+        }
+        let hits: Vec<((u32, u32), bool)> = work.into_iter().map(|(k, _, h)| (k, h)).collect();
+        for (key, hit) in hits {
+            if hit {
+                touched.insert(key);
+            } else if loaded.contains(&key) {
+                // Only the box reaches this tile; it stays unedited.
+                tiles.remove(&key);
+            }
+        }
+        Ok(())
+    }
+
+    /// Loads the tiles in `xs` x `ys` (tile indices) not in `tiles` yet: from the cache with
+    /// `cached`, else from storage in one query. Gives the tiles it loaded.
+    pub(crate) fn load_tiles(
+        &self,
+        map: &Map,
+        layer: Layer,
+        (xs, ys): (std::ops::Range<i64>, std::ops::Range<i64>),
+        (tiles, cached): (&mut EditTiles, bool),
+    ) -> Result<BTreeSet<(u32, u32)>> {
         // Tiles not loaded yet: from the cache, else from storage in one query.
         let mut missing = vec![];
         let mut loaded: BTreeSet<(u32, u32)> = BTreeSet::new();
@@ -213,45 +262,7 @@ impl Project {
                 loaded.insert(key);
             }
         }
-        let in_box = |k: &(u32, u32)| xs.contains(&(k.0 as i64)) && ys.contains(&(k.1 as i64));
-        let mut work: Vec<((u32, u32), &mut Vec<f32>, bool)> = tiles
-            .iter_mut()
-            .filter(|(k, _)| in_box(k))
-            .map(|(k, v)| (*k, &mut v.1, false))
-            .collect();
-        let one = |((tx, ty), values, hit): &mut ((u32, u32), &mut Vec<f32>, bool)| {
-            let (tx, ty) = (*tx as i64, *ty as i64);
-            for y in y0.max(ty * t)..y1.min((ty + 1) * t) {
-                let dy = (y as f64 + 0.5 - cy).powi(2);
-                if dy >= r * r {
-                    continue;
-                }
-                let row = ((y - ty * t) * t) as usize;
-                // Only the row's chord can be inside; `f` still tests each pixel.
-                let half = (r * r - dy).sqrt();
-                let xa = ((cx - 0.5 - half).floor() as i64).max(x0.max(tx * t));
-                let xb = ((cx - 0.5 + half).ceil() as i64 + 1).min(x1.min((tx + 1) * t));
-                if xa >= xb {
-                    continue;
-                }
-                let (a, b) = (row + (xa - tx * t) as usize, row + (xb - tx * t) as usize);
-                for (x, v) in (xa..xb).zip(&mut values[a..b]) {
-                    let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
-                    *hit |= f(v, dist2);
-                }
-            }
-        };
-        work.iter_mut().for_each(one);
-        let hits: Vec<((u32, u32), bool)> = work.into_iter().map(|(k, _, h)| (k, h)).collect();
-        for (key, hit) in hits {
-            if hit {
-                touched.insert(key);
-            } else if loaded.contains(&key) {
-                // Only the box reaches this tile; it stays unedited.
-                tiles.remove(&key);
-            }
-        }
-        Ok(())
+        Ok(loaded)
     }
 }
 

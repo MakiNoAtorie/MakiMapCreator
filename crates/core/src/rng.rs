@@ -40,15 +40,20 @@ pub fn unit(seed: u64, stage: &str, key: Key) -> f64 {
 
 /// Value noise in `0..1` on a root-space lattice of `cell` metres, the same at every map scale.
 pub fn noise(seed: u64, stage: &str, at: RootPoint, cell: f64) -> f64 {
-    let (gx, gy) = (at.x / cell, at.y / cell);
-    let (x0, y0) = (gx.floor(), gy.floor());
-    let corner = |i: f64, j: f64| {
+    noise_with(at, cell, |cx, cy| {
         let p = RootPoint {
-            x: (x0 + i) * cell,
-            y: (y0 + j) * cell,
+            x: cx * cell,
+            y: cy * cell,
         };
         unit(seed, stage, Key::At(p))
-    };
+    })
+}
+
+/// `noise` with the lattice value at integer lattice coordinates (`cx`, `cy`) from `corner`.
+pub(crate) fn noise_with(at: RootPoint, cell: f64, corner: impl Fn(f64, f64) -> f64) -> f64 {
+    let (gx, gy) = (at.x / cell, at.y / cell);
+    let (x0, y0) = (gx.floor(), gy.floor());
+    let corner = |i: f64, j: f64| corner(x0 + i, y0 + j);
     let s = |t: f64| t * t * (3.0 - 2.0 * t);
     let (fx, fy) = (s(gx - x0), s(gy - y0));
     let top = corner(0.0, 0.0) + (corner(1.0, 0.0) - corner(0.0, 0.0)) * fx;

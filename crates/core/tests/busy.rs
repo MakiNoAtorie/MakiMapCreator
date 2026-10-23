@@ -50,6 +50,7 @@ fn edits_never_fail_or_stall_while_background_writers_run() {
             strength: 1.0,
             falloff: 1.0,
             target: None,
+            ..Default::default()
         })
     };
     let mut rng = Rng::new(5);

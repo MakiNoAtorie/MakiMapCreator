@@ -37,6 +37,7 @@ fn stroke(c: RootPoint, radius: f64, strength: f32, target: Option<f32>) -> Comm
         strength,
         falloff: 0.0,
         target,
+        ..Default::default()
     })
 }
 
