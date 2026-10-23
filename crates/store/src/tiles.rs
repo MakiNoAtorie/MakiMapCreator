@@ -86,7 +86,7 @@ pub(crate) fn write_tile(tx: &Connection, k: &TileKey, rec: Option<&TileRecord>)
     Ok(())
 }
 
-/// Bytes of tile data per background write transaction: an edit waits at most this long.
+/// Most bytes of tile data per background write transaction.
 const CHUNK_BYTES: usize = 1 << 20;
 
 /// A worker's connection to the working copy; its writes give way to edits.
@@ -148,24 +148,26 @@ impl TileConn {
         tile(&self.conn, key)
     }
 
-    /// Writes tiles in about `CHUNK_BYTES` transactions, each after pending edits.
+    /// Writes tiles in transactions of at most `CHUNK_BYTES`, each after pending edits.
+    /// A transaction ends after the row in progress once an edit is waiting, so an edit waits for
+    /// one row and a commit at most, never a whole chunk.
     pub fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
+        let editing = || self.gate.load(std::sync::atomic::Ordering::SeqCst) > 0;
         let mut rest = writes;
         while !rest.is_empty() {
-            while self.gate.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            while editing() {
                 std::thread::sleep(std::time::Duration::from_micros(100));
-            }
-            let (mut n, mut bytes) = (0, 0);
-            while n < rest.len() && (n == 0 || bytes < CHUNK_BYTES) {
-                bytes += rest[n].1.as_ref().map_or(64, |r| r.data.len());
-                n += 1;
             }
             let tx = rusqlite::Transaction::new_unchecked(
                 &self.conn,
                 rusqlite::TransactionBehavior::Immediate,
             )?;
-            for (k, rec) in &rest[..n] {
+            let (mut n, mut bytes) = (0, 0);
+            while n < rest.len() && (n == 0 || (bytes < CHUNK_BYTES && !editing())) {
+                let (k, rec) = &rest[n];
                 write_tile(&tx, k, rec.as_ref())?;
+                bytes += rec.as_ref().map_or(64, |r| r.data.len());
+                n += 1;
             }
             tx.commit()?;
             rest = &rest[n..];
