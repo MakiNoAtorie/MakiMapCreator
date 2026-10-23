@@ -110,7 +110,7 @@ impl MapKindModule for RegionKind {
             (m.origin.y / mpp).round() as i64,
         );
         let rows: Vec<i64> = (0..s.height as i64).collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = mmc_core::cpus();
         let values = par_map(threads, &rows, &|| false, |&j| {
             (0..s.width as i64)
                 .map(|i| {

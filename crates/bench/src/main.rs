@@ -96,8 +96,6 @@ fn measure() -> BTreeMap<String, f64> {
             ms
         })
         .collect();
-    let mut gpu = BTreeMap::new();
-    live::measure(&project, map, &fixture, &mut rng, &mut gpu);
     // Save and open time the fixture as built; strokes during a save grow the file by machine speed.
     project.wait_for_jobs().unwrap();
     let save = (0..RUNS)
@@ -168,6 +166,7 @@ fn measure() -> BTreeMap<String, f64> {
     }
     p.close().unwrap();
 
+    let edited = fixture;
     // ADR-0014: full rebuild of derived layers at 4096² after a stroke wide enough to touch many tiles.
     let fixture = LargeMap {
         size: 4096,
@@ -185,7 +184,14 @@ fn measure() -> BTreeMap<String, f64> {
         .collect();
     project.close().unwrap();
 
-    gpu.extend([
+    // GPU budgets last: WARP's threads would share the CPU with the measures above.
+    let mut results = BTreeMap::new();
+    let p = mmc_fixtures::open(&file, &dir.path().join("live.sqlite")).unwrap();
+    let map = p.maps()[0].id;
+    live::measure(&p, map, &edited, &mut rng, &mut results);
+    p.close().unwrap();
+
+    results.extend([
         ("full_rebuild".into(), median(rebuild)),
         ("brush_stroke".into(), median(brush)),
         ("large_brush_stamp".into(), median(large)),
@@ -196,7 +202,7 @@ fn measure() -> BTreeMap<String, f64> {
         ("save".into(), median(save)),
         ("save_edit_pause".into(), median(pause)),
     ]);
-    gpu
+    results
 }
 
 fn json(budgets: &BTreeMap<String, f64>, results: &BTreeMap<String, f64>) -> String {

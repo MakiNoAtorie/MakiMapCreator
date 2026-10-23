@@ -49,6 +49,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Pipeline and jobs
 
 - Stage work goes through `par_map` (item order), so output never depends on thread count. Long reads check cancel per row.
+- Thread counts come from `mmc_core::cpus()` (it honours the process affinity); an edit spawns at most `cpus() - 1`.
 - Randomness only through `mmc_core::rng`; `mmc_fixtures::Rng` makes test and bench input, never map content.
 - Tests wait through the API (`wait_for_jobs`, `wait_tiles`), never sleep.
 - Core workers run below normal priority, their writes (`holding_write_lock`) at normal. `Jobs` runs one job per owner; a submit replaces the waiting one.

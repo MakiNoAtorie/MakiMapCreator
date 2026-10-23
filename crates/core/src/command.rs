@@ -86,7 +86,8 @@ pub(crate) fn weight_in(d2: f64, core: f64) -> f32 {
     if d2 <= core {
         return 1.0;
     }
-    let t = (1.0 - d2) / (1.0 - core);
+    // A reciprocal, so a loop computes it once.
+    let t = (1.0 - d2) * (1.0 / (1.0 - core));
     (t * t) as f32
 }
 
@@ -189,7 +190,7 @@ impl Project {
         };
         // Large stamps (detail noise costs tens of ns a pixel) run tile by tile on scoped threads.
         let threads = if (x1 - x0) * (y1 - y0) >= 1 << 16 {
-            std::thread::available_parallelism().map_or(1, |n| n.get())
+            crate::jobs::edit_threads()
         } else {
             1
         };

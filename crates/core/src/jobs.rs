@@ -27,6 +27,37 @@ fn set_priority(_priority: i32) {
     }
 }
 
+/// Processors this process may run on; `available_parallelism` ignores the affinity on Windows.
+pub fn cpus() -> usize {
+    static CPUS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CPUS.get_or_init(|| {
+        let all = std::thread::available_parallelism().map_or(1, |n| n.get());
+        #[cfg(windows)]
+        {
+            unsafe extern "system" {
+                fn GetCurrentProcess() -> isize;
+                fn GetProcessAffinityMask(
+                    process: isize,
+                    mask: *mut usize,
+                    system: *mut usize,
+                ) -> i32;
+            }
+            let (mut mask, mut system) = (0usize, 0usize);
+            if unsafe { GetProcessAffinityMask(GetCurrentProcess(), &mut mask, &mut system) } != 0
+                && mask != 0
+            {
+                return all.min(mask.count_ones() as usize);
+            }
+        }
+        all
+    })
+}
+
+/// Threads for one edit's stamp: one processor stays with the workers; on 2 cores extra threads cost 4x.
+pub(crate) fn edit_threads() -> usize {
+    cpus().saturating_sub(1).max(1)
+}
+
 /// Runs the calling thread below normal priority, so background work never takes the CPU from an edit or the UI (ADR-0014).
 pub(crate) fn background_priority() {
     set_priority(-1);

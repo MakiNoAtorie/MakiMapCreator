@@ -203,7 +203,7 @@ impl DetailTables {
 /// Squared distance from `at` to `centre` as a fraction of `radius`, all root-space metres.
 fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
     let (dx, dy) = (at.x - centre.x, at.y - centre.y);
-    (dx * dx + dy * dy) / (radius * radius)
+    (dx * dx + dy * dy) * (1.0 / (radius * radius))
 }
 
 /// `w = falloff(d²) * max(0, 1 + amount * n)` in f64, then to f32.
@@ -359,10 +359,19 @@ impl Nodes {
         Nodes { nx0, gy0, w, rows }
     }
 
-    /// Detail noise at global pixel `g`.
-    fn at(&self, (gx, gy): (i64, i64)) -> f64 {
-        let i = (gy - self.gy0) as usize * self.w + (gx.div_euclid(NODE) - self.nx0) as usize;
-        let fx = gx.rem_euclid(NODE) as f64 / NODE as f64;
+    /// Per global pixel column in `gx0..gx1`: its node column and weight, for `at`.
+    fn columns(&self, gx0: i64, gx1: i64) -> Vec<(usize, f64)> {
+        (gx0..gx1)
+            .map(|gx| {
+                let c = (gx.div_euclid(NODE) - self.nx0) as usize;
+                (c, gx.rem_euclid(NODE) as f64 / NODE as f64)
+            })
+            .collect()
+    }
+
+    /// Detail noise at global pixel row `gy` and a column from `columns`.
+    fn at(&self, gy: i64, (c, fx): (usize, f64)) -> f64 {
+        let i = (gy - self.gy0) as usize * self.w + c;
         lerp(self.rows[i], self.rows[i + 1], fx)
     }
 }
@@ -371,7 +380,7 @@ impl Nodes {
 fn par_rows(v: &mut [f64], w: usize, f: impl Fn(usize, &mut [f64]) + Sync) {
     let rows = v.len() / w;
     let threads = if v.len() >= 1 << 13 {
-        std::thread::available_parallelism().map_or(1, |n| n.get())
+        crate::jobs::edit_threads()
     } else {
         1
     };
@@ -515,6 +524,20 @@ impl Project {
             };
             let lvl = level.unwrap_or(0.0);
             let amount = s.strength * p.pressure;
+            // Per column and row of the disc's box, the parts of `dist2` and the noise.
+            let (bx0, bx1) = (
+                ((cx - r).floor() as i64).max(0),
+                ((cx + r).ceil() as i64).min(w),
+            );
+            let (by0, by1) = (
+                ((cy - r).floor() as i64).max(0),
+                ((cy + r).ceil() as i64).min(h),
+            );
+            let sq = |d: f64| d * d;
+            let dxx: Vec<f64> = (bx0..bx1).map(|x| sq(root(x, 0).x - p.at.x)).collect();
+            let dyy: Vec<f64> = (by0..by1).map(|y| sq(root(0, y).y - p.at.y)).collect();
+            let inv = 1.0 / (p.radius * p.radius);
+            let cols = nodes.as_ref().map(|l| l.columns(gxi + bx0, gxi + bx1));
             self.disc(
                 map,
                 s.layer,
@@ -523,14 +546,19 @@ impl Project {
                 (tiles, cached),
                 &mut touched,
                 |v, _, x, y| {
-                    let at = root(x, y);
-                    let d2 = dist2(at, p.at, p.radius);
+                    // `dist2` of the pixel centre, term by term.
+                    let d2 = (dxx[(x - bx0) as usize] + dyy[(y - by0) as usize]) * inv;
                     if d2 >= 1.0 {
                         return false;
                     }
                     let fall = weight_in(d2, core);
-                    let n = nodes.as_ref().map_or(0.0, |l| l.at((gxi + x, gyi + y)));
-                    let wt = modulate(fall, s.detail, n);
+                    let (n, wt) = match (&nodes, &cols) {
+                        (Some(l), Some(c)) => {
+                            let n = l.at(gyi + y, c[(x - bx0) as usize]);
+                            (n, modulate(fall, s.detail, n))
+                        }
+                        _ => (0.0, fall),
+                    };
                     let old = *v;
                     match s.mode {
                         BrushMode::Add => match s.target {

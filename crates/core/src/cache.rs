@@ -61,7 +61,7 @@ impl TileCache {
     pub(crate) fn new(open: TileOpener) -> TileCache {
         let shared = Arc::new(Shared::default());
         shared.lock().limit = TILE_CACHE_BYTES;
-        let n = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
+        let n = crate::cpus().clamp(2, 4);
         let mut workers: Vec<_> = (0..n)
             .map(|_| {
                 let (shared, open) = (shared.clone(), open.clone());

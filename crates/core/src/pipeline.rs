@@ -316,7 +316,7 @@ pub(crate) struct Pipeline {
 impl Default for Pipeline {
     fn default() -> Self {
         Pipeline {
-            threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
+            threads: crate::cpus(),
             maps: HashMap::new(),
         }
     }

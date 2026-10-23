@@ -10,6 +10,7 @@ pub use brush::{
 mod cache;
 mod command;
 mod jobs;
+pub use jobs::cpus;
 mod layer;
 mod migrate;
 pub mod persist;

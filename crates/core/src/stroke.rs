@@ -61,7 +61,7 @@ impl EndedStroke {
     /// Nothing else writes these tiles while the stroke is open, so the records are as they were.
     pub fn encode(self) -> Result<EncodedStroke> {
         let tiles: Vec<_> = self.tiles.into_iter().collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = crate::cpus();
         let data = crate::par_map(threads, &tiles, &|| false, |(_, (_, v))| encode(v))
             .expect("never cancelled");
         let mut conn = None;
