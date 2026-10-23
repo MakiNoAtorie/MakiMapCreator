@@ -108,7 +108,30 @@ pub fn read_overviews(
 impl Project {
     pub(crate) fn tiles(&self) -> &TileCache {
         self.cache
-            .get_or_init(|| TileCache::new(self.store.tile_opener()))
+            .get_or_init(|| TileCache::new(self.writer().opener()))
+    }
+
+    pub(crate) fn writer(&self) -> &crate::writer::Writer {
+        self.writer
+            .get_or_init(|| crate::writer::Writer::new(self.store.tile_opener()))
+    }
+
+    /// A worker connection opener whose reads see edits still being written.
+    pub(crate) fn tile_opener(&self) -> crate::persist::TileOpener {
+        self.writer().opener()
+    }
+
+    /// The stored record at `key`, or the one an edit is still writing.
+    pub(crate) fn tile_record(&self, key: &TileKey) -> Result<Option<TileRecord>> {
+        match self.writer.get().and_then(|w| w.overlay().get(key)) {
+            Some(rec) => Ok(rec),
+            None => self.store.tile(key),
+        }
+    }
+
+    /// Blocks until every edit's tiles are in the working copy.
+    pub(crate) fn flush_writes(&self) -> Result<()> {
+        self.writer.get().map_or(Ok(()), |w| w.flush())
     }
 
     /// The coarsest pyramid level of `map`; its single tile covers the whole map.
@@ -167,7 +190,8 @@ impl Project {
         }
     }
 
-    /// Writes `rows` in one transaction; a worker then updates pyramid levels above level-0 tiles.
+    /// Writes `rows`: tile-only rows on the edit writer, others in one transaction after it;
+    /// a worker then updates pyramid levels above level-0 tiles.
     pub(crate) fn write_rows(&self, rows: &[Write]) -> Result<()> {
         let put = rows
             .iter()
@@ -177,7 +201,25 @@ impl Project {
             })
             .map(|(k, rec)| Ok((k.clone(), decode(rec.as_ref())?.into())))
             .collect::<Result<Vec<(TileKey, Tile)>>>()?;
-        self.store.write(rows)?;
+        if !put.is_empty() && put.len() == rows.len() {
+            let tiles = rows
+                .iter()
+                .filter_map(|w| match w {
+                    Write::Tile(k, rec) => Some((k.clone(), rec.clone())),
+                    _ => None,
+                })
+                .collect();
+            self.writer().submit(tiles)?;
+        } else {
+            self.flush_writes()?;
+            self.store.write(rows)?;
+            if let Some(w) = self.writer.get() {
+                w.wrote(put.iter().map(|(k, _)| k.clone()));
+                if rows.iter().any(|r| matches!(r, Write::ShiftTiles { .. })) {
+                    w.forget_written();
+                }
+            }
+        }
         if put.is_empty() {
             return Ok(());
         }

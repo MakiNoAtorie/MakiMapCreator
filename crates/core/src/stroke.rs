@@ -158,7 +158,14 @@ impl Project {
         let rows: Vec<Write> = changes.iter().map(|c| c.write(true)).collect();
         let keys: Vec<_> = changes.iter().map(|c| c.key.clone()).collect();
         let top = self.top_level(s.map)?;
-        if let Err(e) = self.store.write(&rows) {
+        let tiles = rows
+            .iter()
+            .filter_map(|w| match w {
+                Write::Tile(k, rec) => Some((k.clone(), rec.clone())),
+                _ => None,
+            })
+            .collect();
+        if let Err(e) = self.writer().submit(tiles) {
             // The cache showed the lost stroke; reload those tiles.
             self.tiles().forget(|k| keys.contains(k));
             return Err(e);

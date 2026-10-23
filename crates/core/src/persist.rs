@@ -308,8 +308,10 @@ pub trait TileStore: Send {
         layer: Layer,
         stop: &dyn Fn() -> bool,
     ) -> Result<Option<LayerTiles>>;
-    /// Writes all tiles in one transaction; `None` deletes the tile.
+    /// Writes tiles in background-sized transactions that give way to edits; `None` deletes the tile.
     fn write_tiles(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()>;
+    /// Writes an edit's tiles in one transaction.
+    fn write_edit(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()>;
 }
 
 /// Full-text queries on a read connection.

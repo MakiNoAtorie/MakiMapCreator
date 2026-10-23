@@ -41,10 +41,21 @@ pub(crate) fn holding_write_lock<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
-/// One worker thread per job; a new job cancels the older ones.
+/// Runs a job, and gives its commit unless it was cancelled.
+type Task<T> = Box<dyn FnOnce(Cancelled) -> Option<Box<dyn FnOnce() -> T + Send>> + Send>;
+
+struct Queue<T> {
+    /// The latest job not started yet, with its id.
+    next: Option<(u64, Task<T>)>,
+    stop: bool,
+}
+
+/// One worker thread runs the jobs in turn; a new job cancels the running one and replaces a waiting one,
+/// so a burst of submits never piles up threads.
 pub(crate) struct Jobs<T> {
     shared: Arc<Shared<T>>,
-    threads: Vec<JoinHandle<()>>,
+    queue: Arc<(Mutex<Queue<T>>, Condvar)>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl<T> Default for Jobs<T> {
@@ -55,31 +66,36 @@ impl<T> Default for Jobs<T> {
                 done: Mutex::new((0, None)),
                 finished: Condvar::new(),
             }),
-            threads: vec![],
+            queue: Arc::new((
+                Mutex::new(Queue {
+                    next: None,
+                    stop: false,
+                }),
+                Condvar::new(),
+            )),
+            worker: None,
         }
     }
 }
 
 impl<T: Send + 'static> Jobs<T> {
     /// Runs `job`, then `commit` unless a newer job exists; commits run one at a time, in order.
-    pub fn submit<P>(
+    pub fn submit<P: Send + 'static>(
         &mut self,
         job: impl FnOnce(Cancelled) -> Option<P> + Send + 'static,
         commit: impl FnOnce(P) -> T + Send + 'static,
     ) {
         let id = self.shared.latest.fetch_add(1, SeqCst) + 1;
-        let s = Arc::clone(&self.shared);
-        self.threads.retain(|t| !t.is_finished());
-        self.threads.push(std::thread::spawn(move || {
-            background_priority();
-            let cancelled = || s.latest.load(SeqCst) != id;
-            let Some(out) = job(&cancelled) else { return };
-            let mut done = s.done.lock().unwrap();
-            if !cancelled() {
-                *done = (id, Some(commit(out)));
-                s.finished.notify_all();
-            }
-        }));
+        let task: Task<T> = Box::new(move |c: Cancelled| {
+            job(c).map(|p| Box::new(move || commit(p)) as Box<dyn FnOnce() -> T + Send>)
+        });
+        let (q, wake) = &*self.queue;
+        q.lock().unwrap().next = Some((id, task));
+        wake.notify_all();
+        if self.worker.is_none() {
+            let (shared, queue) = (Arc::clone(&self.shared), Arc::clone(&self.queue));
+            self.worker = Some(std::thread::spawn(move || work(&shared, &queue)));
+        }
     }
 
     /// The result of the latest job if it has finished and was not taken yet; never blocks.
@@ -103,12 +119,46 @@ impl<T: Send + 'static> Jobs<T> {
     }
 }
 
+fn work<T: Send>(s: &Shared<T>, queue: &(Mutex<Queue<T>>, Condvar)) {
+    background_priority();
+    let (q, wake) = queue;
+    loop {
+        let (id, task) = {
+            let mut q = q.lock().unwrap();
+            loop {
+                if q.stop {
+                    return;
+                }
+                if let Some(t) = q.next.take() {
+                    break t;
+                }
+                q = wake.wait(q).unwrap();
+            }
+        };
+        let cancelled = || s.latest.load(SeqCst) != id;
+        if cancelled() {
+            continue;
+        }
+        let Some(commit) = task(&cancelled) else {
+            continue;
+        };
+        let mut done = s.done.lock().unwrap();
+        if !cancelled() {
+            *done = (id, Some(commit()));
+            s.finished.notify_all();
+        }
+    }
+}
+
 impl<T> Drop for Jobs<T> {
-    /// Cancels and joins all jobs, so no thread holds the working copy open.
+    /// Cancels the running job and joins the worker, so no thread holds the working copy open.
     fn drop(&mut self) {
         self.shared.latest.fetch_add(1, SeqCst);
-        for t in self.threads.drain(..) {
-            let _ = t.join();
+        let (q, wake) = &*self.queue;
+        q.lock().unwrap().stop = true;
+        wake.notify_all();
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
         }
     }
 }

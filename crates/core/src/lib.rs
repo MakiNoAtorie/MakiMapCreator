@@ -13,6 +13,7 @@ mod pyramid;
 pub mod rng;
 mod save;
 mod stroke;
+mod writer;
 pub use stroke::{EncodedStroke, EndedStroke};
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
@@ -208,6 +209,7 @@ pub struct Project {
     cache: std::sync::OnceLock<cache::TileCache>,
     resync: resync::State,
     strokes: stroke::Strokes,
+    writer: std::sync::OnceLock<writer::Writer>,
 }
 
 impl Project {
@@ -245,6 +247,7 @@ impl Project {
             cache: Default::default(),
             resync: Default::default(),
             strokes: Default::default(),
+            writer: Default::default(),
         })
     }
 
@@ -267,6 +270,7 @@ impl Project {
             cache: Default::default(),
             resync: Default::default(),
             strokes: Default::default(),
+            writer: Default::default(),
         };
         p.names = p.build_name_index()?;
         p.load_child_outlines()?;
@@ -299,10 +303,12 @@ impl Project {
     /// Waits for a running save, then closes the project and deletes its working copy.
     pub fn close(mut self) -> Result<()> {
         self.finish_strokes()?;
+        self.flush_writes()?;
         self.wait_for_save()?;
         self.pipeline.shutdown();
-        // Tile workers hold read connections to the working copy; stop them first.
+        // Tile workers and the edit writer hold connections to the working copy; stop them first.
         drop(self.cache);
+        drop(self.writer);
         self.store.close()
     }
 

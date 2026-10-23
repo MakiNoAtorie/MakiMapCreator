@@ -17,7 +17,7 @@ impl Project {
     /// Starts a background save of every edit made before this call; a newer save replaces it.
     pub fn save(&mut self, file: &Path) {
         // An open stroke is written first, so the snapshot holds whole strokes only.
-        if let Err(e) = self.finish_strokes() {
+        if let Err(e) = self.finish_strokes().and_then(|()| self.flush_writes()) {
             self.saves.jobs.submit(|_| Some(()), move |()| Err(e));
             return;
         }

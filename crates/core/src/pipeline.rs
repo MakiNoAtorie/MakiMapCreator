@@ -354,6 +354,7 @@ impl Project {
 
     /// Blocks until every requested rebuild has finished.
     pub fn wait_for_jobs(&mut self) -> Result<()> {
+        self.flush_writes()?;
         let mut any = false;
         for st in self.pipeline.maps.values_mut() {
             if let Some(res) = st.jobs.wait() {
@@ -401,6 +402,7 @@ impl Project {
             return;
         };
         let stages = kind.stages();
+        let open = self.tile_opener();
         let st = self.pipeline.maps.entry(map).or_default();
         st.dirty.resize(stages.len(), false);
         for (d, n) in st.dirty.iter_mut().zip(dirty) {
@@ -412,7 +414,7 @@ impl Project {
             width: s.width,
             height: s.height,
             metres_per_pixel: s.metres_per_pixel,
-            open: self.store.tile_opener(),
+            open,
             dirty: st.dirty.clone(),
             threads: self.pipeline.threads,
             top: crate::pyramid::top_level(&s),

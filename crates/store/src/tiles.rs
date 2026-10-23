@@ -148,6 +148,18 @@ impl TileConn {
         tile(&self.conn, key)
     }
 
+    /// Writes an edit's tiles in one transaction. The edit does not wait for it, so background writers need not give way.
+    pub fn write_edit(&self, writes: &[(TileKey, Option<TileRecord>)]) -> Result<()> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        for (k, rec) in writes {
+            write_tile(&tx, k, rec.as_ref())?;
+        }
+        Ok(tx.commit()?)
+    }
+
     /// Writes tiles in transactions of at most `CHUNK_BYTES`, each after pending edits.
     /// A transaction ends after the row in progress once an edit is waiting, so an edit waits for
     /// one row and a commit at most, never a whole chunk.

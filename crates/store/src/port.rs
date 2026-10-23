@@ -153,6 +153,10 @@ impl Storage for Store {
 }
 
 impl TileStore for TileConn {
+    fn write_edit(&self, writes: &[(TileKey, Option<TileRecord>)]) -> R<()> {
+        Ok(TileConn::write_edit(self, writes)?)
+    }
+
     fn tile(&self, key: &TileKey) -> R<Option<TileRecord>> {
         Ok(TileConn::tile(self, key)?)
     }

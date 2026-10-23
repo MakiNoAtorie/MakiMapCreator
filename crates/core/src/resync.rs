@@ -242,7 +242,7 @@ impl Project {
             ty: key.ty - shift.1,
             ..key.clone()
         };
-        self.store.tile(&old)
+        self.tile_record(&old)
     }
 
     /// Previews a re-sync with the parent; `outline` moves the outline and may grow the map.

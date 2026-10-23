@@ -155,7 +155,7 @@ impl Project {
                 let key = (tx as u32, ty as u32);
                 let loaded = !tiles.contains_key(&key);
                 if loaded {
-                    let before = self.store.tile(&map.tile_key(layer, key.0, key.1))?;
+                    let before = self.tile_record(&map.tile_key(layer, key.0, key.1))?;
                     let values = decode(before.as_ref())?;
                     tiles.insert(key, (before, values));
                 }
