@@ -68,7 +68,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Image hashes are per backend, recorded for WARP. `Renderer::warp()` shares one WARP device per process; never make another.
 - Terrain shading lives once in `mmc-render` (`terrain.rs` tables `PALETTE`/`COAST`, `terrain.wgsl`), prepended to every pass; a kind's height pass calls `terrain(heights, pos.xy)`. Change colours only in `PALETTE`.
 - Shading reads heights bilinearly with slopes in metres per metre (`metres_per_pixel` of the drawn level); scenes fetch 2 map pixels of margin.
-- Live brush (ADR-0025): display only. The edit worker writes `live::Applied` under the project lock; the render worker reads it there, so a complete render knows the stamps it shows. Smooth and flatten stay on the CPU overlay.
+- Live brush (ADR-0025): display only. The edit worker writes `live::Applied` under the project lock; the render worker reads it there, so a complete render knows the stamps it shows.
 
 ## Pages and anchors
 

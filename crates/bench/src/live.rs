@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use mmc_core::{Command, Layer, MapId, MapKindModule, Project, RootPoint};
 use mmc_fixtures::{LargeMap, Rng};
-use mmc_render::{Live, Renderer, ShaderPass, TARGET_FORMAT, View};
+use mmc_render::{FlattenLevel, Live, Renderer, ShaderPass, TARGET_FORMAT, View};
 
 use crate::{RUNS, detailed, median, time_ms};
 
@@ -75,14 +75,14 @@ fn on(
     };
     // Shaders compile on first use.
     live.set_base(base());
-    live.stamp(seed, &part(rng));
+    live.stamp(seed, &part(rng), FlattenLevel::Sample);
     live.draw(view);
     live.wait().unwrap();
     let stamp = (0..RUNS)
         .map(|_| {
             let b = part(rng);
             time_ms(|| {
-                live.stamp(seed, &b);
+                live.stamp(seed, &b, FlattenLevel::Sample);
                 live.draw(view);
                 live.wait().unwrap();
             })
@@ -94,7 +94,7 @@ fn on(
             let (b, heights) = (part(rng), base());
             time_ms(|| {
                 live.set_base(heights);
-                live.stamp(seed, &b);
+                live.stamp(seed, &b, FlattenLevel::Sample);
                 live.draw(view);
                 live.wait().unwrap();
             })

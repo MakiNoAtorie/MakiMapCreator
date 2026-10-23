@@ -19,7 +19,7 @@ mod terrain;
 pub use terrain::{COAST, PALETTE};
 mod live;
 mod summary;
-pub use live::{Live, LiveBase, LiveFrame};
+pub use live::{FlattenLevel, Live, LiveBase, LiveFrame};
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;

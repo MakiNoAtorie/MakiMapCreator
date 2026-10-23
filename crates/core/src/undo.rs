@@ -81,6 +81,18 @@ impl Project {
         h.done.push_back(changes);
     }
 
+    /// The flatten level of the stroke `apply_part` extends on `map`, once its first stamp set it.
+    pub fn stroke_level(&self, map: MapId) -> Option<f32> {
+        match self.session_level(map) {
+            Some(level) => level,
+            None => self
+                .history
+                .get(&map)
+                .filter(|h| h.open_stroke)
+                .and_then(|h| h.level),
+        }
+    }
+
     /// Applies one part of a stroke drawn while the pen moves; parts until `end_stroke` are one undo step.
     /// A brush or paint part on a map without an outline stays in memory until `end_stroke` (see `stroke.rs`).
     pub fn apply_part(&mut self, map: MapId, cmd: Command) -> Result<()> {

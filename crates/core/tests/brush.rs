@@ -199,8 +199,10 @@ fn flatten_moves_ground_toward_the_height_under_the_pen_at_stroke_start() {
     for part in [vec![start], vec![pt(2705.0, 3005.0), pt(2955.0, 3005.0)]] {
         let s = stroke(BrushMode::Flatten, &part, 600.0, 0.5);
         p.apply_part(map, Command::Brush(s)).unwrap();
+        assert_eq!(p.stroke_level(map), Some(level));
     }
     p.end_stroke(map).unwrap();
+    assert_eq!(p.stroke_level(map), None);
     // Toward the start level from both sides, never past it.
     let after = h(&p, map, pt(2955.0, 3005.0));
     assert!(after < high - 10.0 && after >= level, "{after}");
@@ -211,16 +213,23 @@ fn flatten_moves_ground_toward_the_height_under_the_pen_at_stroke_start() {
 }
 
 #[test]
-fn roughen_adds_detail_without_a_net_raise() {
+fn roughen_adds_detail_without_a_net_raise_in_one_undo_step() {
     let dir = tempfile::tempdir().unwrap();
     let (mut p, map) = project(dir.path());
-    let mut s = stroke(BrushMode::Roughen, &[pt(3840.0, 3840.0)], 3800.0, 20.0);
-    s.falloff = 0.0;
-    s.detail = Detail {
-        amount: 1.0,
-        scale: 160.0,
+    let roughen = |at| BrushStroke {
+        falloff: 0.0,
+        detail: Detail {
+            amount: 1.0,
+            scale: 160.0,
+        },
+        ..stroke(BrushMode::Roughen, &[at], 3800.0, 10.0)
     };
-    p.apply(map, Command::Brush(s)).unwrap();
+    // Two parts of one stroke at the same place: 20 m of noise.
+    for _ in 0..2 {
+        p.apply_part(map, Command::Brush(roughen(pt(3840.0, 3840.0))))
+            .unwrap();
+    }
+    p.end_stroke(map).unwrap();
     // A hard disc over about 2000 noise cells.
     let every = |n: usize| (120..648).step_by(n);
     let g: Vec<f32> = every(3)

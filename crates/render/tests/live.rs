@@ -5,7 +5,7 @@ use mmc_core::{
     StrokePoint,
 };
 use mmc_kind_region::{REGION, RegionKind};
-use mmc_render::{Live, Renderer, ShaderPass, TARGET_FORMAT, View};
+use mmc_render::{FlattenLevel, Live, Renderer, ShaderPass, TARGET_FORMAT, View};
 
 /// Metres. f32 maths and noise on the GPU against f64 on the CPU; measured 2.5e-4 at 800 m.
 const TOLERANCE: f32 = 0.001;
@@ -122,7 +122,16 @@ fn strokes() -> Vec<BrushStroke> {
         },
         ..stroke(&[(2000.0, 1000.0, 1.0)], 600.0, 40.0)
     };
-    vec![raise, target, roughen]
+    let flatten = BrushStroke {
+        mode: BrushMode::Flatten,
+        detail,
+        ..stroke(&[(3300.0, 1500.0, 1.0), (2900.0, 2300.0, 0.6)], 450.0, 0.6)
+    };
+    let smooth = BrushStroke {
+        mode: BrushMode::Smooth,
+        ..stroke(&[(1900.0, 1100.0, 1.0), (2400.0, 1300.0, 0.9)], 350.0, 0.8)
+    };
+    vec![raise, target, roughen, flatten, smooth]
 }
 
 #[test]
@@ -135,7 +144,7 @@ fn gpu_stamps_equal_the_cpu_brush_within_the_tolerance() {
     let before = live.heights().unwrap();
     let seed = p.seed().unwrap();
     for s in strokes() {
-        assert!(live.stamp(seed, &s), "{:?} runs on the GPU", s.mode);
+        assert!(live.stamp(seed, &s, FlattenLevel::Sample), "{:?}", s.mode);
         p.apply(map, Command::Brush(s.clone())).unwrap();
     }
     let gpu = live.heights().unwrap();
@@ -162,7 +171,7 @@ fn the_copy_shades_like_the_renderer() {
     assert!(live.render(v).unwrap().rgba == r.render(&scene, u32::MAX).unwrap().rgba);
     let seed = p.seed().unwrap();
     for s in strokes() {
-        live.stamp(seed, &s);
+        live.stamp(seed, &s, FlattenLevel::Sample);
         p.apply(map, Command::Brush(s.clone())).unwrap();
     }
     let gpu = live.render(v).unwrap();
@@ -179,20 +188,103 @@ fn the_copy_shades_like_the_renderer() {
 }
 
 #[test]
-fn smooth_and_flatten_stay_on_the_cpu() {
+fn a_flatten_stroke_in_parts_keeps_the_level_of_its_first_stamp() {
     let dir = tempfile::tempdir().unwrap();
-    let (p, map) = fixture(dir.path());
+    let (mut p, map) = fixture(dir.path());
     let r = renderer();
-    let mut live = live(&r, &p, view(map));
-    let before = live.heights().unwrap();
-    for mode in [BrushMode::Smooth, BrushMode::Flatten] {
-        let s = BrushStroke {
-            mode,
-            ..stroke(&[(2000.0, 2000.0, 1.0)], 500.0, 0.5)
-        };
-        assert!(!live.stamp(p.seed().unwrap(), &s));
+    let v = view(map);
+    let mut live = live(&r, &p, v);
+    let seed = p.seed().unwrap();
+    let path = [
+        (2200.0, 1500.0, 1.0),
+        (2600.0, 1700.0, 0.8),
+        (3000.0, 1900.0, 1.0),
+    ];
+    let s = BrushStroke {
+        mode: BrushMode::Flatten,
+        ..stroke(&path, 400.0, 0.7)
+    };
+    let (mut first, mut rest) = (s.clone(), s);
+    first.points.truncate(1);
+    rest.points.remove(0);
+    assert!(live.stamp(seed, &first, FlattenLevel::Sample));
+    assert!(live.stamp(seed, &rest, FlattenLevel::Kept));
+    p.apply_part(map, Command::Brush(first)).unwrap();
+    p.apply_part(map, Command::Brush(rest)).unwrap();
+    p.end_stroke(map).unwrap();
+    let cpu = r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap();
+    let worst = live
+        .heights()
+        .unwrap()
+        .iter()
+        .zip(cpu.values())
+        .map(|(g, c)| (g - c).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst <= TOLERANCE, "worst difference {worst} m");
+    // A first stamp off the copy gives no level to sample.
+    let off = BrushStroke {
+        mode: BrushMode::Flatten,
+        ..stroke(&[(5500.0, 2000.0, 1.0)], 400.0, 0.7)
+    };
+    assert!(!live.stamp(seed, &off, FlattenLevel::Sample));
+}
+
+#[test]
+fn a_stroke_past_the_copy_edge_commits_on_the_cpu_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, map) = fixture(dir.path());
+    let other = tempfile::tempdir().unwrap();
+    let (mut alone, _) = fixture(other.path());
+    let r = renderer();
+    let v = view(map);
+    let mut live = live(&r, &p, v);
+    // From inside the copy (x up to 4020 m) to 1500 m past its right edge, in two parts.
+    let s = stroke(
+        &[
+            (3600.0, 1500.0, 1.0),
+            (4500.0, 1600.0, 1.0),
+            (5500.0, 1700.0, 1.0),
+        ],
+        300.0,
+        60.0,
+    );
+    let (mut first, mut rest) = (s.clone(), s.clone());
+    first.points.truncate(1);
+    rest.points.remove(0);
+    for part in [first, rest] {
+        assert!(live.stamp(p.seed().unwrap(), &part, FlattenLevel::Kept));
+        p.apply_part(map, Command::Brush(part)).unwrap();
     }
-    assert!(live.heights().unwrap() == before);
+    p.end_stroke(map).unwrap();
+    alone.apply(map, Command::Brush(s)).unwrap();
+    // Past the edge the committed ground is the CPU brush's, as if no copy were shown.
+    let past = View {
+        min: RootPoint {
+            x: 4000.0,
+            y: 1000.0,
+        },
+        max: RootPoint {
+            x: 6000.0,
+            y: 2200.0,
+        },
+        width: 200,
+        height: 120,
+        ..v
+    };
+    let heights = |p: &Project| r.scene(p, past).unwrap().into_base(Layer::HEIGHT).unwrap();
+    let (cpu, want) = (heights(&p), heights(&alone));
+    assert!(cpu.values() == want.values());
+    assert!(cpu.values().iter().filter(|&&h| h > 30.0).count() > 1000);
+    // Inside, the copy showed what was committed.
+    let inside = r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap();
+    let worst = live
+        .heights()
+        .unwrap()
+        .iter()
+        .zip(inside.values())
+        .map(|(g, c)| (g - c).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst <= TOLERANCE, "worst difference {worst} m");
 }
 
 #[test]
@@ -264,7 +356,7 @@ fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
         let base = drawn(&r, &p, v).into_base(Layer::HEIGHT).unwrap();
         assert_eq!(base.values().len(), 150 * 100, "the map at level 2");
         live.set_base(base);
-        assert!(live.stamp(p.seed().unwrap(), &s));
+        assert!(live.stamp(p.seed().unwrap(), &s, FlattenLevel::Sample));
         p.apply(map, Command::Brush(s.clone())).unwrap();
         let gpu = live.heights().unwrap();
         let cpu = drawn(&r, &p, v);
@@ -276,15 +368,29 @@ fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
             .map(|(g, c)| (g - c).abs())
             .fold(0.0f32, f32::max);
         let img = live.render(v).unwrap().rgba;
+        // Image pixels are texels here. Off the coast: a centimetre moves a 0 m coastline.
+        let h = cpu.values();
+        let off_coast = |i: usize| {
+            let (x, y) = ((i % 150) as i64, (i / 150) as i64);
+            (-1..=1).all(|dy| {
+                (-1..=1).all(|dx| {
+                    let (x, y) = ((x + dx).clamp(0, 149), (y + dy).clamp(0, 99));
+                    h[(y * 150 + x) as usize].abs() > 0.5
+                })
+            })
+        };
         let colour = img
-            .iter()
-            .zip(&rgba)
-            .map(|(x, y)| x.abs_diff(*y))
+            .chunks(4)
+            .zip(rgba.chunks(4))
+            .enumerate()
+            .filter(|(i, _)| off_coast(*i))
+            .flat_map(|(_, (a, b))| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
             .max()
             .unwrap();
-        // Add and roughen are linear, so a texel's mean change is exact; raise-to and lower-to
-        // start each pixel on the texel's slope (measured 0.08 m on the 800 m hill).
-        let bound = if s.target.is_some() { 0.1 } else { TOLERANCE };
+        // Add and roughen are linear, so a texel's mean change is exact. The others start each
+        // pixel on the texel's slope (measured under 0.11 m on the 800 m hill).
+        let linear = s.target.is_none() && matches!(s.mode, BrushMode::Add | BrushMode::Roughen);
+        let bound = if linear { TOLERANCE } else { 0.2 };
         assert!(worst <= bound, "{:?}: worst difference {worst} m", s.mode);
         assert!(
             colour <= 1,

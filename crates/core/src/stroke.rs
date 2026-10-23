@@ -239,6 +239,11 @@ impl Project {
         self.strokes.open.contains_key(&map)
     }
 
+    /// `Some` while a stroke session is open on `map`: its flatten level, once its first stamp set it.
+    pub(crate) fn session_level(&self, map: MapId) -> Option<Option<f32>> {
+        self.strokes.open.get(&map).map(|s| s.level)
+    }
+
     /// Ends the open stroke of `map` here and now, if there is one.
     pub(crate) fn finish_stroke(&mut self, map: MapId) -> Result<()> {
         match self.take_stroke(map) {

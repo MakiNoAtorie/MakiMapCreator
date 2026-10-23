@@ -11,6 +11,9 @@ struct Params {
     detail: f32,
     total: f32,
     octaves: u32,
+    first: u32,
+    reach: f32,
+    _pad: vec2u,
 }
 
 struct Stamp {
@@ -27,6 +30,8 @@ const ADD = 0u;
 const RAISE_TO = 1u;
 const LOWER_TO = 2u;
 const ROUGHEN = 3u;
+const FLATTEN = 4u;
+const SMOOTH = 5u;
 
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var heights: texture_storage_2d<r32float, read_write>;
@@ -35,9 +40,74 @@ const ROUGHEN = 3u;
 @group(0) @binding(3) var<storage, read> tables: array<u32>;
 // The heights before this dispatch.
 @group(0) @binding(4) var before: texture_2d<f32>;
+// The flatten level of the stroke.
+@group(0) @binding(5) var<storage, read_write> level: array<f32>;
+// Smooth: box means along rows of the heights before the stamp.
+@group(0) @binding(6) var rows: texture_storage_2d<r32float, read_write>;
 
 fn before_at(t: vec2i) -> f32 {
     return textureLoad(before, clamp(t, vec2i(0), vec2i(textureDimensions(before)) - 1), 0).r;
+}
+
+fn height_at(t: vec2i) -> f32 {
+    return textureLoad(heights, clamp(t, vec2i(0), vec2i(textureDimensions(heights)) - 1)).r;
+}
+
+// Flatten: the level is the pixel under the first stamp before the stroke, on the plane of
+// its texel `box0`.
+@compute @workgroup_size(1)
+fn sample() {
+    let t = p.box0;
+    let side = f32(1 << p.level);
+    let slope = 0.5 * vec2f(
+        height_at(t + vec2i(1, 0)) - height_at(t - vec2i(1, 0)),
+        height_at(t + vec2i(0, 1)) - height_at(t - vec2i(0, 1)),
+    ) / side;
+    let centre = vec2f(p.g0 + (t << vec2u(p.level))) + 0.5 * side;
+    let at = floor(stamps[0].centre) + 0.5;
+    level[0] = height_at(t) + select(0.0, dot(slope, at - centre), p.level > 0u);
+}
+
+// Smooth: texels within `reach` of `c`, inside 0..n; the last ones count by the part in reach.
+fn reach_weight(x: i32, c: i32) -> f32 {
+    let k = i32(ceil(p.reach));
+    return select(1.0, p.reach - f32(k - 1), abs(x - c) == k);
+}
+
+// Smooth: the mean along the row within `reach`, inside the copy, in differences from the
+// texel so f32 keeps the precision.
+@compute @workgroup_size(8, 8)
+fn smooth_rows(@builtin(global_invocation_id) id: vec3u) {
+    if any(id.xy >= p.size) {
+        return;
+    }
+    let t = p.box0 + vec2i(id.xy);
+    let k = i32(ceil(p.reach));
+    let w = i32(textureDimensions(before).x);
+    let v = before_at(t);
+    var sum = 0.0;
+    var n = 0.0;
+    for (var x = max(t.x - k, 0); x <= min(t.x + k, w - 1); x++) {
+        let f = reach_weight(x, t.x);
+        sum += f * (before_at(vec2i(x, t.y)) - v);
+        n += f;
+    }
+    textureStore(rows, t, vec4f(v + sum / n, 0.0, 0.0, 0.0));
+}
+
+// Smooth: the box mean around texel `t`, from the row means.
+fn box_mean(t: vec2i) -> f32 {
+    let k = i32(ceil(p.reach));
+    let h = i32(textureDimensions(rows).y);
+    let v = textureLoad(rows, t).r;
+    var sum = 0.0;
+    var n = 0.0;
+    for (var y = max(t.y - k, 0); y <= min(t.y + k, h - 1); y++) {
+        let f = reach_weight(y, t.y);
+        sum += f * (textureLoad(rows, vec2i(t.x, y)).r - v);
+        n += f;
+    }
+    return v + sum / n;
 }
 
 fn mul_wide(a: u32, b: u32) -> vec2u {
@@ -154,10 +224,16 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
     // Bit k: noise[k] is set.
     var have = 0u;
     var changed = false;
-    for (var i = 0u; i < p.count; i++) {
+    for (var i = p.first; i < p.first + p.count; i++) {
         let s = stamps[i];
         let roughen = s.mode == ROUGHEN;
         let noisy = p.detail > 0.0 || roughen;
+        var goal = s.goal;
+        if s.mode == FLATTEN {
+            goal = level[0];
+        } else if s.mode == SMOOTH {
+            goal = box_mean(t);
+        }
         for (var k = 0u; k < n_sub; k++) {
             let g = first + step * vec2i(vec2u(k % p.sub, k / p.sub)) + step / 2;
             let d = vec2f(g) + 0.5 - s.centre;
@@ -182,8 +258,14 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
                 next = u + s.amount * fall * n;
             } else if s.mode == ADD {
                 next = u + s.amount * w;
-            } else if (u < s.goal) == (s.mode == RAISE_TO) && u != s.goal {
-                next = u + (s.goal - u) * min(1.0, s.pressure * w);
+            } else if s.mode == FLATTEN {
+                next = u + (goal - u) * min(1.0, s.amount * w);
+            } else if s.mode == SMOOTH {
+                // The box mean lies on the same plane as the pixels.
+                let m = goal + start - v;
+                next = u + (m - u) * min(1.0, s.amount * w);
+            } else if (u < goal) == (s.mode == RAISE_TO) && u != goal {
+                next = u + (goal - u) * min(1.0, s.pressure * w);
             }
             if next != u {
                 change[k] = next - start;

@@ -8,7 +8,7 @@ use eframe::egui;
 use mmc_core::{Command, MapId};
 
 use crate::canvas::{SharedProject, lock_project};
-use crate::live::Applied;
+use crate::live::{Applied, Mark};
 
 /// How often the worker checks for finished rebuilds of derived layers.
 const JOBS_POLL: Duration = Duration::from_millis(100);
@@ -219,7 +219,16 @@ impl Worker {
                     if result.is_ok() {
                         s.stamps += n;
                         let mut applied = self.applied.lock().unwrap_or_else(|e| e.into_inner());
-                        applied.insert(map, (stroke, s.stamps));
+                        let level = p.stroke_level(map);
+                        let stamps = s.stamps;
+                        applied.insert(
+                            map,
+                            Mark {
+                                stroke,
+                                stamps,
+                                level,
+                            },
+                        );
                     }
                     drop(guard);
                     s.applies += 1;
