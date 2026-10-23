@@ -165,7 +165,11 @@ mod tests {
         let wp = project.clone();
         let worker = std::thread::spawn(move || render_worker(wp, req_rx, done_tx));
         req_tx.send(0).unwrap();
-        let editor = Editor::new(project.clone(), eframe::egui::Context::default());
+        let editor = Editor::new(
+            project.clone(),
+            eframe::egui::Context::default(),
+            Default::default(),
+        );
 
         let events = timeline();
         let mut opts = Options::for_map(10.0);
@@ -326,7 +330,11 @@ mod tests {
             let m = &g.as_ref().unwrap().maps()[0];
             (m.id, m.settings)
         };
-        let editor = Editor::new(project.clone(), eframe::egui::Context::default());
+        let editor = Editor::new(
+            project.clone(),
+            eframe::egui::Context::default(),
+            Default::default(),
+        );
         let mut opts = Options::for_map(10.0);
         opts.size = 2400.0;
         let stroke = |x: f64| {

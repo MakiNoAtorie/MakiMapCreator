@@ -8,6 +8,7 @@ mod i18n;
 mod input;
 mod intents;
 mod jobs;
+mod live;
 mod logfile;
 mod map_canvas;
 mod paint;
@@ -153,11 +154,17 @@ impl App {
             Box::new(mmc_kind_world::WorldKind),
             Box::new(mmc_kind_region::RegionKind),
         ]));
-        let editor = edit::Editor::new(project.clone(), cc.egui_ctx.clone());
-        let canvas = cc
-            .wgpu_render_state
-            .as_ref()
-            .map(|rs| Canvas::new(rs, project.clone(), kinds.clone(), cc.egui_ctx.clone()));
+        let applied = live::Applied::default();
+        let editor = edit::Editor::new(project.clone(), cc.egui_ctx.clone(), applied.clone());
+        let canvas = cc.wgpu_render_state.as_ref().map(|rs| {
+            Canvas::new(
+                rs,
+                project.clone(),
+                kinds.clone(),
+                cc.egui_ctx.clone(),
+                applied,
+            )
+        });
         Self {
             dark,
             project,

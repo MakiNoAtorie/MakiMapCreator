@@ -53,6 +53,8 @@ pub struct Painter {
     next_stroke: u64,
     /// Ops for the edit worker, sent at the next `flush`.
     outbox: Vec<Op>,
+    /// Parts for the live brush, given to the canvas at the next `flush`: stroke, first stamp.
+    live_out: Vec<(u64, usize, mmc_core::Command)>,
     overlay: Vec<Pending>,
     /// Ended strokes whose overlay is still shown, with their pen-up time, for the log.
     drawing: Vec<(u64, Instant)>,
@@ -76,6 +78,7 @@ impl Painter {
             live: None,
             next_stroke: 0,
             outbox: vec![],
+            live_out: vec![],
             overlay: vec![],
             drawing: vec![],
             cursor: None,
@@ -157,6 +160,7 @@ impl Painter {
             return;
         };
         let discs = brush::stamp_discs(&cmd);
+        self.live_out.push((l.id, l.sent, cmd.clone()));
         l.sent += discs.len();
         l.parts += 1;
         self.overlay.push(Pending {
@@ -190,7 +194,7 @@ impl Painter {
     }
 
     /// Sends this frame's parts and ops to the edit worker; drops overlay parts the canvas now shows.
-    pub fn flush(&mut self, editor: &Editor, canvas: &Canvas) {
+    pub fn flush(&mut self, editor: &Editor, canvas: &mut Canvas) {
         // A hovering pen will draw here: its tiles go into the cache first (ADR-0014).
         if let (Some((at, false)), Some(t)) = (self.hover, self.current()) {
             self.hover = Some((at, true));
@@ -204,6 +208,9 @@ impl Painter {
         self.send_part();
         for op in self.outbox.drain(..) {
             editor.send(op);
+        }
+        for (stroke, first, cmd) in self.live_out.drain(..) {
+            canvas.live_part(self.map, stroke, first, &cmd);
         }
         self.overlay
             .retain(|p| p.epoch.is_none_or(|e| !canvas.fresh(e)));
@@ -247,6 +254,7 @@ impl Painter {
                     Err(e) => {
                         log::info!("stroke {stroke} parts {parts:?}: {e}");
                         self.overlay.retain(|p| !mine(p));
+                        canvas.live_failed(self.map, stroke);
                         error(&e)
                     }
                 }
@@ -273,8 +281,8 @@ impl Painter {
         self.cursor = None;
     }
 
-    /// Draws the strokes not yet on the canvas and the brush rings.
-    pub fn draw(&self, ui: &egui::Ui, rect: Rect, view: &MapView, t: &Theme) {
+    /// Draws the strokes not yet on the canvas, unless the live brush shows them, and the brush rings.
+    pub fn draw(&self, ui: &egui::Ui, rect: Rect, view: &MapView, t: &Theme, live: bool) {
         let painter = ui.painter_at(rect);
         let to_pt = |m: f64| (m / view.metres_per_point) as f32;
         let tint = |raise: bool| {
@@ -284,7 +292,7 @@ impl Painter {
                 Color32::from_rgba_unmultiplied(20, 16, 12, 28)
             }
         };
-        for p in &self.overlay {
+        for p in self.overlay.iter().filter(|_| !live) {
             for &(at, r) in &p.discs {
                 painter.circle_filled(view.screen_at(rect, at), to_pt(r), tint(p.raise));
             }

@@ -165,6 +165,11 @@ impl Live {
         self.copy = None;
     }
 
+    /// True when the copy covers the same pixels as `base`.
+    pub fn same_area(&self, base: &LiveBase) -> bool {
+        self.copy.as_ref().is_some_and(|c| c.area == base.area)
+    }
+
     /// Replaces the copy with `base`.
     pub fn set_base(&mut self, base: LiveBase) {
         let a = base.area;
@@ -193,10 +198,9 @@ impl Live {
                 view_formats: &[],
             }),
         };
-        let bytes: Vec<u8> = base.values.iter().flat_map(|v| v.to_le_bytes()).collect();
         self.queue.write_texture(
             texture.as_image_copy(),
-            &bytes,
+            bytemuck::cast_slice(&base.values),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(a.w * 4),

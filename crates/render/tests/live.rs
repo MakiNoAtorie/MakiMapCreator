@@ -194,3 +194,42 @@ fn smooth_and_flatten_stay_on_the_cpu() {
     }
     assert!(live.heights().unwrap() == before);
 }
+
+#[test]
+fn pan_and_zoom_draw_the_copy_where_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let (p, map) = fixture(dir.path());
+    let r = renderer();
+    let live = live(&r, &p, view(map));
+    // Zoomed in 1.5x and panned, inside the copy: the renderer's image.
+    let inside = View {
+        map,
+        min: RootPoint {
+            x: 1370.0,
+            y: 910.0,
+        },
+        max: RootPoint {
+            x: 3170.0,
+            y: 2410.0,
+        },
+        width: 270,
+        height: 225,
+    };
+    let want = r.render(&r.scene(&p, inside).unwrap(), u32::MAX).unwrap();
+    assert!(live.render(inside).unwrap().rgba == want.rgba);
+    // Panned past the copy's right edge: the rest is left to the canvas image.
+    let past = View {
+        min: RootPoint {
+            x: 2500.0,
+            y: 500.0,
+        },
+        max: RootPoint {
+            x: 5500.0,
+            y: 3000.0,
+        },
+        ..view(map)
+    };
+    let img = live.render(past).unwrap();
+    let alpha = |x: u32| img.rgba[((100 * img.width + x) * 4 + 3) as usize];
+    assert_eq!((alpha(10), alpha(290)), (255, 0));
+}

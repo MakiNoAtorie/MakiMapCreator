@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions};
 use mmc_core::{Kinds, Layer, MapId, Project};
-use mmc_render::{Image, Renderer, ShaderPass, View};
+use mmc_render::{Image, LiveBase, Renderer, ShaderPass, View};
 
+use crate::live::{Applied, LiveBrush};
 use crate::view::MapView;
 
 /// Largest render target side; the renderer splits bigger views into tiles of this size.
@@ -63,16 +64,21 @@ fn renderer_for(rs: &eframe::egui_wgpu::RenderState, kinds: &Kinds, layers: &[La
     r
 }
 
+/// A complete render's heights for the live brush, the stamps it shows and the project seed.
+type Base = Option<(LiveBase, (u64, usize), u64)>;
+
 pub struct Canvas {
     requests: Sender<(Req, u64)>,
-    /// (request, epoch, complete, image).
-    results: Receiver<(Req, u64, bool, mmc_render::Result<Image>)>,
+    /// (request, epoch, complete, image, live base).
+    results: Receiver<(Req, u64, bool, mmc_render::Result<Image>, Base)>,
     requested: Option<Req>,
     shown: Option<(Req, TextureHandle)>,
     /// Bumped by `invalidate`; a render carries the value it was requested under.
     epoch: u64,
     fresh_epoch: u64,
     pub error: Option<String>,
+    /// `None` when no kind draws height.
+    live: Option<LiveBrush>,
 }
 
 impl Canvas {
@@ -81,7 +87,13 @@ impl Canvas {
         project: SharedProject,
         kinds: std::sync::Arc<Kinds>,
         ctx: egui::Context,
+        applied: Applied,
     ) -> Canvas {
+        let live = kinds
+            .all()
+            .flat_map(|k| k.render_passes())
+            .find(|p| p.layer == Layer::HEIGHT)
+            .map(|p| LiveBrush::new(render_state.clone(), p.shader));
         let rs = render_state.clone();
         let mut renderers: Vec<(Vec<Layer>, Renderer)> = vec![];
         let (requests, jobs) = channel::<(Req, u64)>();
@@ -117,19 +129,34 @@ impl Canvas {
                 let renderer = &renderers[at].1;
                 // Never blocks on disk: tiles not loaded yet show a coarser level.
                 // The lock covers taking the tiles; the copy into rasters runs without it.
-                let fetched = match lock_project(&project, "render").0.as_ref() {
-                    Some(p) => renderer
-                        .fetch_cached(p, req.view)
-                        .and_then(|f| f.with_summaries(p)),
+                let (fetched, mark, seed) = match lock_project(&project, "render").0.as_ref() {
+                    Some(p) => {
+                        let marks = applied.lock().unwrap_or_else(|e| e.into_inner());
+                        let mark = marks.get(&req.view.map).copied().unwrap_or((0, 0));
+                        let f = renderer
+                            .fetch_cached(p, req.view)
+                            .and_then(|f| f.with_summaries(p));
+                        (f, mark, p.seed().unwrap_or(0))
+                    }
                     None => continue,
                 };
                 let scene = fetched.map(|f| f.scene());
                 let complete = scene.as_ref().is_ok_and(|s| s.is_complete());
-                let result = scene.and_then(|s| renderer.render(&s, RENDER_TILE));
+                let (result, base) = match scene {
+                    Ok(s) => {
+                        let img = renderer.render(&s, RENDER_TILE);
+                        let base = complete
+                            .then(|| s.into_base(Layer::HEIGHT))
+                            .flatten()
+                            .map(|b| (b, mark, seed));
+                        (img, base)
+                    }
+                    Err(e) => (Err(e), None),
+                };
                 if !complete && result.is_ok() {
                     pending = Some((req.clone(), epoch));
                 }
-                if done.send((req, epoch, complete, result)).is_err() {
+                if done.send((req, epoch, complete, result, base)).is_err() {
                     break;
                 }
                 ctx.request_repaint();
@@ -143,7 +170,29 @@ impl Canvas {
             epoch: 0,
             fresh_epoch: 0,
             error: None,
+            live,
         }
+    }
+
+    /// A part sent to the edit worker, for the live brush.
+    pub fn live_part(&mut self, map: MapId, stroke: u64, first: usize, cmd: &mmc_core::Command) {
+        if let (Some(l), mmc_core::Command::Brush(b)) = (&mut self.live, cmd)
+            && b.layer == Layer::HEIGHT
+        {
+            l.part(map, stroke, first, b);
+        }
+    }
+
+    /// A part of `stroke` failed on the CPU.
+    pub fn live_failed(&mut self, map: MapId, stroke: u64) {
+        if let Some(l) = &mut self.live {
+            l.failed(map, stroke);
+        }
+    }
+
+    /// True while the live brush shows strokes the canvas image does not have yet.
+    pub fn live_showing(&self) -> bool {
+        self.live.as_ref().is_some_and(|l| l.showing())
     }
 
     /// Forgets the shown image, for example after another project opens.
@@ -151,6 +200,9 @@ impl Canvas {
         self.requested = None;
         self.shown = None;
         self.error = None;
+        if let Some(l) = &mut self.live {
+            l.clear();
+        }
     }
 
     /// Forces a new render of the same view, for example after an edit; returns the epoch to wait for.
@@ -193,13 +245,16 @@ impl Canvas {
             self.requested = Some(req.clone());
             let _ = self.requests.send((req.clone(), self.epoch));
         }
-        while let Ok((v, epoch, complete, result)) = self.results.try_recv() {
+        while let Ok((v, epoch, complete, result, base)) = self.results.try_recv() {
             if complete {
                 self.fresh_epoch = self.fresh_epoch.max(epoch);
             }
             // A render for another map or layer set is out of date.
             if v.view.map != req.view.map || v.layers != req.layers {
                 continue;
+            }
+            if let (Some(l), Some((b, mark, seed))) = (&mut self.live, base) {
+                l.base(b, mark, seed);
             }
             match result {
                 Ok(img) => {
@@ -229,6 +284,12 @@ impl Canvas {
             );
             let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter_at(rect).image(tex.id(), r, uv, Color32::WHITE);
+        }
+        // Strokes the image does not have yet, shaded from the GPU copy in this frame.
+        if req.layers.contains(&Layer::HEIGHT)
+            && let Some(cb) = self.live.as_ref().and_then(|l| l.frame(&view, rect, ppp))
+        {
+            ui.painter_at(rect).add(cb);
         }
     }
 }

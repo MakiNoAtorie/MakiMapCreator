@@ -113,8 +113,9 @@ impl App {
                 self.message = Some(tr_args("error-render", &[("error", e)]));
             }
         }
+        let live = canvas.as_ref().is_some_and(|c| c.live_showing());
         self.canvas = canvas;
-        self.painter(map).draw(ui, rect, &view, &theme);
+        self.painter(map).draw(ui, rect, &view, &theme, live);
         if let Some(sel) = self.selection
             && let Some((_, pts)) = self.snap.outlines.iter().find(|o| o.0 == sel)
         {

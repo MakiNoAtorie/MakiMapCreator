@@ -8,6 +8,7 @@ use eframe::egui;
 use mmc_core::{Command, MapId};
 
 use crate::canvas::{SharedProject, lock_project};
+use crate::live::Applied;
 
 /// How often the worker checks for finished rebuilds of derived layers.
 const JOBS_POLL: Duration = Duration::from_millis(100);
@@ -86,7 +87,7 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(project: SharedProject, ctx: egui::Context) -> Editor {
+    pub fn new(project: SharedProject, ctx: egui::Context, applied: Applied) -> Editor {
         let (ops, rx) = channel();
         let (tx, done) = channel();
         std::thread::spawn(move || {
@@ -95,6 +96,7 @@ impl Editor {
                 ops: rx,
                 done: tx,
                 ctx,
+                applied,
                 queue: VecDeque::new(),
                 stats: HashMap::new(),
                 watch: None,
@@ -127,6 +129,8 @@ impl Editor {
 struct Stats {
     parts: u32,
     applies: u32,
+    /// Stamps of the stroke in the project.
+    stamps: usize,
     lock_wait: Duration,
     lock_wait_max: Duration,
     apply: Duration,
@@ -143,6 +147,7 @@ struct Worker {
     ops: Receiver<Op>,
     done: Sender<Done>,
     ctx: egui::Context,
+    applied: Applied,
     queue: VecDeque<Op>,
     stats: HashMap<(MapId, u64), Stats>,
     watch: Option<Instant>,
@@ -208,9 +213,15 @@ impl Worker {
                     let (mut guard, wait) = lock_project(&self.project, "edit");
                     let t = Instant::now();
                     let Some(p) = guard.as_mut() else { return };
+                    let n = stamps(&chunk);
                     result = p.apply_part(map, chunk);
-                    drop(guard);
                     let s = self.stats.entry((map, stroke)).or_default();
+                    if result.is_ok() {
+                        s.stamps += n;
+                        let mut applied = self.applied.lock().unwrap_or_else(|e| e.into_inner());
+                        applied.insert(map, (stroke, s.stamps));
+                    }
+                    drop(guard);
                     s.applies += 1;
                     s.apply += t.elapsed();
                     s.lock_wait += wait;
@@ -420,6 +431,14 @@ fn last_point(cmd: &Command) -> Option<mmc_core::RootPoint> {
         Command::Brush(b) => b.points.last().map(|p| p.at),
         Command::Paint(p) => p.points.last().copied(),
         _ => None,
+    }
+}
+
+fn stamps(cmd: &Command) -> usize {
+    match cmd {
+        Command::Brush(b) => b.points.len(),
+        Command::Paint(p) => p.points.len(),
+        _ => 0,
     }
 }
 
