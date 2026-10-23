@@ -115,6 +115,7 @@ struct Lattice {
 
 impl Lattice {
     fn new(seed: u64, scale: f64, mpp: f64, lo: RootPoint, hi: RootPoint) -> Lattice {
+        let prefix = rng::prefix(seed, DETAIL_STAGE);
         let mut octaves = vec![];
         let mut cell = scale;
         for _ in 0..OCTAVES {
@@ -127,17 +128,31 @@ impl Lattice {
                 (hi.y / cell).floor() as i64 + 2,
             );
             let w = (ix1 - ix0 + 1).max(0) as usize;
+            let h = (iy1 - iy0 + 1).max(0) as usize;
             let mut v = vec![];
-            if cell >= 2.0 * mpp {
-                for iy in iy0..=iy1 {
-                    for ix in ix0..=ix1 {
+            if cell >= 2.0 * mpp && w > 0 && h > 0 {
+                v = vec![0.0; w * h];
+                let row = |iy: i64, out: &mut [f64]| {
+                    for (ix, o) in (ix0..).zip(out) {
                         let p = RootPoint {
                             x: ix as f64 * cell,
                             y: iy as f64 * cell,
                         };
-                        v.push(rng::unit(seed, DETAIL_STAGE, Key::At(p)));
+                        *o = rng::to_unit(rng::hash_from(prefix, Key::At(p)));
                     }
-                }
+                };
+                // A fine octave under a large stamp has as many corners as the stamp has pixels.
+                let threads = if w * h >= 1 << 14 { threads() } else { 1 };
+                let per = h.div_ceil(threads);
+                std::thread::scope(|sc| {
+                    for (c, chunk) in v.chunks_mut(per * w).enumerate() {
+                        sc.spawn(move || {
+                            for (r, out) in chunk.chunks_mut(w).enumerate() {
+                                row(iy0 + (c * per + r) as i64, out);
+                            }
+                        });
+                    }
+                });
             }
             octaves.push((cell, ix0, iy0, w, v));
             cell *= 0.5;
@@ -157,6 +172,10 @@ impl Lattice {
             })
         })
     }
+}
+
+fn threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 /// Prefix sums over a pixel box of a layer, for box means. Values are fixed point (`FIXED`

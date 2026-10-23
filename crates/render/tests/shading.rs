@@ -42,6 +42,7 @@ fn hill(p: &mut Project, map: MapId) {
         strength: 1500.0,
         falloff: 1.0,
         target: None,
+        ..Default::default()
     };
     p.apply(map, Command::Brush(s)).unwrap();
 }

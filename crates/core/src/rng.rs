@@ -19,23 +19,38 @@ fn mix(mut z: u64) -> u64 {
 
 /// A uniform 64-bit value for (seed, stage, key).
 pub fn hash(seed: u64, stage: &str, key: Key) -> u64 {
+    hash_from(prefix(seed, stage), key)
+}
+
+fn step(h: u64, w: u64) -> u64 {
+    mix(h ^ w.wrapping_add(0x9E37_79B9_7F4A_7C15))
+}
+
+/// The hash state after (seed, stage), so many keys of one stage hash the stage once.
+pub(crate) fn prefix(seed: u64, stage: &str) -> u64 {
+    let stage = stage.bytes().fold(0xCBF2_9CE4_8422_2325, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100_0000_01B3)
+    });
+    step(mix(seed), stage)
+}
+
+pub(crate) fn hash_from(prefix: u64, key: Key) -> u64 {
     // -0.0 and 0.0 are the same position.
     let bits = |v: f64| (v + 0.0).to_bits();
     let words = match key {
         Key::Entity(id) => [1, id as u64, 0],
         Key::At(p) => [2, bits(p.x), bits(p.y)],
     };
-    let stage = stage.bytes().fold(0xCBF2_9CE4_8422_2325, |h, b| {
-        (h ^ b as u64).wrapping_mul(0x100_0000_01B3)
-    });
-    [stage].into_iter().chain(words).fold(mix(seed), |h, w| {
-        mix(h ^ w.wrapping_add(0x9E37_79B9_7F4A_7C15))
-    })
+    words.into_iter().fold(prefix, step)
 }
 
 /// A uniform value in `0..1` for (seed, stage, key).
 pub fn unit(seed: u64, stage: &str, key: Key) -> f64 {
-    (hash(seed, stage, key) >> 11) as f64 / (1u64 << 53) as f64
+    to_unit(hash(seed, stage, key))
+}
+
+pub(crate) fn to_unit(h: u64) -> f64 {
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// Value noise in `0..1` on a root-space lattice of `cell` metres, the same at every map scale.
