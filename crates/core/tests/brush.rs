@@ -234,3 +234,21 @@ fn roughen_adds_detail_without_a_net_raise() {
     assert!(p.undo(map).unwrap());
     assert!(grid(&p, map, 380..390, 380..390).iter().all(|&v| v == 0.0));
 }
+
+#[test]
+fn detail_tables_give_the_bits_of_detail_noise() {
+    let (seed, scale) = (0x5EED_u64, 320.0);
+    // Negative coordinates, ends not on node multiples.
+    let (xs, ys) = ((-37, 90), (1001, 1130));
+    let t = mmc_core::detail_tables(seed, scale, MPP, xs, ys, 0);
+    for gy in ys.0..=ys.1 {
+        for gx in (xs.0..=xs.1).step_by(7) {
+            let at = pt((gx as f64 + 0.5) * MPP, (gy as f64 + 0.5) * MPP);
+            let want = mmc_core::detail_noise(seed, at, scale, MPP);
+            assert_eq!(t.noise_at((gx, gy)).to_bits(), want.to_bits(), "{gx},{gy}");
+        }
+    }
+    // Level 2 skips the octaves under 8 level-2 pixels: here all but the coarsest.
+    let coarse = mmc_core::detail_tables(seed, scale, MPP, xs, ys, 2);
+    assert_eq!((t.octaves.len(), coarse.octaves.len()), (3, 1));
+}

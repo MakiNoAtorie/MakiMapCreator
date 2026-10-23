@@ -23,8 +23,10 @@ pub fn hash(seed: u64, stage: &str, key: Key) -> u64 {
 }
 
 fn step(h: u64, w: u64) -> u64 {
-    mix(h ^ w.wrapping_add(0x9E37_79B9_7F4A_7C15))
+    mix(h ^ w.wrapping_add(GOLDEN))
 }
+
+const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The hash state after (seed, stage), so many keys of one stage hash the stage once.
 pub(crate) fn prefix(seed: u64, stage: &str) -> u64 {
@@ -35,13 +37,29 @@ pub(crate) fn prefix(seed: u64, stage: &str) -> u64 {
 }
 
 pub(crate) fn hash_from(prefix: u64, key: Key) -> u64 {
-    // -0.0 and 0.0 are the same position.
-    let bits = |v: f64| (v + 0.0).to_bits();
-    let words = match key {
-        Key::Entity(id) => [1, id as u64, 0],
-        Key::At(p) => [2, bits(p.x), bits(p.y)],
-    };
-    words.into_iter().fold(prefix, step)
+    match key {
+        Key::Entity(id) => [1, id as u64, 0].into_iter().fold(prefix, step),
+        Key::At(p) => at_finish(at_x(prefix, p.x), at_y(p.y)),
+    }
+}
+
+// -0.0 and 0.0 are the same position.
+fn bits(v: f64) -> u64 {
+    (v + 0.0).to_bits()
+}
+
+/// The hash state of a `Key::At` with root-space `x`, before its `y`.
+pub(crate) fn at_x(prefix: u64, x: f64) -> u64 {
+    [2, bits(x)].into_iter().fold(prefix, step)
+}
+
+/// The word a `Key::At`'s `y` mixes in: `at_finish(at_x(prefix, x), at_y(y))` is its hash.
+pub(crate) fn at_y(y: f64) -> u64 {
+    bits(y).wrapping_add(GOLDEN)
+}
+
+pub(crate) fn at_finish(state: u64, word: u64) -> u64 {
+    mix(state ^ word)
 }
 
 /// A uniform value in `0..1` for (seed, stage, key).

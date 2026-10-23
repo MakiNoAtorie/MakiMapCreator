@@ -17,7 +17,9 @@ pub use pass::ShaderPass;
 mod kind;
 mod terrain;
 pub use terrain::{COAST, PALETTE};
+mod live;
 mod summary;
+pub use live::{Live, LiveBase, LiveFrame};
 
 /// Format of every render target. Not sRGB, so image bytes are the shader output.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -83,7 +85,10 @@ struct Raster {
 /// The layer data a view needs, read from the project. Owns its data so a worker can render it.
 pub struct Scene {
     view: View,
+    /// Of the drawn level.
     metres_per_pixel: f64,
+    level: u32,
+    origin: (i64, i64),
     rasters: Vec<(Layer, Raster)>,
     complete: bool,
     summaries: Vec<mmc_core::ChildSummary>,
@@ -387,52 +392,69 @@ impl Renderer {
                 }
             }
         }
-        // Rows of a texture-to-buffer copy are padded to 256 bytes.
-        let padded = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (padded * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
         self.queue.submit([encoder.finish()]);
-        let slice = readback.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| Error::Gpu(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| Error::Gpu(e.to_string()))?
-            .map_err(|e| Error::Gpu(e.to_string()))?;
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| Error::Gpu(e.to_string()))?;
-        let mut out = Vec::with_capacity((w * h * 4) as usize);
-        for row in data.chunks(padded as usize) {
-            out.extend_from_slice(&row[..(w * 4) as usize]);
-        }
-        Ok(out)
+        read_texture(&self.device, &self.queue, &target, w, h)
     }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+}
+
+/// The texels of a 4-byte-per-texel `texture` (`w` x `h`, COPY_SRC), row by row; waits for the GPU.
+pub(crate) fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    w: u32,
+    h: u32,
+) -> Result<Vec<u8>> {
+    // Rows of a texture-to-buffer copy are padded to 256 bytes.
+    let padded =
+        (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * h) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+    let slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| Error::Gpu(e.to_string()))?;
+    rx.recv()
+        .map_err(|e| Error::Gpu(e.to_string()))?
+        .map_err(|e| Error::Gpu(e.to_string()))?;
+    let data = slice
+        .get_mapped_range()
+        .map_err(|e| Error::Gpu(e.to_string()))?;
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for row in data.chunks(padded as usize) {
+        out.extend_from_slice(&row[..(w * 4) as usize]);
+    }
+    Ok(out)
 }
 
 /// DX12 on Windows when a GPU has it, else `fallback`; Vulkan there loads other apps' overlay layers.

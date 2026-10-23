@@ -107,6 +107,99 @@ fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> f64 {
     sum / total
 }
 
+/// `detail_noise` over a range of global pixels as tables, so a port without u64 or f64 (WGSL)
+/// does one hash step per lattice corner and gets the same hash bits.
+pub struct DetailTables {
+    /// Node index of column and row 0 of the node tables.
+    pub nx0: i64,
+    pub ny0: i64,
+    /// Sum of all octave amplitudes, skipped ones included.
+    pub total: f64,
+    pub octaves: Vec<OctaveTable>,
+}
+
+/// One octave that is not skipped.
+pub struct OctaveTable {
+    pub amp: f64,
+    /// Per node column (row): lattice column (row) below the node and smoothstep weight to the next.
+    pub node_x: Vec<(u32, f64)>,
+    pub node_y: Vec<(u32, f64)>,
+    /// Per lattice column the hash state after its x; per lattice row the word its y mixes in.
+    /// A corner's value is `to_unit(splitmix64_finaliser(cols[i] ^ rows[j]))`.
+    pub cols: Vec<u64>,
+    pub rows: Vec<u64>,
+}
+
+/// Tables for global pixels `xs` x `ys` (inclusive). `level` > 0 also skips the octaves under 8
+/// pixels of that pyramid level, for a copy drawn at that level.
+pub fn detail_tables(
+    seed: u64,
+    scale: f64,
+    mpp: f64,
+    xs: (i64, i64),
+    ys: (i64, i64),
+    level: u32,
+) -> DetailTables {
+    let prefix = rng::prefix(seed, DETAIL_STAGE);
+    let (nx0, nx1) = (xs.0.div_euclid(NODE), xs.1.div_euclid(NODE) + 1);
+    let (ny0, ny1) = (ys.0.div_euclid(NODE), ys.1.div_euclid(NODE) + 1);
+    let min_cell = (2 * NODE) as f64 * mpp * (1u64 << level) as f64;
+    let mut octaves = vec![];
+    let (mut total, mut amp, mut cell) = (0.0, 1.0, scale);
+    for _ in 0..OCTAVES {
+        if cell >= min_cell {
+            let axis = |n0: i64, n1: i64, at: &dyn Fn(i64) -> f64| {
+                let v: Vec<(f64, f64)> = (n0..=n1).map(|n| rng::axis(at(n), cell)).collect();
+                let i0 = v[0].0;
+                let nodes = v.iter().map(|&(g, f)| ((g - i0) as u32, f)).collect();
+                (nodes, i0 as i64, v[v.len() - 1].0 as i64 + 1)
+            };
+            let (node_x, ix0, ix1) = axis(nx0, nx1, &|n| node_at(n, 0, mpp).x);
+            let (node_y, iy0, iy1) = axis(ny0, ny1, &|n| node_at(0, n, mpp).y);
+            octaves.push(OctaveTable {
+                amp,
+                node_x,
+                node_y,
+                cols: (ix0..=ix1)
+                    .map(|i| rng::at_x(prefix, i as f64 * cell))
+                    .collect(),
+                rows: (iy0..=iy1).map(|j| rng::at_y(j as f64 * cell)).collect(),
+            });
+        }
+        total += amp;
+        amp *= 0.5;
+        cell *= 0.5;
+    }
+    DetailTables {
+        nx0,
+        ny0,
+        total,
+        octaves,
+    }
+}
+
+impl DetailTables {
+    /// Detail noise at global pixel `g`, from the tables: the reference for the WGSL port.
+    pub fn noise_at(&self, (gx, gy): (i64, i64)) -> f64 {
+        interpolate((gx, gy), |nx, ny| {
+            let (kx, ky) = ((nx - self.nx0) as usize, (ny - self.ny0) as usize);
+            let mut sum = 0.0;
+            for o in &self.octaves {
+                let ((ix, fx), (iy, fy)) = (o.node_x[kx], o.node_y[ky]);
+                let (ix, iy) = (ix as usize, iy as usize);
+                let c = |i: usize, j: usize| rng::to_unit(rng::at_finish(o.cols[i], o.rows[j]));
+                let n = rng::mix4(
+                    [c(ix, iy), c(ix + 1, iy), c(ix, iy + 1), c(ix + 1, iy + 1)],
+                    fx,
+                    fy,
+                );
+                sum += o.amp * (2.0 * n - 1.0);
+            }
+            sum / self.total
+        })
+    }
+}
+
 /// Squared distance from `at` to `centre` as a fraction of `radius`, all root-space metres.
 fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
     let (dx, dy) = (at.x - centre.x, at.y - centre.y);

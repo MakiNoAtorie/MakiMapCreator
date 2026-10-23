@@ -3,7 +3,10 @@
 use std::fmt;
 
 mod brush;
-pub use brush::{BrushMode, DETAIL_STAGE, Detail, detail_noise, stamp_weight};
+pub use brush::{
+    BrushMode, DETAIL_STAGE, Detail, DetailTables, OctaveTable, detail_noise, detail_tables,
+    stamp_weight,
+};
 mod cache;
 mod command;
 mod jobs;
@@ -20,7 +23,7 @@ mod writer;
 pub use stroke::{EncodedStroke, EndedStroke};
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
-pub use command::{BrushStroke, Command, StrokePoint, brush_weight};
+pub use command::{BrushStroke, Command, StrokePoint, brush_core, brush_weight};
 pub use layer::{Layer, RootPoint, TILE_SIZE, WATER_LEVEL};
 pub use pyramid::{Overview, TileId, read_overviews};
 pub use undo::UNDO_LIMIT;

@@ -10,6 +10,15 @@ pub struct ShaderPass {
 impl ShaderPass {
     /// `shader` has `vs` and `fs` entry points; `VIEW_WGSL` and the terrain shading are prepended.
     pub fn new(device: &wgpu::Device, shader: &str) -> ShaderPass {
+        ShaderPass::with_format(device, shader, TARGET_FORMAT)
+    }
+
+    /// `new` for a target of `format`, for example the window's.
+    pub fn with_format(
+        device: &wgpu::Device,
+        shader: &str,
+        format: wgpu::TextureFormat,
+    ) -> ShaderPass {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pass"),
             source: wgpu::ShaderSource::Wgsl(
@@ -63,7 +72,7 @@ impl ShaderPass {
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: TARGET_FORMAT,
+                    format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -75,22 +84,37 @@ impl ShaderPass {
     }
 }
 
-impl DrawPass for ShaderPass {
-    fn draw(&self, device: &wgpu::Device, input: &PassInput<'_>, pass: &mut wgpu::RenderPass<'_>) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+impl ShaderPass {
+    pub(crate) fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::Buffer,
+        layer: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("pass"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: input.view.as_entire_binding(),
+                    resource: view.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(input.layer),
+                    resource: wgpu::BindingResource::TextureView(layer),
                 },
             ],
-        });
+        })
+    }
+
+    pub(crate) fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+}
+
+impl DrawPass for ShaderPass {
+    fn draw(&self, device: &wgpu::Device, input: &PassInput<'_>, pass: &mut wgpu::RenderPass<'_>) {
+        let bind_group = self.bind_group(device, input.view, input.layer);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);

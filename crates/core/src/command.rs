@@ -78,7 +78,7 @@ pub fn brush_weight(d2: f64, falloff: f32) -> f32 {
 }
 
 /// Squared radius fraction of the hard core of a brush with `falloff`.
-pub(crate) fn brush_core(falloff: f32) -> f64 {
+pub fn brush_core(falloff: f32) -> f64 {
     (1.0 - falloff.clamp(0.0, 1.0) as f64).powi(2)
 }
 

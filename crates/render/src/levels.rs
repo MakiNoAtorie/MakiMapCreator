@@ -17,6 +17,8 @@ pub struct Fetched {
     view: View,
     level: u32,
     metres_per_pixel: f64,
+    /// Global level-0 pixel of map pixel (0, 0).
+    origin: (i64, i64),
     /// Level pixels `x0..x1`, `y0..y1`.
     range: (u32, u32, u32, u32),
     layers: Vec<LayerTiles>,
@@ -104,6 +106,10 @@ impl Renderer {
             view,
             level,
             metres_per_pixel: m,
+            origin: (
+                (map.origin.x / s.metres_per_pixel).round() as i64,
+                (map.origin.y / s.metres_per_pixel).round() as i64,
+            ),
             range: (x0, x1, y0, y1),
             layers: out,
             summaries: Vec::new(),
@@ -158,6 +164,8 @@ impl Fetched {
         Scene {
             view: self.view,
             metres_per_pixel: self.metres_per_pixel,
+            level,
+            origin: self.origin,
             rasters,
             complete,
             summaries: self.summaries,
