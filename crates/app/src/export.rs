@@ -58,7 +58,7 @@ impl App {
                     ui.add(
                         egui::DragValue::new(width)
                             .range(1..=MAX_SIDE)
-                            .suffix(" px"),
+                            .suffix(tr("unit-px")),
                     );
                 });
                 let h = height_for(s, *width).to_string();

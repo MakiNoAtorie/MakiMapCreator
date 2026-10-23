@@ -48,14 +48,24 @@ impl MapKindModule for WorldKind {
     }
 
     fn tools(&self) -> &'static [Tool] {
-        &[Tool {
-            id: "paint-land",
-            layer: Layer::HEIGHT,
-            action: ToolAction::Target {
-                raise: LAND_HEIGHT,
-                lower: SEA_DEPTH,
+        &[
+            Tool {
+                id: "paint-land",
+                layer: Layer::HEIGHT,
+                action: ToolAction::Target {
+                    to: LAND_HEIGHT,
+                    raise: true,
+                },
             },
-        }]
+            Tool {
+                id: "paint-sea",
+                layer: Layer::HEIGHT,
+                action: ToolAction::Target {
+                    to: SEA_DEPTH,
+                    raise: false,
+                },
+            },
+        ]
     }
 
     fn generators(&self) -> &'static [GeneratorDecl] {
@@ -163,7 +173,8 @@ fn closer_to(poly: &[RootPoint], a: RootPoint, b: RootPoint) -> Vec<RootPoint> {
     out
 }
 
-/// A hard-edged, full-pressure stroke of the land tool (`land`) or the sea tool.
+/// A hard-edged, full-pressure stroke of the land tool (`land`) or the sea tool, for tests and
+/// the bench; the tools themselves stamp with the brush falloff and pressure.
 pub fn paint(points: Vec<RootPoint>, radius: f64, land: bool) -> Command {
     Command::Brush(mmc_core::BrushStroke {
         layer: Layer::HEIGHT,

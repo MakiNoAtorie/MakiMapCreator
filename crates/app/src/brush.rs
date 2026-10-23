@@ -149,8 +149,8 @@ pub fn plan(
     let rate = o.strength / MAX_STRENGTH;
     Some(match action {
         ToolAction::Brush => brush(sign * o.strength * SPACING as f32, None, BrushMode::Add),
-        ToolAction::Target { raise, lower } => {
-            brush(sign, Some(if up { raise } else { lower }), BrushMode::Add)
+        ToolAction::Target { to, raise } => {
+            brush(if raise { 1.0 } else { -1.0 }, Some(to), BrushMode::Add)
         }
         ToolAction::Smooth => brush(rate, None, BrushMode::Smooth),
         ToolAction::Flatten => brush(rate, None, BrushMode::Flatten),
@@ -380,15 +380,13 @@ mod tests {
     fn a_target_tool_raises_to_or_lowers_to_with_the_falloff() {
         let mut o = Options::for_map(1.0);
         o.falloff = 0.3;
-        let action = ToolAction::Target {
-            raise: 200.0,
-            lower: -200.0,
-        };
         let path = [p(0.0, 1.0)];
-        for (dir, sign, want) in [
-            (Direction::Raise, 1.0, 200.0),
-            (Direction::Lower, -1.0, -200.0),
+        // The tool decides the direction; the toggle does not.
+        for (raise, dir, sign, want) in [
+            (true, Direction::Lower, 1.0, 200.0),
+            (false, Direction::Raise, -1.0, -200.0),
         ] {
+            let action = ToolAction::Target { to: want, raise };
             match plan(action, Layer::HEIGHT, dir, &o, 1.0, &path) {
                 Some(Command::Brush(b)) => assert_eq!(
                     (b.strength.signum(), b.target, b.falloff),

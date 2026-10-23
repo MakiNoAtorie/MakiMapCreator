@@ -34,7 +34,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and the object layer `Layer::OUTLINES`; kind crates define the rest.
 - Land is `height > WATER_LEVEL` (core, 0 m); no kind stores a land mask (ADR-0024). Old `land` layers migrate on open (`core/src/migrate.rs`); never add a layer named `land`.
-- `BrushStroke::target` raises to or lowers to a value (sign of `strength`), never the other way; `ToolAction::Target` makes such tools.
+- `BrushStroke::target` raises to or lowers to a value (sign of `strength`), never the other way; `ToolAction::Target` makes such tools (fixed direction).
 - Brush maths: `stamp_weight` and `detail_noise` (`core/src/brush.rs`) are the reference; the CPU hot path and `detail_tables` give the same bits, `render/src/live.wgsl` ports them (change both; `render/tests/live.rs` holds them within 1e-3 m). Stamps use root-space global pixel centres and project-seed noise (stage `brush-detail`). Detail is evaluated every 4 global pixels (octaves under 8 px skipped) and interpolated bilinearly.
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3; core owns the format. A missing tile is zeros, not edited. Level `l` pixels are 2x2 means of `l-1`; the top tile is the overview; only level 0 is ever edited.
 - Write tiles through `Project::write_rows`: it feeds the cache and the pyramid worker. Tests use `wait_tiles()`.

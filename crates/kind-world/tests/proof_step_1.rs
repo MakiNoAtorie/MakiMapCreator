@@ -55,15 +55,14 @@ fn world_kind_declares_its_layers_tools_generators_and_entity_kinds() {
     assert!(kinds.get(MapKind::new("settlement")).is_none());
     assert_eq!(w.layers(), [Layer::HEIGHT], "no land layer: height decides");
     assert!(w.render_passes().iter().any(|p| p.layer == Layer::HEIGHT));
-    let tool = w.tools().iter().find(|t| t.id == "paint-land").unwrap();
-    assert_eq!(tool.layer, Layer::HEIGHT);
-    assert_eq!(
-        tool.action,
-        ToolAction::Target {
-            raise: LAND_HEIGHT,
-            lower: SEA_DEPTH
-        }
-    );
+    let tool = |id: &str| *w.tools().iter().find(|t| t.id == id).unwrap();
+    for (id, to, raise) in [
+        ("paint-land", LAND_HEIGHT, true),
+        ("paint-sea", SEA_DEPTH, false),
+    ] {
+        assert_eq!(tool(id).layer, Layer::HEIGHT);
+        assert_eq!(tool(id).action, ToolAction::Target { to, raise });
+    }
     const { assert!(LAND_HEIGHT > mmc_core::WATER_LEVEL && SEA_DEPTH < mmc_core::WATER_LEVEL) };
     assert_eq!(w.child().unwrap().context, [Layer::HEIGHT]);
     let gens: Vec<_> = w.generators().iter().map(|g| g.id).collect();

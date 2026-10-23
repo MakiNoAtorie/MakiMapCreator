@@ -17,6 +17,9 @@ options-strength = Strength
 options-falloff = Falloff
 options-detail = Detail
 options-detail-scale = Detail scale
+# Slider suffixes: a space, then the unit.
+unit-px = {" "}px
+unit-m = {" "}m
 options-pressure-size = Pressure: size
 options-pressure-strength = Pressure: strength
 
@@ -175,4 +178,5 @@ tool-smooth-height = Smooth
 tool-flatten-height = Flatten
 tool-roughen-height = Roughen
 tool-paint-lock = Lock mask
-tool-paint-land = Land and sea
+tool-paint-land = Paint land
+tool-paint-sea = Paint sea

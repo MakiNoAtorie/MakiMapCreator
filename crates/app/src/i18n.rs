@@ -49,6 +49,11 @@ mod tests {
     }
 
     #[test]
+    fn unit_suffixes_keep_their_leading_space() {
+        assert_eq!((tr("unit-px"), tr("unit-m")), (" px".into(), " m".into()));
+    }
+
+    #[test]
     fn missing_id_returns_the_id() {
         assert_eq!(tr("no-such-string"), "no-such-string");
     }

@@ -362,7 +362,7 @@ impl Painter {
             ui.add(
                 egui::Slider::new(&mut px, lo / mpp..=hi / mpp)
                     .logarithmic(true)
-                    .suffix(" px"),
+                    .suffix(tr("unit-px")),
             );
             self.options.size = px * mpp;
             if !brush {
@@ -387,13 +387,11 @@ impl Painter {
             }
             ui.label(tr("options-detail-scale"));
             let (lo, hi) = Options::detail_scale_limits(mpp);
-            let mut px = self.options.detail_scale / mpp;
             ui.add(
-                egui::Slider::new(&mut px, lo / mpp..=hi / mpp)
+                egui::Slider::new(&mut self.options.detail_scale, lo..=hi)
                     .logarithmic(true)
-                    .suffix(" px"),
+                    .suffix(tr("unit-m")),
             );
-            self.options.detail_scale = px * mpp;
             ui.separator();
             ui.checkbox(&mut self.options.pressure_size, tr("options-pressure-size"));
             ui.checkbox(
