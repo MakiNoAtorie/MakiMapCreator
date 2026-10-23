@@ -23,18 +23,27 @@ impl Project {
         map: &Map,
         s: &PaintStroke,
         tiles: &mut EditTiles,
+        cached: bool,
     ) -> Result<BTreeSet<(u32, u32)>> {
         let mut touched = BTreeSet::new();
         let r = s.radius / map.settings.metres_per_pixel;
         for p in &s.points {
             let c = map.to_pixels(*p);
-            self.disc(map, s.layer, c, r, tiles, &mut touched, |v, dist2| {
-                if dist2 >= r * r {
-                    return false;
-                }
-                *v = s.value;
-                true
-            })?;
+            self.disc(
+                map,
+                s.layer,
+                c,
+                r,
+                (tiles, cached),
+                &mut touched,
+                |v, dist2| {
+                    if dist2 >= r * r {
+                        return false;
+                    }
+                    *v = s.value;
+                    true
+                },
+            )?;
         }
         Ok(touched)
     }

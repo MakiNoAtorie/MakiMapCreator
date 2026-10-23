@@ -103,8 +103,8 @@ impl Project {
 
     /// Ends the stroke `apply_part` began on `map`: writes it and starts the rebuild of its derived layers.
     pub fn end_stroke(&mut self, map: MapId) -> Result<()> {
-        if let Some(s) = self.take_stroke(map) {
-            return self.commit_stroke(s.encode());
+        if self.strokes_open(map) {
+            return self.finish_stroke(map);
         }
         let Some(h) = self.history.get_mut(&map) else {
             return Ok(());

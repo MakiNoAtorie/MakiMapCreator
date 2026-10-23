@@ -9,9 +9,11 @@ use crate::{Result, Store};
 
 pub(crate) fn tile(conn: &rusqlite::Connection, key: &TileKey) -> Result<Option<TileRecord>> {
     Ok(conn
-        .query_row(
+        .prepare_cached(
             "SELECT data, edited FROM tiles
              WHERE map_id = ?1 AND layer = ?2 AND level = ?3 AND tx = ?4 AND ty = ?5",
+        )?
+        .query_row(
             params![key.map_id, key.layer.as_str(), key.level, key.tx, key.ty],
             |r| {
                 Ok(TileRecord {

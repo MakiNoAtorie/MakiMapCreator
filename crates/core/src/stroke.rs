@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::cache::Tile;
 use crate::command::EditTiles;
 use crate::layer::{Layer, encode};
-use crate::persist::{TileRecord, Write};
+use crate::persist::{TileOpener, TileRecord, Write};
 use crate::undo::{Change, TileChange};
 use crate::{Command, Error, MapId, Project, Result};
 
@@ -35,6 +35,8 @@ pub struct EndedStroke {
     map: MapId,
     layer: Layer,
     tiles: EditTiles,
+    /// Reads the records of tiles taken from the cache, on a worker connection.
+    open: TileOpener,
 }
 
 /// An ended stroke ready to write with `Project::commit_stroke`.
@@ -53,20 +55,39 @@ impl EndedStroke {
         self.tiles.len()
     }
 
-    pub fn encode(self) -> EncodedStroke {
+    /// Encodes the tiles and reads the records before the stroke that parts left for later.
+    /// Nothing else writes these tiles while the stroke is open, so the records are as they were.
+    pub fn encode(self) -> Result<EncodedStroke> {
         let tiles: Vec<_> = self.tiles.into_iter().collect();
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
         let data = crate::par_map(threads, &tiles, &|| false, |(_, (_, v))| encode(v))
             .expect("never cancelled");
-        EncodedStroke {
+        let mut conn = None;
+        let mut out = Vec::with_capacity(tiles.len());
+        for ((t, (before, _)), d) in tiles.into_iter().zip(data) {
+            let before = match before {
+                Some(b) => b,
+                None => {
+                    if conn.is_none() {
+                        conn = Some((self.open)()?);
+                    }
+                    let key = crate::persist::TileKey {
+                        map_id: self.map.0,
+                        layer: self.layer,
+                        level: 0,
+                        tx: t.0,
+                        ty: t.1,
+                    };
+                    conn.as_ref().expect("opened").tile(&key)?
+                }
+            };
+            out.push((t, before, d));
+        }
+        Ok(EncodedStroke {
             map: self.map,
             layer: self.layer,
-            tiles: tiles
-                .into_iter()
-                .zip(data)
-                .map(|((t, (before, _)), d)| (t, before, d))
-                .collect(),
-        }
+            tiles: out,
+        })
     }
 }
 
@@ -106,8 +127,8 @@ impl Project {
         });
         let m = self.map(map)?;
         let touched = match cmd {
-            Command::Brush(b) => self.brush_into(m, b, &mut s.tiles),
-            Command::Paint(p) => self.paint_into(m, p, &mut s.tiles),
+            Command::Brush(b) => self.brush_into(m, b, &mut s.tiles, true),
+            Command::Paint(p) => self.paint_into(m, p, &mut s.tiles, true),
             _ => unreachable!(),
         };
         let put = touched.as_ref().map_or(vec![], |t| {
@@ -139,6 +160,7 @@ impl Project {
             map,
             layer: s.layer,
             tiles: s.tiles,
+            open: self.tile_opener(),
         })
     }
 
@@ -179,9 +201,24 @@ impl Project {
         Ok(())
     }
 
-    fn finish_stroke(&mut self, map: MapId) -> Result<()> {
+    pub(crate) fn strokes_open(&self, map: MapId) -> bool {
+        self.strokes.open.contains_key(&map)
+    }
+
+    /// Ends the open stroke of `map` here and now, if there is one.
+    pub(crate) fn finish_stroke(&mut self, map: MapId) -> Result<()> {
         match self.take_stroke(map) {
-            Some(s) => self.commit_stroke(s.encode()),
+            Some(s) => {
+                let encoded = s.encode();
+                match encoded {
+                    Ok(e) => self.commit_stroke(e),
+                    Err(e) => {
+                        self.strokes.ending.remove(&map);
+                        self.tiles().forget(|k| k.map_id == map.0);
+                        Err(e)
+                    }
+                }
+            }
             None => Ok(()),
         }
     }

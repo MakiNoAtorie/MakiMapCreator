@@ -8,8 +8,9 @@ use crate::layer::{Layer, RootPoint, TILE_SIZE, decode, encode};
 use crate::undo::{Change, TileChange};
 use crate::{EntityEdit, Map, Project, Result};
 
-/// Decoded level-0 tiles of one layer being edited: the stored record before, and the values now.
-pub(crate) type EditTiles = BTreeMap<(u32, u32), (Option<TileRecord>, Vec<f32>)>;
+/// Decoded level-0 tiles of one layer being edited: the stored record before (`None` while not
+/// read yet, see `stroke.rs`), and the values now.
+pub(crate) type EditTiles = BTreeMap<(u32, u32), (Option<Option<TileRecord>>, Vec<f32>)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -62,7 +63,7 @@ impl Project {
         match cmd {
             Command::Brush(s) => {
                 let mut tiles = EditTiles::new();
-                self.brush_into(map, s, &mut tiles)?;
+                self.brush_into(map, s, &mut tiles, false)?;
                 Ok(Change::Tiles(tile_changes(map, s.layer, tiles)))
             }
             Command::Entity(e @ EntityEdit::DeleteWithMap { .. }) => {
@@ -80,7 +81,7 @@ impl Project {
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
             Command::Paint(s) => {
                 let mut tiles = EditTiles::new();
-                self.paint_into(map, s, &mut tiles)?;
+                self.paint_into(map, s, &mut tiles, false)?;
                 Ok(Change::Tiles(tile_changes(map, s.layer, tiles)))
             }
             Command::Generate(g) => Ok(Change::Generation(self.generation_change(
@@ -93,11 +94,13 @@ impl Project {
     }
 
     /// Adds the stroke to `tiles`, loading the ones it reaches first; gives the tiles it changed.
+    /// With `cached`, a tile in the tile cache is taken from it and its record is read later.
     pub(crate) fn brush_into(
         &self,
         map: &Map,
         s: &BrushStroke,
         tiles: &mut EditTiles,
+        cached: bool,
     ) -> Result<BTreeSet<(u32, u32)>> {
         let mut touched = BTreeSet::new();
         for p in &s.points {
@@ -109,7 +112,7 @@ impl Project {
                 s.layer,
                 (cx, cy),
                 r,
-                tiles,
+                (tiles, cached),
                 &mut touched,
                 |v, dist2| {
                     let d2 = dist2 / (r * r);
@@ -133,7 +136,7 @@ impl Project {
         layer: Layer,
         (cx, cy): (f64, f64),
         r: f64,
-        tiles: &mut EditTiles,
+        (tiles, cached): (&mut EditTiles, bool),
         touched: &mut BTreeSet<(u32, u32)>,
         mut f: impl FnMut(&mut f32, f64) -> bool,
     ) -> Result<()> {
@@ -155,9 +158,18 @@ impl Project {
                 let key = (tx as u32, ty as u32);
                 let loaded = !tiles.contains_key(&key);
                 if loaded {
-                    let before = self.tile_record(&map.tile_key(layer, key.0, key.1))?;
-                    let values = decode(before.as_ref())?;
-                    tiles.insert(key, (before, values));
+                    let k = map.tile_key(layer, key.0, key.1);
+                    // Cached level-0 tiles equal the stored ones; reading a record costs more than a copy.
+                    let hit = cached.then(|| self.tiles().get(&k)).flatten();
+                    let entry = match hit {
+                        Some(t) => (None, t.to_vec()),
+                        None => {
+                            let before = self.tile_record(&k)?;
+                            let values = decode(before.as_ref())?;
+                            (Some(before), values)
+                        }
+                    };
+                    tiles.insert(key, entry);
                 }
                 let values = &mut tiles.get_mut(&key).expect("inserted").1;
                 let mut hit = false;
@@ -187,7 +199,7 @@ pub(crate) fn tile_changes(map: &Map, layer: Layer, tiles: EditTiles) -> Vec<Til
         .into_iter()
         .map(|((tx, ty), (before, values))| TileChange {
             key: map.tile_key(layer, tx, ty),
-            before,
+            before: before.expect("read without the cache"),
             after: Some(TileRecord {
                 data: encode(&values),
                 edited: true,

@@ -233,7 +233,7 @@ impl Worker {
                         let mut guard = lock_project(&self.project, "edit").0;
                         let Some(p) = guard.as_mut() else { return };
                         let t = Instant::now();
-                        let r = p.commit_stroke(encoded);
+                        let r = encoded.and_then(|e| p.commit_stroke(e));
                         write = t.elapsed();
                         r
                     }
