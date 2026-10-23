@@ -1,13 +1,15 @@
 //! Commands: every edit is one. Raster commands produce tile changes.
 
-use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::persist::TileRecord;
 
-use crate::layer::{Layer, RootPoint, decode, encode, tile_of};
+use crate::layer::{Layer, RootPoint, TILE_SIZE, decode, encode};
 use crate::undo::{Change, TileChange};
 use crate::{EntityEdit, Map, Project, Result};
+
+/// Decoded level-0 tiles of one layer being edited: the stored record before, and the values now.
+pub(crate) type EditTiles = BTreeMap<(u32, u32), (Option<TileRecord>, Vec<f32>)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -58,7 +60,11 @@ pub fn brush_weight(d2: f64, falloff: f32) -> f32 {
 impl Project {
     pub(crate) fn changes(&self, map: &Map, cmd: &Command) -> Result<Change> {
         match cmd {
-            Command::Brush(s) => Ok(Change::Tiles(self.brush(map, s)?)),
+            Command::Brush(s) => {
+                let mut tiles = EditTiles::new();
+                self.brush_into(map, s, &mut tiles)?;
+                Ok(Change::Tiles(tile_changes(map, s.layer, tiles)))
+            }
             Command::Entity(e @ EntityEdit::DeleteWithMap { .. }) => {
                 Ok(Change::Deletion(self.entity_deletion(e)?))
             }
@@ -72,7 +78,11 @@ impl Project {
             }
             Command::Page(e) => Ok(Change::Page(self.page_change(e)?)),
             Command::Anchor(e) => Ok(Change::Anchor(self.anchor_change(e)?)),
-            Command::Paint(s) => Ok(Change::Tiles(self.paint(map, s)?)),
+            Command::Paint(s) => {
+                let mut tiles = EditTiles::new();
+                self.paint_into(map, s, &mut tiles)?;
+                Ok(Change::Tiles(tile_changes(map, s.layer, tiles)))
+            }
             Command::Generate(g) => Ok(Change::Generation(self.generation_change(
                 map,
                 g,
@@ -82,43 +92,106 @@ impl Project {
         }
     }
 
-    fn brush(&self, map: &Map, s: &BrushStroke) -> Result<Vec<TileChange>> {
-        let mut tiles: BTreeMap<(u32, u32), (Option<TileRecord>, Vec<f32>)> = BTreeMap::new();
-        let (w, h) = (map.settings.width as i64, map.settings.height as i64);
+    /// Adds the stroke to `tiles`, loading the ones it reaches first; gives the tiles it changed.
+    pub(crate) fn brush_into(
+        &self,
+        map: &Map,
+        s: &BrushStroke,
+        tiles: &mut EditTiles,
+    ) -> Result<BTreeSet<(u32, u32)>> {
+        let mut touched = BTreeSet::new();
         for p in &s.points {
             let r = p.radius / map.settings.metres_per_pixel;
             let (cx, cy) = map.to_pixels(p.at);
             let amount = s.strength * p.pressure;
-            for y in ((cy - r).floor() as i64).max(0)..((cy + r).ceil() as i64).min(h) {
-                for x in ((cx - r).floor() as i64).max(0)..((cx + r).ceil() as i64).min(w) {
-                    let d2 =
-                        ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)) / (r * r);
+            self.disc(
+                map,
+                s.layer,
+                (cx, cy),
+                r,
+                tiles,
+                &mut touched,
+                |v, dist2| {
+                    let d2 = dist2 / (r * r);
                     if d2 >= 1.0 {
-                        continue;
+                        return false;
                     }
-                    let (t, i) = tile_of(x as u32, y as u32);
-                    let tile = match tiles.entry(t) {
-                        Entry::Occupied(e) => e.into_mut(),
-                        Entry::Vacant(e) => {
-                            let before = self.store.tile(&map.tile_key(s.layer, t.0, t.1))?;
-                            let values = decode(before.as_ref())?;
-                            e.insert((before, values))
-                        }
-                    };
-                    tile.1[i] += amount * brush_weight(d2, s.falloff);
+                    *v += amount * brush_weight(d2, s.falloff);
+                    true
+                },
+            )?;
+        }
+        Ok(touched)
+    }
+
+    /// Calls `f(value, squared px distance)` for each pixel of `layer` in the box of the disc at `c`
+    /// with radius `r` px, tile by tile; `f` gives whether it changed the pixel.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn disc(
+        &self,
+        map: &Map,
+        layer: Layer,
+        (cx, cy): (f64, f64),
+        r: f64,
+        tiles: &mut EditTiles,
+        touched: &mut BTreeSet<(u32, u32)>,
+        mut f: impl FnMut(&mut f32, f64) -> bool,
+    ) -> Result<()> {
+        let (w, h) = (map.settings.width as i64, map.settings.height as i64);
+        let (x0, x1) = (
+            ((cx - r).floor() as i64).max(0),
+            ((cx + r).ceil() as i64).min(w),
+        );
+        let (y0, y1) = (
+            ((cy - r).floor() as i64).max(0),
+            ((cy + r).ceil() as i64).min(h),
+        );
+        if x0 >= x1 || y0 >= y1 {
+            return Ok(());
+        }
+        let t = TILE_SIZE as i64;
+        for ty in y0 / t..=(y1 - 1) / t {
+            for tx in x0 / t..=(x1 - 1) / t {
+                let key = (tx as u32, ty as u32);
+                let loaded = !tiles.contains_key(&key);
+                if loaded {
+                    let before = self.store.tile(&map.tile_key(layer, key.0, key.1))?;
+                    let values = decode(before.as_ref())?;
+                    tiles.insert(key, (before, values));
+                }
+                let values = &mut tiles.get_mut(&key).expect("inserted").1;
+                let mut hit = false;
+                for y in y0.max(ty * t)..y1.min((ty + 1) * t) {
+                    let dy = (y as f64 + 0.5 - cy).powi(2);
+                    let row = ((y - ty * t) * t) as usize;
+                    for x in x0.max(tx * t)..x1.min((tx + 1) * t) {
+                        let dist2 = (x as f64 + 0.5 - cx).powi(2) + dy;
+                        hit |= f(&mut values[row + (x - tx * t) as usize], dist2);
+                    }
+                }
+                if hit {
+                    touched.insert(key);
+                } else if loaded {
+                    // Only the box reaches this tile; it stays unedited.
+                    tiles.remove(&key);
                 }
             }
         }
-        Ok(tiles
-            .into_iter()
-            .map(|((tx, ty), (before, values))| TileChange {
-                key: map.tile_key(s.layer, tx, ty),
-                before,
-                after: Some(TileRecord {
-                    data: encode(&values),
-                    edited: true,
-                }),
-            })
-            .collect())
+        Ok(())
     }
+}
+
+/// One change per edited tile: the record before and the encoded values after.
+pub(crate) fn tile_changes(map: &Map, layer: Layer, tiles: EditTiles) -> Vec<TileChange> {
+    tiles
+        .into_iter()
+        .map(|((tx, ty), (before, values))| TileChange {
+            key: map.tile_key(layer, tx, ty),
+            before,
+            after: Some(TileRecord {
+                data: encode(&values),
+                edited: true,
+            }),
+        })
+        .collect()
 }
