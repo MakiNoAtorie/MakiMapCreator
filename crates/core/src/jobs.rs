@@ -14,6 +14,33 @@ struct Shared<T> {
     finished: Condvar,
 }
 
+/// Sets the calling thread's priority: -1 below normal, 0 normal.
+fn set_priority(_priority: i32) {
+    #[cfg(windows)]
+    {
+        // kernel32. The pseudo handle needs no closing.
+        unsafe extern "system" {
+            fn GetCurrentThread() -> isize;
+            fn SetThreadPriority(thread: isize, priority: i32) -> i32;
+        }
+        unsafe { SetThreadPriority(GetCurrentThread(), _priority) };
+    }
+}
+
+/// Runs the calling thread below normal priority, so background work never takes the CPU from an edit or the UI (ADR-0014).
+pub(crate) fn background_priority() {
+    set_priority(-1);
+}
+
+/// Runs a background thread's write transactions at normal priority: an edit waits for the write lock
+/// they hold, so other background work must not preempt them.
+pub(crate) fn holding_write_lock<T>(f: impl FnOnce() -> T) -> T {
+    set_priority(0);
+    let r = f();
+    set_priority(-1);
+    r
+}
+
 /// One worker thread per job; a new job cancels the older ones.
 pub(crate) struct Jobs<T> {
     shared: Arc<Shared<T>>,
@@ -44,6 +71,7 @@ impl<T: Send + 'static> Jobs<T> {
         let s = Arc::clone(&self.shared);
         self.threads.retain(|t| !t.is_finished());
         self.threads.push(std::thread::spawn(move || {
+            background_priority();
             let cancelled = || s.latest.load(SeqCst) != id;
             let Some(out) = job(&cancelled) else { return };
             let mut done = s.done.lock().unwrap();

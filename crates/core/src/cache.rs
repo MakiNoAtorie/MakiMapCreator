@@ -178,6 +178,7 @@ fn evict(s: &mut State) {
 }
 
 fn work(shared: &Shared, open: TileOpener) {
+    crate::jobs::background_priority();
     let mut reader = None;
     loop {
         let (key, epoch) = {
@@ -221,6 +222,7 @@ fn work(shared: &Shared, open: TileOpener) {
 
 /// Rebuilds pyramid tiles above dirty level-0 tiles, one batch per map, on its own connection.
 fn build(shared: &Shared, open: TileOpener) {
+    crate::jobs::background_priority();
     let mut conn = None;
     loop {
         let (batch, top) = {
@@ -255,7 +257,7 @@ fn build(shared: &Shared, open: TileOpener) {
                 .collect::<crate::Result<Vec<_>>>()
                 .ok()?;
             let (writes, put) = upper_levels(changed, top, |k| c.tile(k)).ok()?;
-            c.write_tiles(&writes).ok()?;
+            crate::jobs::holding_write_lock(|| c.write_tiles(&writes)).ok()?;
             Some(put)
         });
         let mut s = shared.lock();

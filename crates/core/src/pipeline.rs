@@ -99,6 +99,7 @@ pub fn par_map<T: Sync, R: Send>(
         let workers: Vec<_> = (0..threads.max(1))
             .map(|_| {
                 s.spawn(|| {
+                    crate::jobs::background_priority();
                     let mut v = vec![];
                     loop {
                         let i = next.fetch_add(1, Relaxed);
@@ -294,7 +295,7 @@ fn commit(committed: &Committed, out: Result<Output>) -> Result<()> {
             writes.push((level_key(map, l, level, t), rec));
         }
     }
-    conn.write_tiles(&writes)?;
+    crate::jobs::holding_write_lock(|| conn.write_tiles(&writes))?;
     *committed = Some(known);
     Ok(())
 }
