@@ -441,8 +441,7 @@ impl Sums {
 }
 
 impl Project {
-    /// Adds the stroke to `tiles` and gives the tiles it changed; `cached` takes tiles from the cache.
-    /// `level` is the stroke's flatten level; `None` samples it under the first stamp.
+    /// Adds the stroke to `tiles` and gives the tiles it changed; `level` `None` samples flatten's.
     pub(crate) fn brush_into(
         &self,
         map: &Map,

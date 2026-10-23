@@ -173,8 +173,7 @@ fn closer_to(poly: &[RootPoint], a: RootPoint, b: RootPoint) -> Vec<RootPoint> {
     out
 }
 
-/// A hard-edged, full-pressure stroke of the land tool (`land`) or the sea tool, for tests and
-/// the bench; the tools themselves stamp with the brush falloff and pressure.
+/// For tests: a hard full-pressure land (`land`) or sea stroke; the tools use falloff and pressure.
 pub fn paint(points: Vec<RootPoint>, radius: f64, land: bool) -> Command {
     Command::Brush(mmc_core::BrushStroke {
         layer: Layer::HEIGHT,

@@ -297,7 +297,7 @@ impl Canvas {
             let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter_at(rect).image(tex.id(), r, uv, Color32::WHITE);
         }
-        // Strokes the image does not have yet, shaded from the GPU copy in this frame.
+        // The live copy over the image.
         if req.layers.contains(&Layer::HEIGHT)
             && let Some(cb) = self.live.frame(&view, rect, ppp)
         {

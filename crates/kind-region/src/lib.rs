@@ -192,8 +192,7 @@ impl MapKindModule for RegionKind {
     }
 }
 
-/// The parent's land as +`COAST_RELIEF` and sea as -`COAST_RELIEF`: with the noise, where the coast
-/// goes, about one parent cell from the parent's, and never an island in flat parent sea.
+/// Parent land as +`COAST_RELIEF`, sea as -`COAST_RELIEF`: plus the noise, it places the coast.
 fn coast(h: f32) -> f32 {
     if h > WATER_LEVEL {
         WATER_LEVEL + COAST_RELIEF

@@ -53,8 +53,7 @@ fn height_at(t: vec2i) -> f32 {
     return textureLoad(heights, clamp(t, vec2i(0), vec2i(textureDimensions(heights)) - 1)).r;
 }
 
-// Flatten: the level is the pixel under the first stamp before the stroke, on the plane of
-// its texel `box0`.
+// Flatten: the level is the pixel under the first stamp, on the plane of its texel `box0`.
 @compute @workgroup_size(1)
 fn sample() {
     let t = p.box0;
@@ -74,8 +73,7 @@ fn reach_weight(x: i32, c: i32) -> f32 {
     return select(1.0, p.reach - f32(k - 1), abs(x - c) == k);
 }
 
-// Smooth: the mean along the row within `reach`, inside the copy, in differences from the
-// texel so f32 keeps the precision.
+// Smooth: the row mean within `reach`, summed as differences so f32 keeps the precision.
 @compute @workgroup_size(8, 8)
 fn smooth_rows(@builtin(global_invocation_id) id: vec3u) {
     if any(id.xy >= p.size) {
@@ -198,8 +196,7 @@ fn falloff(d2: f32, core: f32) -> f32 {
     return t * t;
 }
 
-// A texel is the mean of its level-0 pixels, as the pyramid: it changes by the mean change of
-// `sub` x `sub` of them, each starting at the texel's value.
+// A texel is the mean of its level-0 pixels (ADR-0025): it takes the mean change of `sub`² of them.
 @compute @workgroup_size(8, 8)
 fn stamp(@builtin(global_invocation_id) id: vec3u) {
     if any(id.xy >= p.size) {

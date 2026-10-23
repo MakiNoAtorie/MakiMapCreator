@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use mmc_core::{Command, MapId};
 
+use crate::brush::stamp_discs;
 use crate::canvas::{SharedProject, lock_project};
 use crate::live::{Applied, Mark};
 
@@ -201,11 +202,12 @@ impl Worker {
                         .find(|m| m.id == map)
                         .map_or(1.0, |m| m.settings.metres_per_pixel)
                 };
-                let last = last_point(&cmd);
+                let discs = stamp_discs(&cmd);
+                let last = discs.last().map(|d| d.0);
                 let s = self.stats.entry((map, stroke)).or_default();
                 s.parts += parts.len() as u32;
                 s.mpp = mpp;
-                s.radius = s.radius.max(max_radius(&cmd));
+                s.radius = discs.iter().map(|d| d.1).fold(s.radius, f64::max);
                 s.layer = layer(&cmd);
                 let mut result = Ok(());
                 // A few stamps per lock, so a large brush never holds the project for long.
@@ -213,7 +215,7 @@ impl Worker {
                     let (mut guard, wait) = lock_project(&self.project, "edit");
                     let t = Instant::now();
                     let Some(p) = guard.as_mut() else { return };
-                    let n = stamps(&chunk);
+                    let n = stamp_discs(&chunk).len();
                     result = p.apply_part(map, chunk);
                     let s = self.stats.entry((map, stroke)).or_default();
                     if result.is_ok() {
@@ -432,30 +434,6 @@ fn split(cmd: Command, mpp: f64) -> Vec<Command> {
             })
             .collect(),
         other => vec![other],
-    }
-}
-
-fn last_point(cmd: &Command) -> Option<mmc_core::RootPoint> {
-    match cmd {
-        Command::Brush(b) => b.points.last().map(|p| p.at),
-        Command::Paint(p) => p.points.last().copied(),
-        _ => None,
-    }
-}
-
-fn stamps(cmd: &Command) -> usize {
-    match cmd {
-        Command::Brush(b) => b.points.len(),
-        Command::Paint(p) => p.points.len(),
-        _ => 0,
-    }
-}
-
-fn max_radius(cmd: &Command) -> f64 {
-    match cmd {
-        Command::Brush(b) => b.points.iter().map(|p| p.radius).fold(0.0, f64::max),
-        Command::Paint(p) => p.radius,
-        _ => 0.0,
     }
 }
 

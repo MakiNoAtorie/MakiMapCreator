@@ -9,8 +9,7 @@ pub enum ToolAction {
     Brush,
     /// Sets the layer to `on` (raise) or `off` (lower) inside the stamp.
     Paint { on: f32, off: f32 },
-    /// Soft stamps that raise the layer to `to` (`raise`) or lower it to `to`, never the other
-    /// way (`BrushStroke::target`); the raise and lower toggle does not apply.
+    /// Soft stamps that raise (`raise`) or lower the layer to `to` (`BrushStroke::target`).
     Target { to: f32, raise: bool },
     /// Soft stamps toward the local mean (`BrushMode::Smooth`).
     Smooth,

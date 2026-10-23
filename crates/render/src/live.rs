@@ -394,9 +394,7 @@ impl Live {
         });
     }
 
-    /// Applies `s`'s stamps to the copy and submits the work; the part outside the copy is left
-    /// to the CPU render. False when there is no copy, or `level` is `Sample` and the first
-    /// stamp is outside it.
+    /// Stamps `s` inside the copy; false with no copy, or a `Sample` level off the copy.
     pub fn stamp(&mut self, seed: u64, s: &BrushStroke, level: FlattenLevel) -> bool {
         let Some(copy) = &self.copy else {
             return false;
@@ -606,9 +604,7 @@ impl Live {
         true
     }
 
-    /// Builds the detail tables of `seed` and `scale` over the copy unless they are current.
-    /// Per octave 8 words: amp (f32 bits), offsets of node x, node y, cols, rows. Node entries
-    /// are (lattice index, smoothstep f32 bits); cols and rows are u64 (lo, hi).
+    /// Detail tables over the copy as u32 words: per octave amp and offsets of node x, node y, cols, rows.
     fn tables(&mut self, seed: u64, scale: f64) {
         let Some(copy) = &self.copy else { return };
         let key = (seed, scale.to_bits());

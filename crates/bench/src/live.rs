@@ -8,8 +8,7 @@ use mmc_render::{FlattenLevel, Live, Renderer, ShaderPass, TARGET_FORMAT, View};
 
 use crate::{RUNS, detailed, median, time_ms};
 
-/// Results `stamp_to_visible` and `stroke_start_to_visible` on WARP at 384x216, where an upload
-/// costs about 85 ns a texel; with a hardware adapter also `*_gpu` at 1920x1080.
+/// On WARP at 384x216 (its upload costs 85 ns a texel); `*_gpu` on a hardware adapter at full HD.
 pub fn measure(
     project: &Project,
     map: MapId,
@@ -26,8 +25,7 @@ pub fn measure(
     }
 }
 
-/// (stamp to visible, stroke start to visible): the median ms of one frame's part of 4 stamps
-/// until its frame is drawn, and of the same with the copy's upload at pen down.
+/// Median ms from a 4-stamp part to its drawn frame: (alone, with the upload at pen down).
 fn on(
     mut r: Renderer,
     (width, height): (u32, u32),

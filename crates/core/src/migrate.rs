@@ -21,8 +21,7 @@ fn migrated(land: f32, h: f32) -> f32 {
 }
 
 impl Project {
-    /// Writes old land into height and deletes the land layer and land parent context,
-    /// one transaction per map. A file without them is left alone, so this runs once.
+    /// Moves old land into height, one transaction per map; a file without land is left alone.
     pub(crate) fn migrate_land(&mut self) -> Result<()> {
         let maps: Vec<MapId> = self.maps.iter().map(|m| m.id).collect();
         for id in maps {
