@@ -79,7 +79,8 @@ mod tests {
         project: Arc<Mutex<Option<Project>>>,
         requests: mpsc::Receiver<u64>,
         done: mpsc::Sender<(u64, bool)>,
-    ) {
+    ) -> Duration {
+        let mut max_wait = Duration::ZERO;
         let mut r = Renderer::warp().unwrap();
         let shader = mmc_kind_region::RegionKind.render_passes()[0].shader;
         r.register(Layer::HEIGHT, Box::new(ShaderPass::new(r.device(), shader)));
@@ -101,16 +102,17 @@ mod tests {
                 Some(e) => match requests.recv_timeout(Duration::from_millis(16)) {
                     Ok(n) => n,
                     Err(mpsc::RecvTimeoutError::Timeout) => e,
-                    Err(_) => return,
+                    Err(_) => return max_wait,
                 },
                 None => match requests.recv() {
                     Ok(n) => n,
-                    Err(_) => return,
+                    Err(_) => return max_wait,
                 },
             };
             let epoch = requests.try_iter().last().unwrap_or(next);
             let fetched = {
-                let g = lock_project(&project, "render").0;
+                let (g, wait) = lock_project(&project, "render");
+                max_wait = max_wait.max(wait);
                 let p = g.as_ref().unwrap();
                 r.fetch_cached(p, view).and_then(|f| f.with_summaries(p))
             };
@@ -119,14 +121,42 @@ mod tests {
                 pending = Some(epoch);
             }
             if done.send((epoch, complete)).is_err() {
-                return;
+                return max_wait;
             }
         }
+    }
+
+    /// Prints this crate's log lines, so the worker's per-stroke timings show.
+    struct Print;
+    impl log::Log for Print {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.target().starts_with("mmc_app::edit")
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                eprintln!("{}", r.args());
+            }
+        }
+        fn flush(&self) {}
     }
 
     #[test]
     #[ignore = "timing harness"]
     fn replay_strokes_through_the_edit_worker() {
+        replay(240.0);
+    }
+
+    /// The largest brush: 512 px at 10 m/px.
+    #[test]
+    #[ignore = "timing harness"]
+    fn replay_large_brush_strokes() {
+        replay(5120.0);
+    }
+
+    /// Replays `timeline` with a brush of `size` metres radius.
+    fn replay(size: f64) {
+        let _ = log::set_logger(&Print);
+        log::set_max_level(log::LevelFilter::Info);
         let dir = tempfile::tempdir().unwrap();
         let project = new_project(dir.path());
         let map = project.lock().unwrap().as_ref().unwrap().maps()[0].id;
@@ -139,7 +169,7 @@ mod tests {
 
         let events = timeline();
         let mut opts = Options::for_map(10.0);
-        opts.size = 240.0;
+        opts.size = size;
         let plan = |path: &[Sample]| {
             brush::plan(
                 ToolAction::Brush,
@@ -264,7 +294,7 @@ mod tests {
         }
         drop(editor);
         drop(req_tx);
-        worker.join().unwrap();
+        let render_wait = worker.join().unwrap();
         let ms = |a: Option<Instant>, up: Option<Instant>| {
             a.zip(up)
                 .map_or(-1.0, |(a, u)| (a - u).as_secs_f64() * 1000.0)
@@ -275,12 +305,13 @@ mod tests {
         applied.sort_by(f64::total_cmp);
         rendered.sort_by(f64::total_cmp);
         println!(
-            "up->applied median {:.0} max {:.0} ms; up->rendered median {:.0} max {:.0} ms; {frames} frames, max {:.1} ms, {slow} over 50 ms",
+            "up->applied median {:.0} max {:.0} ms; up->rendered median {:.0} max {:.0} ms; {frames} frames, max {:.1} ms, {slow} over 50 ms; render lock wait max {:.0} ms",
             applied[applied.len() / 2],
             applied[applied.len() - 1],
             rendered[rendered.len() / 2],
             rendered[rendered.len() - 1],
-            frame_max.as_secs_f64() * 1000.0
+            frame_max.as_secs_f64() * 1000.0,
+            render_wait.as_secs_f64() * 1000.0
         );
         project.lock().unwrap().take().unwrap().close().unwrap();
     }

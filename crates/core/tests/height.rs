@@ -1,6 +1,6 @@
 use mmc_core::{
     BrushStroke, Command, Layer, MapId, MapSettings, Project, RootPoint, StrokePoint, TILE_SIZE,
-    UNDO_LIMIT,
+    TileId, UNDO_LIMIT,
 };
 use mmc_kind_region::REGION;
 
@@ -161,7 +161,7 @@ fn a_stroke_applied_in_parts_equals_it_whole_and_undoes_in_one_step() {
     for &x in &xs {
         p.apply_part(a, stroke(x, 2555.0, 10.0)).unwrap();
     }
-    p.end_stroke(a);
+    p.end_stroke(a).unwrap();
     let points = xs
         .iter()
         .flat_map(|&x| match stroke(x, 2555.0, 10.0) {
@@ -193,15 +193,53 @@ fn parts_after_an_undo_or_end_start_a_new_step() {
     let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
     let map = p.maps()[0].id;
     p.apply_part(map, stroke(105.0, 105.0, 10.0)).unwrap();
-    p.end_stroke(map);
+    p.end_stroke(map).unwrap();
     p.apply_part(map, stroke(3005.0, 105.0, 10.0)).unwrap();
     assert!(p.undo(map).unwrap());
     // The open stroke was undone; its next part must not join the first stroke.
     p.apply_part(map, stroke(5005.0, 105.0, 10.0)).unwrap();
-    p.end_stroke(map);
+    p.end_stroke(map).unwrap();
     assert!(p.undo(map).unwrap());
     assert!(height(&p, map, 105.0, 105.0) > 9.0);
     assert_eq!(height(&p, map, 5005.0, 105.0), 0.0);
+}
+
+#[test]
+fn an_open_stroke_shows_in_the_cache_and_is_written_whole_at_end_or_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let map = p.maps()[0].id;
+    let tile = |p: &Project| {
+        let id = TileId {
+            map,
+            layer: Layer::HEIGHT,
+            level: 0,
+            tx: 0,
+            ty: 0,
+        };
+        p.cached_tile(id).unwrap();
+        p.wait_tiles();
+        p.cached_tile(id).unwrap().unwrap().1[10 * TILE_SIZE as usize + 10]
+    };
+    p.apply_part(map, stroke(105.0, 105.0, 10.0)).unwrap();
+    // Drawn, not written: the screen sees it, the derived pipeline does not wait on it.
+    assert!(tile(&p) > 9.0);
+    assert!(p.pyramid_pending(map));
+    assert!(p.edited_tiles(map, Layer::HEIGHT).unwrap().is_empty());
+    let file = dir.path().join("p.mmc");
+    p.save(&file);
+    p.wait_for_save().unwrap();
+    assert_eq!(p.edited_tiles(map, Layer::HEIGHT).unwrap(), vec![(0, 0)]);
+    // The save wrote the stroke; parts after it are a new step.
+    p.apply_part(map, stroke(105.0, 105.0, 10.0)).unwrap();
+    p.end_stroke(map).unwrap();
+    let twice = height(&p, map, 105.0, 105.0);
+    assert!((tile(&p) - twice).abs() < 1e-3 && twice > 19.0);
+    assert!(p.undo(map).unwrap());
+    assert!((height(&p, map, 105.0, 105.0) - twice / 2.0).abs() < 1e-3);
+    p.wait_for_save().unwrap();
+    let reopened = mmc_fixtures::open(&file, &dir.path().join("wc2.sqlite")).unwrap();
+    assert!(height(&reopened, map, 105.0, 105.0) > 9.0);
 }
 
 #[test]

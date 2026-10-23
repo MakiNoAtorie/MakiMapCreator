@@ -234,7 +234,7 @@ impl Painter {
                     }
                 }
             }
-            Done::Ended { .. } => None,
+            Done::Ended { result, .. } => result.err().and_then(|e| error(&e)),
             Done::Stepped { result, .. } => match result {
                 Ok(changed) => {
                     if changed {

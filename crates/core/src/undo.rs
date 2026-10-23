@@ -52,6 +52,7 @@ pub(crate) struct History {
 impl Project {
     /// Applies `cmd` to `map` in the working copy and records it in the map's history.
     pub fn apply(&mut self, map: MapId, cmd: Command) -> Result<()> {
+        self.finish_strokes()?;
         let changes = self.changes(self.map(map)?, &cmd)?;
         let changes = self.clip_to_outline(map, changes)?;
         self.refuse_derived(map, &changes)?;
@@ -60,6 +61,7 @@ impl Project {
 
     /// Writes `changes` applied on `map` and records them in the history `history_key` picks.
     pub(crate) fn record(&mut self, map: MapId, changes: Change) -> Result<()> {
+        self.finish_strokes()?;
         let key = crate::delete::history_key(map, &changes);
         self.write(&changes, true)?;
         self.after_write(map, &changes);
@@ -67,7 +69,7 @@ impl Project {
         Ok(())
     }
 
-    fn push(&mut self, key: MapId, changes: Change) {
+    pub(crate) fn push(&mut self, key: MapId, changes: Change) {
         let h = self.history.entry(key).or_default();
         h.undone.clear();
         h.open_stroke = false;
@@ -78,7 +80,13 @@ impl Project {
     }
 
     /// Applies one part of a stroke drawn while the pen moves; parts until `end_stroke` are one undo step.
+    /// A brush or paint part on a map without an outline stays in memory until `end_stroke` (see `stroke.rs`).
     pub fn apply_part(&mut self, map: MapId, cmd: Command) -> Result<()> {
+        if self.map(map)?.outline.is_none() && matches!(cmd, Command::Brush(_) | Command::Paint(_))
+        {
+            return self.stroke_part(map, &cmd);
+        }
+        self.finish_strokes()?;
         let changes = self.changes(self.map(map)?, &cmd)?;
         let changes = self.clip_to_outline(map, changes)?;
         self.refuse_derived(map, &changes)?;
@@ -93,19 +101,23 @@ impl Project {
         Ok(())
     }
 
-    /// Ends the stroke `apply_part` began on `map` and starts the rebuild of its derived layers.
-    pub fn end_stroke(&mut self, map: MapId) {
+    /// Ends the stroke `apply_part` began on `map`: writes it and starts the rebuild of its derived layers.
+    pub fn end_stroke(&mut self, map: MapId) -> Result<()> {
+        if let Some(s) = self.take_stroke(map) {
+            return self.commit_stroke(s.encode());
+        }
         let Some(h) = self.history.get_mut(&map) else {
-            return;
+            return Ok(());
         };
         if !std::mem::take(&mut h.open_stroke) {
-            return;
+            return Ok(());
         }
         let layers: Vec<_> = match h.done.back() {
             Some(Change::Tiles(t)) => t.iter().map(|c| c.key.layer).collect(),
             _ => vec![],
         };
         self.layers_written(map, &layers);
+        Ok(())
     }
 
     /// Undoes the last command on `map`; `false` if there is none.
@@ -122,6 +134,7 @@ impl Project {
 
     /// Redoes (`forward`) or undoes one change of the history `key`.
     pub(crate) fn step(&mut self, key: MapId, forward: bool) -> Result<bool> {
+        self.finish_strokes()?;
         let h = self.history.entry(key).or_default();
         h.open_stroke = false;
         let Some(changes) = (if forward {

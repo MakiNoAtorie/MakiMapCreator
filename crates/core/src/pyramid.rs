@@ -106,7 +106,7 @@ pub fn read_overviews(
 }
 
 impl Project {
-    fn tiles(&self) -> &TileCache {
+    pub(crate) fn tiles(&self) -> &TileCache {
         self.cache
             .get_or_init(|| TileCache::new(self.store.tile_opener()))
     }
@@ -142,7 +142,7 @@ impl Project {
 
     /// True while levels above level 0 of `map` do not yet show the last edit.
     pub fn pyramid_pending(&self, map: MapId) -> bool {
-        self.cache.get().is_some_and(|c| c.pyramid_pending(map.0))
+        self.strokes.unwritten(map) || self.cache.get().is_some_and(|c| c.pyramid_pending(map.0))
     }
 
     /// Blocks until all queued tile loads and pyramid updates after edits are done.
@@ -182,11 +182,15 @@ impl Project {
             return Ok(());
         }
         let cache = self.tiles();
-        for (k, _) in &put {
-            let top = self.top_level(MapId(k.map_id))?;
-            cache.mark_dirty([k.clone()], top);
-        }
+        let dirty = put
+            .iter()
+            .map(|(k, _)| Ok((k.clone(), self.top_level(MapId(k.map_id))?)))
+            .collect::<Result<Vec<_>>>()?;
+        // The pyramid worker reads level 0 from the cache, so the cache gets the tiles first.
         cache.put(put);
+        for (k, top) in dirty {
+            cache.mark_dirty([k], top);
+        }
         Ok(())
     }
 

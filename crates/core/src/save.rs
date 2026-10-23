@@ -16,6 +16,11 @@ pub(crate) struct Saves {
 impl Project {
     /// Starts a background save of every edit made before this call; a newer save replaces it.
     pub fn save(&mut self, file: &Path) {
+        // An open stroke is written first, so the snapshot holds whole strokes only.
+        if let Err(e) = self.finish_strokes() {
+            self.saves.jobs.submit(|_| Some(()), move |()| Err(e));
+            return;
+        }
         // The top pyramid level is the file's overview; it must be current in the snapshot.
         self.wait_pyramid();
         let (saver, file) = (self.store.saver(), file.to_owned());

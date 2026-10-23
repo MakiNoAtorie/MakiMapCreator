@@ -250,10 +250,22 @@ fn build(shared: &Shared, open: TileOpener) {
             conn = open().ok();
         }
         // ponytail: a failed rebuild is dropped; the next edit nearby rebuilds those levels.
+        // Cached level-0 tiles equal the stored ones: every write puts its tiles.
+        let cached: Vec<Option<Tile>> = {
+            let s = shared.lock();
+            batch
+                .iter()
+                .map(|k| s.tiles.get(k).map(|t| t.0.clone()))
+                .collect()
+        };
         let built = conn.as_ref().and_then(|c| {
             let changed = batch
                 .iter()
-                .map(|k| Ok((k.clone(), decode(c.tile(k)?.as_ref())?)))
+                .zip(cached)
+                .map(|(k, t)| match t {
+                    Some(t) => Ok((k.clone(), t.to_vec())),
+                    None => Ok((k.clone(), decode(c.tile(k)?.as_ref())?)),
+                })
                 .collect::<crate::Result<Vec<_>>>()
                 .ok()?;
             let (writes, put) = upper_levels(changed, top, |k| c.tile(k)).ok()?;

@@ -12,6 +12,8 @@ pub use pipeline::{Raster, Stage, StageInput, par_map};
 mod pyramid;
 pub mod rng;
 mod save;
+mod stroke;
+pub use stroke::{EncodedStroke, EndedStroke};
 mod undo;
 pub use cache::TILE_CACHE_BYTES;
 pub use command::{BrushStroke, Command, StrokePoint, brush_weight};
@@ -205,6 +207,7 @@ pub struct Project {
     saves: save::Saves,
     cache: std::sync::OnceLock<cache::TileCache>,
     resync: resync::State,
+    strokes: stroke::Strokes,
 }
 
 impl Project {
@@ -241,6 +244,7 @@ impl Project {
             saves: Default::default(),
             cache: Default::default(),
             resync: Default::default(),
+            strokes: Default::default(),
         })
     }
 
@@ -262,6 +266,7 @@ impl Project {
             saves: Default::default(),
             cache: Default::default(),
             resync: Default::default(),
+            strokes: Default::default(),
         };
         p.names = p.build_name_index()?;
         p.load_child_outlines()?;
@@ -293,6 +298,7 @@ impl Project {
 
     /// Waits for a running save, then closes the project and deletes its working copy.
     pub fn close(mut self) -> Result<()> {
+        self.finish_strokes()?;
         self.wait_for_save()?;
         self.pipeline.shutdown();
         // Tile workers hold read connections to the working copy; stop them first.
