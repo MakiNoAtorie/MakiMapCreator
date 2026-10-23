@@ -28,7 +28,7 @@ Goal: a functional creative tool in the family of Blender, Krita and Affinity. N
 ## Colour
 - Warm neutral greys (paper and ink), light and dark themes.
 - One muted accent (ochre in dark, deep ochre in light), used only for selection, the active tool, the active mode and entity links.
-- Map colours never take the UI tint. The map has its own cartographic palette.
+- Map colours never take the UI tint. The map has its own cartographic palette, the same in both themes: light sea, green to brown land and a dark coastline read on the light and the dark canvas alike, so the theme only frames the map. `cargo test -p mmc-app theme_preview -- --ignored` writes `target/theme-preview-{light,dark}.png` to check it.
 
 ## Type
 - UI: neutral sans, 13 px body, 11 px small, tabular figures for numbers. Bundle IBM Plex Sans or Source Sans 3 (the mockup used Segoe UI).

@@ -498,14 +498,18 @@ pub fn export_png(
     tile: u32,
     path: PathBuf,
 ) -> JoinHandle<Result<()>> {
-    std::thread::spawn(move || {
-        let img = renderer.render(&scene, tile)?;
-        let file = std::fs::File::create(&path).map_err(Error::Io)?;
-        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), img.width, img.height);
+    std::thread::spawn(move || renderer.render(&scene, tile)?.write_png(&path))
+}
+
+impl Image {
+    /// Writes the image to `path` as an RGBA PNG.
+    pub fn write_png(&self, path: &std::path::Path) -> Result<()> {
+        let file = std::fs::File::create(path).map_err(Error::Io)?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().map_err(Error::Png)?;
-        writer.write_image_data(&img.rgba).map_err(Error::Png)?;
+        writer.write_image_data(&self.rgba).map_err(Error::Png)?;
         writer.finish().map_err(Error::Png)
-    })
+    }
 }

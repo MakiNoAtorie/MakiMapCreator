@@ -146,3 +146,75 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
     ctx.set_fonts(f);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mmc_core::{BrushStroke, Command, Kinds, Layer, MapKindModule, Project, RootPoint};
+    use mmc_render::{Renderer, ShaderPass, View};
+
+    /// Writes `target/theme-preview-{light,dark}.png`: one terrain image framed by each theme.
+    /// `cargo test -p mmc-app theme_preview -- --ignored`
+    #[test]
+    #[ignore]
+    fn theme_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let kinds = Arc::new(Kinds::new(vec![Box::new(mmc_kind_region::RegionKind)]));
+        let mut settings = mmc_kind_region::RegionKind.default_settings();
+        (settings.width, settings.height) = (640, 400);
+        let store = mmc_store::Store::create(&dir.path().join("wc.sqlite")).unwrap();
+        let mut p = Project::create(Box::new(store), kinds, settings).unwrap();
+        let map = p.maps()[0].id;
+        let at = |x: f64, y: f64| RootPoint { x, y };
+        // Sea at -150 m, a coast, lowland and a 1500 m range.
+        let strokes = [
+            (at(3200.0, 2000.0), 6000.0, -150.0),
+            (at(3800.0, 2000.0), 2600.0, 400.0),
+            (at(4200.0, 1800.0), 1500.0, 1200.0),
+            (at(1400.0, 2600.0), 800.0, 250.0),
+        ];
+        for (c, radius, strength) in strokes {
+            let s = BrushStroke {
+                points: vec![mmc_core::StrokePoint {
+                    at: c,
+                    pressure: 1.0,
+                    radius,
+                }],
+                strength,
+                ..Default::default()
+            };
+            p.apply(map, Command::Brush(s)).unwrap();
+        }
+        let mut r = Renderer::warp().unwrap();
+        let shader = mmc_kind_region::RegionKind.render_passes()[0].shader;
+        r.register(Layer::HEIGHT, Box::new(ShaderPass::new(r.device(), shader)));
+        let view = View {
+            map,
+            min: at(-400.0, -400.0),
+            max: at(6800.0, 4400.0),
+            width: 720,
+            height: 480,
+        };
+        let img = r.render(&r.scene(&p, view).unwrap(), u32::MAX).unwrap();
+        for (name, dark) in [("light", false), ("dark", true)] {
+            let t = Theme::new(dark);
+            let mut out = img.clone();
+            for (i, px) in out.rgba.chunks_mut(4).enumerate() {
+                // A panel strip on top, the canvas colour around the map.
+                let bg = if i / img.width as usize >= 440 {
+                    t.panel
+                } else {
+                    t.canvas
+                };
+                let a = px[3] as u32;
+                for (c, b) in px[..3].iter_mut().zip(bg.to_array()) {
+                    *c = ((*c as u32 * a + b as u32 * (255 - a)) / 255) as u8;
+                }
+                px[3] = 255;
+            }
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../target/theme-preview-{name}.png"));
+            out.write_png(&path).unwrap();
+        }
+    }
+}
