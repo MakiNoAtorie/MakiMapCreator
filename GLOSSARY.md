@@ -81,6 +81,9 @@ _Avoid_: Generated layer (generation also writes authored layers)
 The height that splits land (above) from sea (at or below). It is 0 m on every map for now; there is no separate land layer.
 _Avoid_: Sea mask, land layer
 
+**Live copy**:
+A GPU copy of the shown heights that a brush stroke changes in the frame it is drawn, until the stored result replaces it. It is never saved.
+
 **Lock mask**:
 An authored layer that marks areas that masked regeneration and re-sync must not change.
 

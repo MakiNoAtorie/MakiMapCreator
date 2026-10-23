@@ -440,9 +440,33 @@ impl Live {
         })
     }
 
-    /// Draws the copy for `view` to an image; needs a `TARGET_FORMAT` copy. For tests and the bench.
+    /// Draws the copy for `view` to an image; needs a `TARGET_FORMAT` copy. For tests.
     pub fn render(&self, view: View) -> Result<Image> {
-        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+        let target = self.target(&view);
+        self.submit_frame(&view, &target);
+        let rgba = read_texture(&self.device, &self.queue, &target, view.width, view.height)?;
+        Ok(Image {
+            width: view.width,
+            height: view.height,
+            rgba,
+        })
+    }
+
+    /// Draws the copy for `view` offscreen and submits it, as a frame does. For the bench.
+    pub fn draw(&self, view: View) {
+        self.submit_frame(&view, &self.target(&view));
+    }
+
+    /// Waits until the GPU has done the work submitted so far.
+    pub fn wait(&self) -> Result<()> {
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map(|_| ())
+            .map_err(|e| crate::Error::Gpu(e.to_string()))
+    }
+
+    fn target(&self, view: &View) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("live render"),
             size: wgpu::Extent3d {
                 width: view.width,
@@ -455,18 +479,11 @@ impl Live {
             format: TARGET_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
-        });
-        self.submit_frame(&view, &target);
-        let rgba = read_texture(&self.device, &self.queue, &target, view.width, view.height)?;
-        Ok(Image {
-            width: view.width,
-            height: view.height,
-            rgba,
         })
     }
 
     /// Records and submits one draw of the copy for `view` into `target`, as an app frame does.
-    pub fn submit_frame(&self, view: &View, target: &wgpu::Texture) {
+    fn submit_frame(&self, view: &View, target: &wgpu::Texture) {
         let frame = self.frame(view, [0.0, 0.0]);
         let target_view = target.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());

@@ -16,3 +16,7 @@ full_text_first_results = 50
 save_edit_pause = 16
 # ADR-0014 one frame: one 512 px stamp into an open stroke after the pen hovered there (tiles prefetched).
 large_brush_stamp = 16
+# ADR-0025 one frame, WARP: a 4-stamp part with detail run on the GPU copy, then its 1920x1080 frame submitted.
+stamp_to_visible = 16
+# The same with the copy uploaded at pen down, to the frame submitted.
+stroke_start_to_visible = 16

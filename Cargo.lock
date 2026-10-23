@@ -1919,6 +1919,8 @@ version = "0.1.0"
 dependencies = [
  "mmc-core",
  "mmc-fixtures",
+ "mmc-kind-region",
+ "mmc-render",
  "tempfile",
 ]
 

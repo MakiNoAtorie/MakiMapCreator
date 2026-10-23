@@ -35,7 +35,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and the object layer `Layer::OUTLINES`; kind crates define the rest.
 - Land is `height > WATER_LEVEL` (core, 0 m); no kind stores a land mask (ADR-0024). Old `land` layers migrate on open (`core/src/migrate.rs`); never add a layer named `land`.
 - `BrushStroke::target` raises to or lowers to a value (sign of `strength`), never the other way; `ToolAction::Target` makes such tools.
-- Brush maths: `stamp_weight` and `detail_noise` (`core/src/brush.rs`) are the reference the GPU brush ports; the CPU hot path gives the same bits. Stamps use root-space global pixel centres and project-seed noise (stage `brush-detail`). Detail is evaluated every 4 global pixels (octaves under 8 px skipped) and interpolated bilinearly.
+- Brush maths: `stamp_weight` and `detail_noise` (`core/src/brush.rs`) are the reference; the CPU hot path and `detail_tables` give the same bits, `render/src/live.wgsl` ports them (change both; `render/tests/live.rs` holds them within 1e-3 m). Stamps use root-space global pixel centres and project-seed noise (stage `brush-detail`). Detail is evaluated every 4 global pixels (octaves under 8 px skipped) and interpolated bilinearly.
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3; core owns the format. A missing tile is zeros, not edited. Level `l` pixels are 2x2 means of `l-1`; the top tile is the overview; only level 0 is ever edited.
 - Write tiles through `Project::write_rows`: it feeds the cache and the pyramid worker. Tests use `wait_tiles()`.
 - Every edit is a `Command` giving one `undo::Change` with before and after records; `apply_part` parts are one change until `end_stroke`. On a map without an outline a stroke stays decoded in memory (`stroke.rs`), shown through the cache, and is written once at pen up (`take_stroke`, `encode` unlocked, `commit_stroke`); edits, undo and save write an open stroke first. Undo is per map, in memory, bounded by `UNDO_LIMIT`. Deleting map M goes to M's parent history, a root map to `undo_project`; child map creation to the parent history.
@@ -68,6 +68,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Image hashes are per backend, recorded for WARP. `Renderer::warp()` shares one WARP device per process; never make another.
 - Terrain shading lives once in `mmc-render` (`terrain.rs` tables `PALETTE`/`COAST`, `terrain.wgsl`), prepended to every pass; a kind's height pass calls `terrain(heights, pos.xy)`. Change colours only in `PALETTE`.
 - Shading reads heights bilinearly with slopes in metres per metre (`metres_per_pixel` of the drawn level); scenes fetch 2 map pixels of margin.
+- Live brush (ADR-0025): display only. The edit worker writes `live::Applied` under the project lock; the render worker reads it there, so a complete render knows the stamps it shows. Smooth and flatten stay on the CPU overlay.
 
 ## Pages and anchors
 
@@ -84,7 +85,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Benchmark gate
 
 - `mmc-bench` measures through core's API on `mmc-fixtures` data and fails on any exceeded budget; results are JSON name to `median_ms`, `budget_ms`, `ok`.
-- A budget is one line in `bench/budgets.toml` plus one entry in `measure()`; a budget with no result fails. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit.
+- A budget is one line in `bench/budgets.toml` plus one entry in `measure()`; a budget with no result fails. Gate on the median of `RUNS`. Budget = the ADR-0014 number, else about 10x the median; raise one only with a reason in the commit. GPU budgets run on WARP (`Renderer::warp`) up to the frame's queue submission; the frame's own draw is not timed.
 
 ## App
 

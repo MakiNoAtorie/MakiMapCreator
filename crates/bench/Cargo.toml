@@ -6,4 +6,6 @@ edition = "2024"
 [dependencies]
 mmc-core = { version = "0.1.0", path = "../core" }
 mmc-fixtures = { version = "0.1.0", path = "../fixtures" }
+mmc-kind-region = { version = "0.1.0", path = "../kind-region" }
+mmc-render = { version = "0.1.0", path = "../render" }
 tempfile = "3.27.0"

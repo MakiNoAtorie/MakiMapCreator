@@ -6,6 +6,7 @@ use std::time::Instant;
 use mmc_core::{Command, Layer, TileId};
 use mmc_fixtures::{LargeMap, Rng};
 
+mod live;
 mod search;
 
 const BUDGETS: &str = include_str!("../budgets.toml");
@@ -92,6 +93,7 @@ fn measure() -> BTreeMap<String, f64> {
             ms
         })
         .collect();
+    let (stamp_visible, start_visible) = live::measure(&project, map, &fixture, &mut rng);
     // Save and open time the fixture as built; strokes during a save grow the file by machine speed.
     project.wait_for_jobs().unwrap();
     let save = (0..RUNS)
@@ -189,6 +191,8 @@ fn measure() -> BTreeMap<String, f64> {
         ("pan_full_tiles".into(), median(full)),
         ("save".into(), median(save)),
         ("save_edit_pause".into(), median(pause)),
+        ("stamp_to_visible".into(), stamp_visible),
+        ("stroke_start_to_visible".into(), start_visible),
     ])
 }
 
