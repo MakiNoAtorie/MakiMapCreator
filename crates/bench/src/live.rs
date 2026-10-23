@@ -8,7 +8,7 @@ use mmc_render::{FlattenLevel, Live, Renderer, ShaderPass, TARGET_FORMAT, View};
 
 use crate::{RUNS, detailed, median, time_ms};
 
-/// On WARP at 384x216 (its upload costs 85 ns a texel); `*_gpu` on a hardware adapter at full HD.
+/// On WARP at 320x180, so 2 cores pass (its upload costs 85 ns a texel); `*_gpu` on a hardware adapter at full HD.
 pub fn measure(
     project: &Project,
     map: MapId,
@@ -16,7 +16,7 @@ pub fn measure(
     rng: &mut Rng,
     results: &mut BTreeMap<String, f64>,
 ) {
-    let mut runs = vec![("", Renderer::warp().unwrap(), (384, 216))];
+    let mut runs = vec![("", Renderer::warp().unwrap(), (320, 180))];
     runs.extend(Renderer::hardware().map(|r| ("_gpu", r, (1920, 1080))));
     for (suffix, r, size) in runs {
         let (stamp, start) = on(r, size, project, map, fixture, rng);

@@ -235,9 +235,16 @@ impl Project {
                 }
                 let k = map.tile_key(layer, key.0, key.1);
                 // Cached level-0 tiles equal the stored ones; a record costs more to read than a copy.
-                match cached.then(|| self.tiles().get(&k)).flatten() {
-                    Some(v) => {
-                        tiles.insert(key, (None, v.to_vec()));
+                if let Some(v) = cached.then(|| self.tiles().get(&k)).flatten() {
+                    tiles.insert(key, (None, v.to_vec()));
+                    loaded.insert(key);
+                    continue;
+                }
+                // A record an edit wrote lately is in the overlay: no SQLite read (ADR-0014).
+                match self.writer.get().and_then(|w| w.overlay().get(&k)) {
+                    Some(before) => {
+                        let values = decode(before.as_ref())?;
+                        tiles.insert(key, (Some(before), values));
                         loaded.insert(key);
                     }
                     None => missing.push(key),
@@ -252,11 +259,7 @@ impl Project {
                 .into_iter()
                 .collect();
             for key in missing {
-                let k = map.tile_key(layer, key.0, key.1);
-                let before = match self.writer.get().and_then(|w| w.overlay().get(&k)) {
-                    Some(rec) => rec,
-                    None => stored.remove(&key),
-                };
+                let before = stored.remove(&key);
                 let values = decode(before.as_ref())?;
                 tiles.insert(key, (Some(before), values));
                 loaded.insert(key);
