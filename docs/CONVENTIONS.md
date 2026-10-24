@@ -7,7 +7,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - Cargo workspace, `members = ["crates/*"]`; add a crate as `crates/<name>`, package `mmc-<name>`.
 - Crates: `mmc-core` (headless API, seam 1), `mmc-store` (SQLite), `mmc-render` (wgpu, seam 2), `mmc-page`, `mmc-kind-<name>`, `mmc-fixtures` (test and bench data), `mmc-bench` (gate), `mmc-app` (egui).
 - Rust stable, edition 2024, Windows x86_64 MSVC. Warnings are errors. Dev profile: dependencies at opt-level 3, workspace at 1.
-- Before a push, as CI: `cargo fmt --all --check`, `cargo build --workspace --all-targets`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo run -p mmc-bench --release -- bench-results.json`.
+- Before a push, run `ci.bat` (`ci.bat 2` when another build runs); it runs the CI checks. Keep it and `.github/workflows/ci.yml` in step.
+- CI runs on `main` pushes and PRs only, not on docs-only changes. It is a backstop: merge on a green `ci.bat`, not on CI.
+- Run the bench gate alone, after `ci.bat`, when a change can affect timings: `cargo run -p mmc-bench --release -- bench-results.json`.
 
 ## Architecture
 
