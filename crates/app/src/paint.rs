@@ -380,18 +380,18 @@ impl Painter {
             ui.label(tr("options-falloff"));
             ui.add(egui::Slider::new(&mut self.options.falloff, 0.0..=1.0));
             ui.separator();
-            // Roughen is all detail; its amount is the strength.
+            // Roughen is all detail: its amount is the strength, its scale the size.
             if action != Some(ToolAction::Roughen) {
                 ui.label(tr("options-detail"));
                 ui.add(egui::Slider::new(&mut self.options.detail, 0.0..=1.0));
+                ui.label(tr("options-detail-scale"));
+                let (lo, hi) = Options::detail_scale_limits(mpp);
+                ui.add(
+                    egui::Slider::new(&mut self.options.detail_scale, lo..=hi)
+                        .logarithmic(true)
+                        .suffix(tr("unit-m")),
+                );
             }
-            ui.label(tr("options-detail-scale"));
-            let (lo, hi) = Options::detail_scale_limits(mpp);
-            ui.add(
-                egui::Slider::new(&mut self.options.detail_scale, lo..=hi)
-                    .logarithmic(true)
-                    .suffix(tr("unit-m")),
-            );
             ui.separator();
             ui.checkbox(&mut self.options.pressure_size, tr("options-pressure-size"));
             ui.checkbox(

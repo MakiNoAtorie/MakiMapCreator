@@ -4,8 +4,8 @@ use std::fmt;
 
 mod brush;
 pub use brush::{
-    BrushMode, DETAIL_STAGE, Detail, DetailTables, OctaveTable, detail_noise, detail_tables,
-    stamp_weight,
+    BrushMode, DETAIL_STAGE, Detail, DetailNoise, DetailTables, OctaveTable, RIDGE_GAIN,
+    RIDGE_HEIGHTS, detail_noise, detail_tables, stamp_weight,
 };
 mod cache;
 mod command;

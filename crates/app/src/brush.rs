@@ -139,9 +139,14 @@ pub fn plan(
             falloff: o.falloff,
             target,
             mode,
+            // Roughen's coarsest bumps are the brush size, so it gives bumps, not grain.
             detail: Detail {
                 amount: o.detail,
-                scale: o.detail_scale,
+                scale: if mode == BrushMode::Roughen {
+                    o.size
+                } else {
+                    o.detail_scale
+                },
             },
         })
     };
@@ -403,16 +408,18 @@ mod tests {
         o.detail = 0.7;
         o.strength = 50.0;
         let path = [p(0.0, 1.0)];
-        for (action, mode, strength) in [
-            (ToolAction::Smooth, BrushMode::Smooth, 0.25),
-            (ToolAction::Flatten, BrushMode::Flatten, 0.25),
-            (ToolAction::Roughen, BrushMode::Roughen, -12.5),
-            (ToolAction::Brush, BrushMode::Add, -12.5),
+        o.size = 900.0;
+        // Roughen's bumps follow the brush size.
+        for (action, mode, strength, scale) in [
+            (ToolAction::Smooth, BrushMode::Smooth, 0.25, 320.0),
+            (ToolAction::Flatten, BrushMode::Flatten, 0.25, 320.0),
+            (ToolAction::Roughen, BrushMode::Roughen, -12.5, 900.0),
+            (ToolAction::Brush, BrushMode::Add, -12.5, 320.0),
         ] {
             match plan(action, Layer::HEIGHT, Direction::Lower, &o, 10.0, &path) {
                 Some(Command::Brush(b)) => assert_eq!(
                     (b.mode, b.strength, b.detail.amount, b.detail.scale),
-                    (mode, strength, 0.7, 320.0)
+                    (mode, strength, 0.7, scale)
                 ),
                 other => panic!("{other:?}"),
             }

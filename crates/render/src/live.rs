@@ -64,7 +64,8 @@ struct Params {
     octaves: u32,
     first: u32,
     reach: f32,
-    _pad: [u32; 2],
+    /// `RIDGE_HEIGHTS`.
+    ridge: [f32; 2],
 }
 
 /// `live.wgsl` `Stamp`; `centre` is in frame pixels.
@@ -481,6 +482,7 @@ impl Live {
             detail: s.detail.amount(),
             total,
             octaves,
+            ridge: mmc_core::RIDGE_HEIGHTS.into(),
             ..Default::default()
         };
         let Some(copy) = &self.copy else {
@@ -793,7 +795,7 @@ mod tests {
             wgsl("Params"),
             layout!(
                 Params, box0, size, g0, level, count, sub, detail, total, octaves, first, reach,
-                _pad
+                ridge
             )
         );
         assert_eq!(
@@ -812,5 +814,7 @@ mod tests {
             let line = format!("const {name} = {v}u;");
             assert!(include_str!("live.wgsl").contains(&line), "{line}");
         }
+        let gain = format!("const RIDGE_GAIN = {:?};", mmc_core::RIDGE_GAIN);
+        assert!(include_str!("live.wgsl").contains(&gain), "{gain}");
     }
 }

@@ -50,14 +50,42 @@ impl BrushStroke {
 
 /// `rng` stage of the brush detail noise; the seed is the project seed.
 pub const DETAIL_STAGE: &str = "brush-detail";
-const OCTAVES: u32 = 4;
+const OCTAVES: u32 = 6;
 
 /// Detail noise is evaluated every `NODE` global pixels and interpolated between.
 const NODE: i64 = 4;
 /// Octaves with a cell under this many pixels are skipped.
 const MIN_CELL: f64 = (2 * NODE) as f64;
-/// Sum of all octave amplitudes, skipped ones included.
-const TOTAL: f64 = 1.875;
+/// An octave sum over this, clamped to -1..1, is the noise: half the sum of all octave
+/// amplitudes, skipped ones included, so that a stroke shows its detail.
+const TOTAL: f64 = 1.96875 / 2.0;
+/// Raising adds blend from value noise to ridged noise between these heights, metres.
+pub const RIDGE_HEIGHTS: (f32, f32) = (150.0, 1200.0);
+/// Ridged noise counts this many times, so that half detail carves full ridges.
+pub const RIDGE_GAIN: f64 = 2.0;
+
+/// Detail noise at a pixel, both in -1..1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetailNoise {
+    /// Value noise: lumps.
+    pub value: f64,
+    /// Ridged noise: crests where the value noise crosses its middle.
+    pub ridged: f64,
+}
+
+impl DetailNoise {
+    /// The noise a stamp uses on ground at `height`: ridged, times `RIDGE_GAIN`, on high ground
+    /// when it raises.
+    pub fn at(self, height: f32, raise: bool) -> f64 {
+        if !raise {
+            return self.value;
+        }
+        let (lo, hi) = RIDGE_HEIGHTS;
+        let t = ((height - lo) / (hi - lo)).clamp(0.0, 1.0) as f64;
+        let s = t * t * (3.0 - 2.0 * t);
+        self.value * (1.0 - s) + RIDGE_GAIN * self.ridged * s
+    }
+}
 
 /// Octave amplitudes and cells, coarse first; `false` marks a skipped octave.
 fn octaves(scale: f64, mpp: f64) -> impl Iterator<Item = (f64, f64, bool)> {
@@ -67,8 +95,8 @@ fn octaves(scale: f64, mpp: f64) -> impl Iterator<Item = (f64, f64, bool)> {
     })
 }
 
-/// Detail noise in -1..1 at the pixel whose centre is `at`; the maths is in ADR-0025.
-pub fn detail_noise(seed: u64, at: RootPoint, scale: f64, mpp: f64) -> f64 {
+/// Detail noise at the pixel whose centre is `at`; the maths is in ADR-0025.
+pub fn detail_noise(seed: u64, at: RootPoint, scale: f64, mpp: f64) -> DetailNoise {
     let g = (
         (at.x / mpp - 0.5).round() as i64,
         (at.y / mpp - 0.5).round() as i64,
@@ -88,31 +116,53 @@ fn node_at(nx: i64, ny: i64, mpp: f64) -> RootPoint {
     }
 }
 
-/// Bilinear mix at global pixel `g` of the node values `node(kx, ky)`.
-fn interpolate((gx, gy): (i64, i64), node: impl Fn(i64, i64) -> f64) -> f64 {
-    let (nx, ny) = (gx.div_euclid(NODE), gy.div_euclid(NODE));
-    let f = NODE as f64;
-    let (fx, fy) = (
-        gx.rem_euclid(NODE) as f64 / f,
-        gy.rem_euclid(NODE) as f64 / f,
-    );
-    let left = lerp(node(nx, ny), node(nx, ny + 1), fy);
-    let right = lerp(node(nx + 1, ny), node(nx + 1, ny + 1), fy);
-    lerp(left, right, fx)
+/// Middle node and spline parameter at global pixel `g`; the spline reads nodes k - 1..=k + 1.
+fn spline_at(g: i64) -> (i64, f64) {
+    let h = g + NODE / 2;
+    (h.div_euclid(NODE), h.rem_euclid(NODE) as f64 / NODE as f64)
 }
 
-fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
+/// Uniform quadratic B-spline of node values `a`, `b`, `c` at `t`: smooth across nodes,
+/// so hillshade shows no node grid.
+fn spline(a: f64, b: f64, c: f64, t: f64) -> f64 {
+    let s = 1.0 - t;
+    0.5 * (s * s * a + (1.0 + 2.0 * t * s) * b + t * t * c)
 }
 
-fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> f64 {
-    let mut sum = 0.0;
-    for (o, (amp, cell, kept)) in octaves(scale, mpp).enumerate() {
-        if kept {
-            sum += amp * (2.0 * noise(o, cell) - 1.0);
-        }
+/// Spline at global pixel `g` of the node values `node(kx, ky)`, first in y, then in x.
+fn interpolate((gx, gy): (i64, i64), node: impl Fn(i64, i64) -> (f64, f64)) -> DetailNoise {
+    let ((kx, tx), (ky, ty)) = (spline_at(gx), spline_at(gy));
+    let col = |x: i64| {
+        let (a, b, c) = (node(x, ky - 1), node(x, ky), node(x, ky + 1));
+        (spline(a.0, b.0, c.0, ty), spline(a.1, b.1, c.1, ty))
+    };
+    let (a, b, c) = (col(kx - 1), col(kx), col(kx + 1));
+    DetailNoise {
+        value: spline(a.0, b.0, c.0, tx),
+        ridged: spline(a.1, b.1, c.1, tx),
     }
-    sum / TOTAL
+}
+
+/// Value and ridged sums of the kept octaves' (amplitude, noise in 0..1), over `TOTAL`, clamped.
+fn combine(octaves: impl Iterator<Item = (f64, f64)>) -> (f64, f64) {
+    let (mut value, mut ridged) = (0.0, 0.0);
+    for (amp, u) in octaves {
+        let d = 2.0 * u - 1.0;
+        let q = 1.0 - d.abs();
+        value += amp * d;
+        ridged += amp * (2.0 * q * q - 1.0);
+    }
+    let shape = |s: f64| (s / TOTAL).clamp(-1.0, 1.0);
+    (shape(value), shape(ridged))
+}
+
+fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> (f64, f64) {
+    combine(
+        octaves(scale, mpp)
+            .enumerate()
+            .filter(|(_, (_, _, kept))| *kept)
+            .map(|(o, (amp, cell, _))| (amp, noise(o, cell))),
+    )
 }
 
 /// `detail_noise` over a range of global pixels as tables, for a port without u64 or f64 (WGSL).
@@ -120,7 +170,7 @@ pub struct DetailTables {
     /// Node index of column and row 0 of the node tables.
     pub nx0: i64,
     pub ny0: i64,
-    /// Sum of all octave amplitudes, skipped ones included.
+    /// The octave sums are divided by this, then clamped to -1..1.
     pub total: f64,
     pub octaves: Vec<OctaveTable>,
 }
@@ -146,8 +196,9 @@ pub fn detail_tables(
     ys: (i64, i64),
 ) -> DetailTables {
     let prefix = rng::prefix(seed, DETAIL_STAGE);
-    let (nx0, nx1) = (xs.0.div_euclid(NODE), xs.1.div_euclid(NODE) + 1);
-    let (ny0, ny1) = (ys.0.div_euclid(NODE), ys.1.div_euclid(NODE) + 1);
+    // Node column 0 is the one before the node of `xs.0` rounded down, wherever `xs.0` lies.
+    let (nx0, nx1) = (xs.0.div_euclid(NODE) - 1, spline_at(xs.1).0 + 1);
+    let (ny0, ny1) = (ys.0.div_euclid(NODE) - 1, spline_at(ys.1).0 + 1);
     let mut tables = vec![];
     for (amp, cell, kept) in octaves(scale, mpp) {
         if kept {
@@ -180,11 +231,10 @@ pub fn detail_tables(
 
 impl DetailTables {
     /// Detail noise at global pixel `g`, from the tables: the reference for the WGSL port.
-    pub fn noise_at(&self, (gx, gy): (i64, i64)) -> f64 {
+    pub fn noise_at(&self, (gx, gy): (i64, i64)) -> DetailNoise {
         interpolate((gx, gy), |nx, ny| {
             let (kx, ky) = ((nx - self.nx0) as usize, (ny - self.ny0) as usize);
-            let mut sum = 0.0;
-            for o in &self.octaves {
+            combine(self.octaves.iter().map(|o| {
                 let ((ix, fx), (iy, fy)) = (o.node_x[kx], o.node_y[ky]);
                 let (ix, iy) = (ix as usize, iy as usize);
                 let c = |i: usize, j: usize| rng::to_unit(rng::at_finish(o.cols[i], o.rows[j]));
@@ -193,9 +243,8 @@ impl DetailTables {
                     fx,
                     fy,
                 );
-                sum += o.amp * (2.0 * n - 1.0);
-            }
-            sum / self.total
+                (o.amp, n)
+            }))
         })
     }
 }
@@ -206,30 +255,25 @@ fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
     (dx * dx + dy * dy) * (1.0 / (radius * radius))
 }
 
-/// `w = falloff(d²) * max(0, 1 + amount * n)` in f64, then to f32.
+/// `w = falloff(d²) * clamp(1 + amount * n, 0, 2)` in f64, then to f32.
 fn modulate(w: f32, d: Detail, n: f64) -> f32 {
-    (w as f64 * (1.0 + d.amount() as f64 * n).max(0.0)) as f32
+    (w as f64 * (1.0 + d.amount() as f64 * n).clamp(0.0, 2.0)) as f32
 }
 
-/// Weight of a stamp at the pixel centre `at`, 0 outside the disc; the maths is in ADR-0025.
+/// Weight of a stamp at the pixel centre `at` with detail noise `n` there (`DetailNoise::at`),
+/// 0 outside the disc; the maths is in ADR-0025.
 pub fn stamp_weight(
     at: RootPoint,
     centre: RootPoint,
     radius: f64,
     falloff: f32,
     detail: Detail,
-    seed: u64,
-    mpp: f64,
+    n: f64,
 ) -> f32 {
     let d2 = dist2(at, centre, radius);
     if d2 >= 1.0 {
         return 0.0;
     }
-    let n = if detail.amount > 0.0 {
-        detail_noise(seed, at, detail.scale, mpp)
-    } else {
-        0.0
-    };
     modulate(weight_in(d2, brush_core(falloff)), detail, n)
 }
 
@@ -303,8 +347,9 @@ impl Lattice {
 struct Nodes {
     nx0: i64,
     gy0: i64,
+    /// Values per row: (value, ridged) per node column.
     w: usize,
-    /// Row `gy - gy0`, node column `nx - nx0`.
+    /// Row `gy - gy0`, node column `nx - nx0`, value then ridged.
     rows: Vec<f64>,
 }
 
@@ -317,8 +362,8 @@ impl Nodes {
         (gx0, gx1): (i64, i64),
         (gy0, gy1): (i64, i64),
     ) -> Nodes {
-        let (nx0, ny0) = (gx0.div_euclid(NODE), gy0.div_euclid(NODE));
-        let (nx1, ny1) = (gx1.div_euclid(NODE) + 1, gy1.div_euclid(NODE) + 1);
+        let (nx0, ny0) = (spline_at(gx0).0 - 1, spline_at(gy0).0 - 1);
+        let (nx1, ny1) = (spline_at(gx1).0 + 1, spline_at(gy1).0 + 1);
         let lattice = Lattice::new(
             seed,
             d.scale,
@@ -334,11 +379,12 @@ impl Nodes {
                 (lattice.axis(o, false, xs), lattice.axis(o, true, ys))
             })
             .collect();
+        let w = 2 * w;
         let mut v = vec![0.0; w * (ny1 - ny0 + 1) as usize];
         par_rows(&mut v, w, |r, out| {
-            for (col, o) in out.iter_mut().enumerate() {
+            for (col, o) in out.chunks_mut(2).enumerate() {
                 // Same operations as `rng::noise` at the node, with corners from the lattice.
-                *o = fractal(d.scale, mpp, |oct, _| {
+                (o[0], o[1]) = fractal(d.scale, mpp, |oct, _| {
                     let (lw, lv) = (lattice.octaves[oct].w, &lattice.octaves[oct].corners);
                     let ((ix, fx), (iy, fy)) = (axes[oct].0[col], axes[oct].1[r]);
                     let at = iy * lw + ix;
@@ -348,31 +394,33 @@ impl Nodes {
         });
         let mut rows = vec![0.0; w * (gy1 - gy0 + 1) as usize];
         par_rows(&mut rows, w, |r, out| {
-            let gy = gy0 + r as i64;
-            let fy = gy.rem_euclid(NODE) as f64 / NODE as f64;
-            let at = (gy.div_euclid(NODE) - ny0) as usize * w;
-            let (a, c) = (&v[at..at + w], &v[at + w..at + 2 * w]);
-            for ((o, a), c) in out.iter_mut().zip(a).zip(c) {
-                *o = lerp(*a, *c, fy);
+            let (ky, ty) = spline_at(gy0 + r as i64);
+            let at = (ky - 1 - ny0) as usize * w;
+            let (a, b, c) = (&v[at..], &v[at + w..], &v[at + 2 * w..]);
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = spline(a[i], b[i], c[i], ty);
             }
         });
         Nodes { nx0, gy0, w, rows }
     }
 
-    /// Per global pixel column in `gx0..gx1`: its node column and weight, for `at`.
+    /// Per global pixel column in `gx0..gx1`: its first node column and spline parameter, for `at`.
     fn columns(&self, gx0: i64, gx1: i64) -> Vec<(usize, f64)> {
         (gx0..gx1)
             .map(|gx| {
-                let c = (gx.div_euclid(NODE) - self.nx0) as usize;
-                (c, gx.rem_euclid(NODE) as f64 / NODE as f64)
+                let (k, t) = spline_at(gx);
+                ((k - 1 - self.nx0) as usize, t)
             })
             .collect()
     }
 
     /// Detail noise at global pixel row `gy` and a column from `columns`.
-    fn at(&self, gy: i64, (c, fx): (usize, f64)) -> f64 {
-        let i = (gy - self.gy0) as usize * self.w + c;
-        lerp(self.rows[i], self.rows[i + 1], fx)
+    fn at(&self, gy: i64, (c, t): (usize, f64)) -> DetailNoise {
+        let r = &self.rows[(gy - self.gy0) as usize * self.w + 2 * c..];
+        DetailNoise {
+            value: spline(r[0], r[2], r[4], t),
+            ridged: spline(r[1], r[3], r[5], t),
+        }
     }
 }
 
@@ -474,6 +522,7 @@ impl Project {
         let tiles_of = |a: i64, b: i64| a / t..(b - 1) / t + 1;
         let core = brush_core(s.falloff);
         let raise = s.strength > 0.0;
+        let ridged = raise && s.mode == BrushMode::Add && s.target.is_none();
         for p in &s.points {
             let r = p.radius / mpp;
             let (cx, cy) = map.to_pixels(p.at);
@@ -554,7 +603,7 @@ impl Project {
                     let fall = weight_in(d2, core);
                     let (n, wt) = match (&nodes, &cols) {
                         (Some(l), Some(c)) => {
-                            let n = l.at(gyi + y, c[(x - bx0) as usize]);
+                            let n = l.at(gyi + y, c[(x - bx0) as usize]).at(*v, ridged);
                             (n, modulate(fall, s.detail, n))
                         }
                         _ => (0.0, fall),

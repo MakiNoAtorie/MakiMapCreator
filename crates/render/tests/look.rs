@@ -57,8 +57,8 @@ fn pass(path: &[(f64, f64)], radius: f64, strength: f32, mode: BrushMode) -> Com
 }
 
 /// The app's roughen detail scale for a brush of `radius`.
-fn roughen_scale(_radius: f64) -> f64 {
-    DETAIL.scale
+fn roughen_scale(radius: f64) -> f64 {
+    radius
 }
 
 pub fn build(dir: &std::path::Path) -> (Project, MapId) {
@@ -82,7 +82,7 @@ pub fn build(dir: &std::path::Path) -> (Project, MapId) {
                 Some(*p)
             })
             .collect();
-        let (r, s) = (at(400.0, 1100.0), at(20.0, 60.0) as f32);
+        let (r, s) = (at(400.0, 2500.0), at(20.0, 60.0) as f32);
         let s = if i % 7 == 6 { -s } else { s };
         cmds.push(pass(&path, r, s, BrushMode::Add));
     }
@@ -161,4 +161,16 @@ fn renders_the_owner_fixture() {
         img.write_png(&out.join(format!("{prefix}-{name}.png")))
             .unwrap();
     }
+    // Zoomed out as on the owner's screen: drawn from pyramid level 2.
+    let v = view(map, (0.0, 0.0), (full, full), 250);
+    let scene = loop {
+        let s = r.scene_cached(&p, v).unwrap();
+        if s.is_complete() {
+            break s;
+        }
+        p.wait_tiles();
+    };
+    let img = r.render(&scene, 256).unwrap();
+    img.write_png(&out.join(format!("{prefix}-far.png")))
+        .unwrap();
 }

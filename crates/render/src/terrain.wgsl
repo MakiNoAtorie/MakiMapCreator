@@ -5,6 +5,9 @@
 const LAND_SHADE = 0.6;
 const SEA_SHADE = 0.3;
 const DARKEST = 0.45;
+// Height of the rock stop, metres; slopes in metres per metre from rock to steep rock.
+const ROCK = 3500.0;
+const STEEP = vec2f(0.6, 1.2);
 // Metres the highest texel near a 0 m crossing must reach for a full coastline.
 const COAST_LAND = 0.5;
 
@@ -63,11 +66,13 @@ fn terrain(hm: texture_2d<f32>, pos: vec2f) -> vec4f {
     // Light from the north-west (image up-left), 45 degrees high. Flat ground gives 1.
     let light = normalize(vec3f(-1.0, -1.0, 1.4142135));
     let lit = mix(1.0, dot(n, light) / light.z, select(LAND_SHADE, SEA_SHADE, h <= 0.0));
-    var c = palette(h);
+    // Snow stays on gentle high ground; steep high slopes show rock.
+    var c = mix(palette(h), palette(min(h, ROCK)), smoothstep(STEEP.x, STEEP.y, length(s)));
     if lit > 1.0 {
         c = mix(c, vec3f(1.0), lit - 1.0);
     } else {
-        c = c * max(lit, DARKEST);
+        // Shade eases toward DARKEST, so steep slopes keep their relief.
+        c = c * (DARKEST + (1.0 - DARKEST) * exp((lit - 1.0) / (1.0 - DARKEST)));
     }
 
     // Coast: distance to the 0 m crossing in image pixels, from the cell's bilinear gradient.

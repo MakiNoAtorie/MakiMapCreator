@@ -13,7 +13,7 @@ struct Params {
     octaves: u32,
     first: u32,
     reach: f32,
-    _pad: vec2u,
+    ridge: vec2f,
 }
 
 struct Stamp {
@@ -149,9 +149,9 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     return a + (b - a) * t;
 }
 
-// Node (kx, ky) of the tables: the octave sum over the total, as `fractal`.
-fn node(kx: u32, ky: u32) -> f32 {
-    var sum = 0.0;
+// Node (kx, ky) of the tables: value and ridged octave sums over the total, clamped, as `combine`.
+fn node(kx: u32, ky: u32) -> vec2f {
+    var sum = vec2f(0.0);
     for (var o = 0u; o < p.octaves; o++) {
         let h = o * 8u;
         let amp = bitcast<f32>(tables[h]);
@@ -173,18 +173,39 @@ fn node(kx: u32, ky: u32) -> f32 {
         let d = unit(mix64(x1 ^ y1));
         let top = lerp(a, b, fx);
         let bottom = lerp(c, d, fx);
-        sum += amp * (2.0 * lerp(top, bottom, fy) - 1.0);
+        let e = 2.0 * lerp(top, bottom, fy) - 1.0;
+        let q = 1.0 - abs(e);
+        sum += amp * vec2f(e, 2.0 * q * q - 1.0);
     }
-    return sum / p.total;
+    return clamp(sum / p.total, vec2f(-1.0), vec2f(1.0));
 }
 
-// `detail_noise` at pixel g: nodes every 4 pixels, mixed in y, then x.
-fn detail(g: vec2i) -> f32 {
-    let n = vec2u(g >> vec2u(2u));
-    let f = vec2f(g & vec2i(3)) / 4.0;
-    let left = lerp(node(n.x, n.y), node(n.x, n.y + 1u), f.y);
-    let right = lerp(node(n.x + 1u, n.y), node(n.x + 1u, n.y + 1u), f.y);
-    return lerp(left, right, f.x);
+// `spline`.
+fn spline(a: vec2f, b: vec2f, c: vec2f, t: f32) -> vec2f {
+    let s = 1.0 - t;
+    return 0.5 * (s * s * a + (1.0 + 2.0 * t * s) * b + t * t * c);
+}
+
+// `detail_noise` at pixel g: value and ridged, splines of nodes every 4 pixels, in y, then x.
+// Table node 0 is the one before the frame's first, so g's nodes are k..k + 2.
+fn detail(g: vec2i) -> vec2f {
+    let h = g + 2;
+    let k = vec2u(h >> vec2u(2u));
+    let t = vec2f(h & vec2i(3)) / 4.0;
+    var col: array<vec2f, 3>;
+    for (var i = 0u; i < 3u; i++) {
+        col[i] = spline(node(k.x + i, k.y), node(k.x + i, k.y + 1u), node(k.x + i, k.y + 2u), t.y);
+    }
+    return spline(col[0], col[1], col[2], t.x);
+}
+
+// `RIDGE_GAIN`.
+const RIDGE_GAIN = 2.0;
+
+// `DetailNoise::at`: ridged on high ground when the stamp raises.
+fn ridged(n: vec2f, height: f32) -> f32 {
+    let s = smoothstep(p.ridge.x, p.ridge.y, height);
+    return n.x * (1.0 - s) + RIDGE_GAIN * n.y * s;
 }
 
 // `weight_in`.
@@ -217,7 +238,7 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
     }
     let centre = vec2f(first) + 0.5 * f32(1 << p.level);
     var change: array<f32, 16>;
-    var noise: array<f32, 16>;
+    var noise: array<vec2f, 16>;
     // Bit k: noise[k] is set.
     var have = 0u;
     var changed = false;
@@ -239,17 +260,20 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
                 continue;
             }
             let fall = falloff(d2, s.core);
+            let start = v + dot(slope, vec2f(g) + 0.5 - centre);
+            let u = start + change[k];
             var n = 0.0;
             if noisy {
                 if (have & (1u << k)) == 0u {
                     noise[k] = detail(g);
                     have |= 1u << k;
                 }
-                n = noise[k];
+                n = noise[k].x;
+                if s.mode == ADD && s.amount > 0.0 {
+                    n = ridged(noise[k], u);
+                }
             }
-            let w = fall * max(0.0, 1.0 + p.detail * n);
-            let start = v + dot(slope, vec2f(g) + 0.5 - centre);
-            let u = start + change[k];
+            let w = fall * clamp(1.0 + p.detail * n, 0.0, 2.0);
             var next = u;
             if roughen {
                 next = u + s.amount * fall * n;

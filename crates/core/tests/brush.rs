@@ -1,8 +1,8 @@
 //! Detail brushes and the smooth, flatten and roughen modes.
 
 use mmc_core::{
-    BrushMode, BrushStroke, Command, Detail, Layer, MapId, MapSettings, Project, RootPoint,
-    StrokePoint, stamp_weight,
+    BrushMode, BrushStroke, Command, Detail, Layer, MapId, MapSettings, PaintStroke, Project,
+    RootPoint, StrokePoint, stamp_weight,
 };
 use mmc_kind_region::REGION;
 
@@ -67,6 +67,43 @@ const DETAIL: Detail = Detail {
     scale: 400.0,
 };
 
+/// The detail noise a raising add uses at `at` on ground at `height`.
+fn noise(seed: u64, at: RootPoint, d: Detail, height: f32) -> f64 {
+    mmc_core::detail_noise(seed, at, d.scale, MPP).at(height, true)
+}
+
+#[test]
+fn raising_high_ground_takes_ridged_detail() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, map) = project(dir.path());
+    let c = pt(2560.0, 2560.0);
+    let plateau = PaintStroke {
+        layer: Layer::HEIGHT,
+        points: vec![c],
+        radius: 2000.0,
+        value: 2000.0,
+    };
+    p.apply(map, Command::Paint(plateau)).unwrap();
+    let mut s = stroke(BrushMode::Add, &[c], 800.0, 10.0);
+    s.detail = DETAIL;
+    p.apply(map, Command::Brush(s)).unwrap();
+    let seed = p.seed().unwrap();
+    let mut ridged = 0;
+    for j in (170..342).step_by(3) {
+        for i in (170..342).step_by(3) {
+            let at = px(i, j);
+            let n = mmc_core::detail_noise(seed, at, DETAIL.scale, MPP);
+            assert_eq!(n.at(2000.0, true), mmc_core::RIDGE_GAIN * n.ridged);
+            assert_eq!(n.at(0.0, true), n.value);
+            assert_eq!(n.at(2000.0, false), n.value);
+            let want = 2000.0 + 10.0 * stamp_weight(at, c, 800.0, 1.0, DETAIL, n.at(2000.0, true));
+            assert_eq!(h(&p, map, at), want, "pixel ({i}, {j})");
+            ridged += (n.ridged != n.value) as usize;
+        }
+    }
+    assert!(ridged > 1000, "{ridged}");
+}
+
 #[test]
 fn detail_applies_the_published_stamp_weight() {
     let dir = tempfile::tempdir().unwrap();
@@ -80,7 +117,7 @@ fn detail_applies_the_published_stamp_weight() {
     for j in 170..342 {
         for i in 170..342 {
             let at = px(i, j);
-            let want = 10.0 * stamp_weight(at, c, 800.0, 1.0, DETAIL, seed, MPP);
+            let want = 10.0 * stamp_weight(at, c, 800.0, 1.0, DETAIL, noise(seed, at, DETAIL, 0.0));
             assert_eq!(h(&p, map, at), want, "pixel ({i}, {j})");
             let d = ((at.x - c.x).powi(2) + (at.y - c.y).powi(2)).sqrt();
             if (d - 400.0).abs() < 5.0 {
@@ -101,10 +138,10 @@ fn detail_zero_is_the_smooth_bell_and_detail_keeps_the_sign() {
     let at = pt(300.0, 100.0);
     let d2: f64 = (300.0f64.powi(2) + 100.0f64.powi(2)) / 800.0f64.powi(2);
     let bell = ((1.0 - d2) * (1.0 - d2)) as f32;
-    let w = stamp_weight(at, c, 800.0, 1.0, Detail::NONE, 5, MPP);
+    let w = stamp_weight(at, c, 800.0, 1.0, Detail::NONE, 0.0);
     assert!((w - bell).abs() < 1e-6, "{w} {bell}");
     assert_eq!(
-        stamp_weight(pt(900.0, 0.0), c, 800.0, 1.0, DETAIL, 5, MPP),
+        stamp_weight(pt(900.0, 0.0), c, 800.0, 1.0, DETAIL, 1.0),
         0.0
     );
     let full = Detail {
@@ -113,7 +150,7 @@ fn detail_zero_is_the_smooth_bell_and_detail_keeps_the_sign() {
     };
     for i in 0..2000 {
         let at = pt(i as f64 * 0.37 - 370.0, i as f64 * 0.11 - 100.0);
-        let w = stamp_weight(at, c, 800.0, 0.5, full, 9, MPP);
+        let w = stamp_weight(at, c, 800.0, 0.5, full, noise(9, at, full, 5000.0));
         assert!((0.0..=2.0).contains(&w), "{w}");
     }
 }
@@ -254,7 +291,7 @@ fn detail_tables_give_the_bits_of_detail_noise() {
         for gx in (xs.0..=xs.1).step_by(7) {
             let at = pt((gx as f64 + 0.5) * MPP, (gy as f64 + 0.5) * MPP);
             let want = mmc_core::detail_noise(seed, at, scale, MPP);
-            assert_eq!(t.noise_at((gx, gy)).to_bits(), want.to_bits(), "{gx},{gy}");
+            assert_eq!(t.noise_at((gx, gy)), want, "{gx},{gy}");
         }
     }
     // 320 m cells at 10 m: the 20 m octave is under 8 px.

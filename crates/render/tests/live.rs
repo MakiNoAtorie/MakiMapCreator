@@ -387,9 +387,11 @@ fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
             .flat_map(|(_, (a, b))| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
             .max()
             .unwrap();
-        // Add and roughen are linear, so a texel's mean change is exact. The others start each
-        // pixel on the texel's slope (measured under 0.11 m on the 800 m hill).
-        let linear = s.target.is_none() && matches!(s.mode, BrushMode::Add | BrushMode::Roughen);
+        // Lowering adds and roughen are linear, so a texel's mean change is exact. The others
+        // start each pixel on the texel's slope; a raising add's ridges depend on the height
+        // (measured under 0.11 m on the 800 m hill).
+        let linear = s.target.is_none()
+            && (s.mode == BrushMode::Roughen || s.mode == BrushMode::Add && s.strength < 0.0);
         let bound = if linear { TOLERANCE } else { 0.2 };
         assert!(worst <= bound, "{:?}: worst difference {worst} m", s.mode);
         assert!(
