@@ -19,7 +19,7 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 - Labels: placed automatically for entities (collision avoidance, along river paths, spaced range names); a dragged offset is saved on the map object.
 - Children: select a settlement point to create a settlement map.
 - Summary to parent: dominant biome, refined coastline (display only).
-- Explore later: simulate the travel routes people take between settlements and points of interest, driven by biomes and terrain cost. The idea came from a friend; the app they described is unidentified. Closest known reference: Azgaar's Fantasy Map Generator (tiered roads, trails and sea routes between burgs).
+- Explore later: simulate the travel routes people take between settlements and points of interest. Agents walk weighted shortest paths over a biome and terrain cost field, and frequently used paths become roads. The idea came from a friend; the app they described is unidentified. References: Azgaar's Fantasy Map Generator (generated roads between burgs, no agents), Foundation (desire paths from walkers), Scientific Reports 2022 model of co-evolving cities and roads (PubMed 35710781).
 
 ### World map (v2)
 - Generate: coarse geography (land and sea, elevation, climate zone, biome class, major rivers), then regions and nations over it (cost-based expansion).
