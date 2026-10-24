@@ -143,7 +143,8 @@ fn phacelle(o: Octave, q: vec2f, dir: vec2f) -> vec2f {
 // `filter` (CPU) at texel `t` on ground of slope `s` and fade target `fade`.
 fn gullies(t: vec2i, s: vec2f, fade: f32) -> f32 {
     var slope = s;
-    var mask = ease_out(length(s) / r.slope);
+    let ground = ease_out(length(s) / r.slope);
+    var mask = ground;
     var aim = fade;
     var sum = 0.0;
     var rest = RELIEF_AMPLITUDES;
@@ -165,7 +166,7 @@ fn gullies(t: vec2i, s: vec2f, fade: f32) -> f32 {
         mask = pow_inv(mask) * ease_out(abs(cs.y) / RELIEF_CREASE);
         amp *= 0.5;
     }
-    return sum + rest * (aim - fade);
+    return (sum + rest * (aim - fade)) * ground;
 }
 
 @compute @workgroup_size(8, 8)
@@ -178,7 +179,6 @@ fn relief(@builtin(global_invocation_id) id: vec3u) {
     let mask = ramp(COAST_BAND, r.height, v - WATER_LEVEL);
     var d = 0.0;
     if mask > 0.0 {
-        // The block gradient, bilinear between block centres, as `relief`.
         let u = (vec2f(r.g0 + t) + 0.5) / f32(r.block) - 0.5;
         let b = vec2i(floor(u));
         let f = u - floor(u);

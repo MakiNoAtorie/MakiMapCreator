@@ -365,16 +365,9 @@ pub fn layers(
         }
     }
     for p in k.options() {
-        let at = match options.0.iter().position(|(id, _)| id == p.id) {
-            Some(i) => i,
-            None => {
-                options.0.push((p.id.into(), p.default));
-                options.0.len() - 1
-            }
-        };
+        let v = options.get_mut(p);
         ui.horizontal(|ui| {
             ui.label(tr(&format!("option-{}", p.id)));
-            let v = &mut options.0[at].1;
             let speed = (p.max - p.min) / 500.0;
             let r = ui.add(egui::DragValue::new(v).range(p.min..=p.max).speed(speed));
             // A drag sets the option once, when it ends: each set rebuilds the relief.

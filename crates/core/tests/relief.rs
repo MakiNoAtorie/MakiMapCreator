@@ -51,7 +51,8 @@ fn steep_high_slopes_get_gullies_down_the_slope() {
     let r = run((0, 0), N, N, |x, _| 1000.0 + 0.6 * x);
     let m = mean_abs(&r);
     assert!(m > 5.0, "mean {m}");
-    assert!(r.iter().all(|d| (d.abs() as f64) <= OPTS.strength));
+    // A faded octave lies 0 to 2 from the fade target.
+    assert!(r.iter().all(|d| (d.abs() as f64) <= 2.0 * OPTS.strength));
     // Gullies run along the slope (x): the relief changes less along x than across it.
     let (mut along, mut across) = (0.0, 0.0);
     for j in 8..N - 8 {

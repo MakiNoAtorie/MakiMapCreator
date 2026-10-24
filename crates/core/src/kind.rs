@@ -94,6 +94,18 @@ impl OptionValues {
             .map_or(p.default, |v| v.1)
             .clamp(p.min, p.max)
     }
+
+    /// The stored value of `p`, added at its default when missing.
+    pub fn get_mut(&mut self, p: &Param) -> &mut f64 {
+        let i = match self.0.iter().position(|(id, _)| id == p.id) {
+            Some(i) => i,
+            None => {
+                self.0.push((p.id.into(), p.default));
+                self.0.len() - 1
+            }
+        };
+        &mut self.0[i].1
+    }
 }
 
 /// A draw pass: a WGSL fragment shader over one layer (the renderer's bindings and `VIEW_WGSL`).
@@ -101,8 +113,7 @@ impl OptionValues {
 pub struct RenderPass {
     pub layer: Layer,
     pub shader: &'static str,
-    /// A derived layer of metres added to `layer` before shading (ADR-0026); the live brush
-    /// computes it with the GPU port of `relief`.
+    /// Derived metres added to `layer` before shading, never stored in it (ADR-0026).
     pub relief: Option<Layer>,
 }
 

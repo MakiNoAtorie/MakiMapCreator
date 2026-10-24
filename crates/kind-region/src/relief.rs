@@ -51,8 +51,7 @@ pub(crate) const STAGE: Stage = Stage {
 
 const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
-/// The relief of every tile with height, from the tile and `relief_margin` pixels around it;
-/// past the map edge the pixels come from the neighbour maps, so both agree at a seam.
+/// Reads `relief_margin` past each tile, past the map edge from the neighbours, so seams agree.
 // ponytail: recomputes the whole map after each edit; pass the changed tiles if large maps lag.
 fn run(cx: &StageInput) -> Option<Vec<Raster>> {
     let h = &cx.layers[&Layer::HEIGHT];

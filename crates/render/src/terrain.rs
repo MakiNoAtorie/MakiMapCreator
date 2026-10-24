@@ -1,7 +1,6 @@
 //! Terrain shading shared by the kinds' height passes: palette, hillshade, coastline (`terrain.wgsl`).
 
-/// Land below this many metres shows as shallows and the coastline follows this contour, so
-/// a stroke that ends just above 0 m draws no stray coastline.
+/// The coastline contour, metres; above 0 so a stroke that ends just above 0 m draws no coast.
 pub const SHORE: f32 = 2.0;
 
 /// (height in metres, RGB 0..1), sorted, linear between stops; muted atlas tints, both themes.

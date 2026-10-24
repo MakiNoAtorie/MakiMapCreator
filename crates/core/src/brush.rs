@@ -17,16 +17,14 @@ pub enum BrushMode {
     Smooth,
     /// `v += (level - v) * min(1, strength * p * w)`, `level` read under the first stamp.
     Flatten,
-    /// `roughen(v, strength * p * falloff weight * detail_noise)`: no net raise, the noise has
-    /// mean 0, and land stays land.
+    /// `roughen(v, strength * p * falloff * noise)`; the noise has mean 0 and land stays land.
     Roughen,
 }
 
 /// Root-space noise on a brush's stamp weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Detail {
-    /// 0 is the smooth falloff; the weight is scaled by `1 + soft(amount * n)`, 0 to 2. Used
-    /// clamped (`amount()`).
+    /// 0 to 1, clamped in use; 0 keeps the smooth falloff.
     pub amount: f32,
     /// Cell of the coarsest octave, metres.
     pub scale: f64,
@@ -55,7 +53,7 @@ pub const DETAIL_STAGE: &str = "brush-detail";
 const OCTAVES: i32 = 6;
 /// Each octave's cell is the one before over this; not 2, so octaves never share lattice lines.
 pub const LACUNARITY: f64 = 2.01;
-/// (cos, sin) each octave's lattice turns by from the one before: about 36.87 degrees.
+/// Turn of each octave's lattice from the one before (36.87 degrees), so no lattice axis shows.
 const TURN: (f64, f64) = (0.8, 0.6);
 
 /// Detail noise is evaluated every `NODE` global pixels and interpolated between.
@@ -74,8 +72,8 @@ pub const RIDGE_GAIN: f64 = 2.0;
 /// Detail fades to 0 within this many metres of `WATER_LEVEL`, so it never speckles the coast.
 pub const COAST_BAND: f32 = 20.0;
 
-/// Gradients of the lattice corners, picked by the top 3 bits of the corner hash.
 const S: f64 = std::f64::consts::FRAC_1_SQRT_2;
+/// Picked by the top 3 bits of the corner hash; `live.wgsl` has the same table.
 const GRADIENTS: [(f64, f64); 8] = [
     (1.0, 0.0),
     (-1.0, 0.0),
@@ -102,8 +100,7 @@ fn smoothstep(lo: f32, hi: f32, v: f32) -> f64 {
 }
 
 impl DetailNoise {
-    /// The noise a stamp uses on ground at `height`: ridged, times `RIDGE_GAIN`, on high ground
-    /// when it raises; faded to 0 at the water level.
+    /// Ridged noise on high ground when the stamp raises; 0 at the water level, so coasts stay.
     pub fn at(self, height: f32, raise: bool) -> f64 {
         let n = if raise {
             let s = smoothstep(RIDGE_HEIGHTS.0, RIDGE_HEIGHTS.1, height);
@@ -115,7 +112,7 @@ impl DetailNoise {
     }
 }
 
-/// One kept octave: lattice point `q = a * p + off` of root point `p`, corners hashed after `prefix`.
+/// An octave that is not skipped; root point `p` is at lattice point `a * p + off`.
 struct Octave {
     amp: f64,
     a: [f64; 4],
@@ -124,7 +121,7 @@ struct Octave {
 }
 
 impl Octave {
-    /// The lattice point's parts from root x and from root y; their sum is the point.
+    /// The parts from root x and root y, kept apart so that a port adds them exactly.
     fn parts(&self, p: RootPoint) -> ((f64, f64), (f64, f64)) {
         let a = self.a;
         (
@@ -180,8 +177,7 @@ fn gradient((cx, cy): (i64, i64), (fx, fy): (f64, f64), prefix: u64) -> f64 {
     )
 }
 
-/// Value and ridged sums of the kept octaves' (amplitude, gradient noise), coarse first.
-/// Ridged is Musgrave's ridged multifractal: each octave weighted by the signal before it.
+/// Value and ridged sums of (amplitude, noise), coarse first; ridged is Musgrave's multifractal.
 fn combine(octaves: impl Iterator<Item = (f64, f64)>) -> (f64, f64) {
     let (mut value, mut ridged, mut weight) = (0.0, 0.0, 1.0);
     for (amp, n) in octaves {
@@ -262,9 +258,7 @@ pub struct OctaveTable {
     pub amp: f64,
     /// The corner hash is `rng::lattice(prefix, ix, iy)`.
     pub prefix: u64,
-    /// Per node column (row): its part of the node's lattice point as whole lattice corner and
-    /// fraction in 2^-32 units, which a port adds without rounding. A node's point is its
-    /// column's part plus its row's.
+    /// Corner and 2^-32 fraction per node column and row; a port adds them without rounding.
     pub cols: Vec<((i64, i64), (u32, u32))>,
     pub rows: Vec<((i64, i64), (u32, u32))>,
 }
@@ -330,19 +324,16 @@ fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
     (dx * dx + dy * dy) * (1.0 / (radius * radius))
 }
 
-/// `x / sqrt(1 + x²)`: about x when small, never past ±1, smooth. Not tanh: WARP's exp and tanh
-/// are too coarse for the GPU port's 1e-3 m.
+/// Not tanh: WARP's exp and tanh are too coarse for the GPU port's 1e-3 m.
 fn soft(x: f64) -> f64 {
     x / (1.0 + x * x).sqrt()
 }
 
-/// `w = falloff(d²) * (1 + soft(amount * n))` in f64, then to f32.
 fn modulate(w: f32, d: Detail, n: f64) -> f32 {
     (w as f64 * (1.0 + soft(d.amount() as f64 * n))) as f32
 }
 
-/// Roughen's change `d` to height `v`: at most the distance to the water level, so land stays
-/// land and sea stays sea; a rounding that would cross it keeps `v`.
+/// At most the distance to the water level, so land stays land and sea stays sea.
 fn roughen(v: f32, d: f64) -> f32 {
     let a = (v - WATER_LEVEL).abs() as f64;
     if a == 0.0 {

@@ -142,7 +142,6 @@ impl ReliefParams {
         let mpp = a.mpp * side as f64;
         let first = a.block(a.x0, a.y0);
         let g0 = (first.0.div_euclid(side), first.1.div_euclid(side));
-        // The level's blocks in texels of the copy's level.
         let block = 1i64 << mmc_core::relief_level(a.mpp).saturating_sub(a.level);
         let b0 = (g0.0.div_euclid(block) - 2, g0.1.div_euclid(block) - 2);
         let prefixes = mmc_core::relief_prefixes(seed);
@@ -550,8 +549,7 @@ impl Live {
         });
     }
 
-    /// Recomputes heights plus relief for the texels whose relief reads texels in `b`, after
-    /// the heights there changed.
+    /// Recomputes heights plus relief where the relief reads texels in `b`.
     fn shade_relief(&self, b: Texels) {
         let Some(copy) = &self.copy else { return };
         let Some(rc) = &copy.relief else {
@@ -837,8 +835,7 @@ impl Live {
         true
     }
 
-    /// Detail tables over the copy as u32 words: per octave amp, prefix and offsets of the node
-    /// columns and rows, each a lattice corner and fraction.
+    /// Detail tables over the copy as u32 words, the layout `live.wgsl` reads.
     fn tables(&mut self, seed: u64, scale: f64) {
         let Some(copy) = &self.copy else { return };
         let key = (seed, scale.to_bits());

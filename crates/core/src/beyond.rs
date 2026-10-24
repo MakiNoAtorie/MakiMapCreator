@@ -1,4 +1,4 @@
-//! Stage reads past a map's edge, from the maps of the same kind and scale around it.
+//! Stage reads past a map's edge come from its neighbours, so maps agree at a seam (ADR-0026).
 
 use std::collections::HashMap;
 
@@ -30,11 +30,7 @@ impl Source<'_> {
 }
 
 impl StageInput<'_> {
-    /// `layer` over `w` x `h` pixels from map pixel (`x0`, `y0`), row by row; the area can lie
-    /// past the map edge. A pixel comes from the map that owns it (ADR-0019), else from a map
-    /// that has it, this one first, else from the pixel before it in its row; a row that no map
-    /// has repeats the nearest row that one has. So two maps that read the same ground from the
-    /// same maps get the same values.
+    /// `layer` from map pixel (`x0`, `y0`), past the edge too: each pixel from its owner first.
     pub fn padded(&self, layer: Layer, x0: i64, y0: i64, w: usize, h: usize) -> Vec<f32> {
         let own = [
             self.origin.0,
@@ -64,7 +60,7 @@ impl StageInput<'_> {
         let mut out = Vec::with_capacity(w * h);
         let mut last: Option<(i64, usize)> = None;
         for gy in gy0..gy0 + h as i64 {
-            // Own rows are covered, so the search ends.
+            // A row no map has repeats the nearest row one has; own rows end the search.
             let row = (0..)
                 .flat_map(|d| [gy - d, gy + d])
                 .find(|&y| covered(y))
@@ -108,6 +104,7 @@ impl StageInput<'_> {
             }
             pick.push(owner.or_else(|| sources.iter().position(|s| s.has(gx, gy))));
         }
+        // Else a map that has the pixel, this one first; else the pixel before it in the row.
         let start = out.len();
         let mut i = 0;
         while i < w {

@@ -93,7 +93,7 @@ impl Renderer {
         let mut layers: Vec<Layer> = self
             .passes
             .iter()
-            .flat_map(|p| [Some(p.0), p.1])
+            .flat_map(|p| [Some(p.layer), p.relief])
             .flatten()
             .collect();
         layers.sort();

@@ -134,8 +134,14 @@ struct ViewUniform {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// (layer, relief layer added to it, pass).
-    passes: Vec<(Layer, Option<Layer>, Box<dyn DrawPass>)>,
+    passes: Vec<Pass>,
+}
+
+struct Pass {
+    layer: Layer,
+    /// Added to `layer` before the pass draws it (ADR-0026).
+    relief: Option<Layer>,
+    draw: Box<dyn DrawPass>,
 }
 
 impl Renderer {
@@ -195,17 +201,25 @@ impl Renderer {
 
     /// Adds a pass for `layer`. Passes draw in the order they were registered.
     pub fn register(&mut self, layer: Layer, pass: Box<dyn DrawPass>) {
-        self.passes.push((layer, None, pass));
+        self.passes.push(Pass {
+            layer,
+            relief: None,
+            draw: pass,
+        });
     }
 
     /// Adds a pass that draws `layer` plus the derived `relief` layer (ADR-0026).
     pub fn register_relief(&mut self, layer: Layer, relief: Layer, pass: Box<dyn DrawPass>) {
-        self.passes.push((layer, Some(relief), pass));
+        self.passes.push(Pass {
+            layer,
+            relief: Some(relief),
+            draw: pass,
+        });
     }
 
     /// True when a pass adds a relief layer.
     fn draws_relief(&self) -> bool {
-        self.passes.iter().any(|p| p.1.is_some())
+        self.passes.iter().any(|p| p.relief.is_some())
     }
 
     /// Reads full-resolution tiles for `view`; blocks on disk, so only export uses it.
@@ -328,14 +342,13 @@ impl Renderer {
         });
         let target_view = target.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        // Upload each pass's texels that this tile can read, then draw.
         let raster = |l: Layer| scene.rasters.iter().find(|r| r.0 == l).map(|r| &r.1);
         let mut inputs = Vec::new();
-        for (i, (layer, relief, _)) in self.passes.iter().enumerate() {
-            let Some(r) = raster(*layer) else {
+        for (i, p) in self.passes.iter().enumerate() {
+            let Some(r) = raster(p.layer) else {
                 continue;
             };
-            let relief = relief.and_then(raster);
+            let relief = p.relief.and_then(raster);
             let texels = |g0: u32, g1: u32, o: f64, s: f64, r0: u32, rn: u32| {
                 let lo = ((o + g0 as f64 * s).floor() - 2.0).max(r0 as f64) as u32;
                 let hi = ((o + g1 as f64 * s).floor() + 3.0).min((r0 + rn) as f64) as u32;
@@ -416,7 +429,7 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            for (i, (_, _, draw)) in self.passes.iter().enumerate() {
+            for (i, Pass { draw, .. }) in self.passes.iter().enumerate() {
                 if let Some((_, layer_view, view)) = inputs.iter().find(|x| x.0 == i) {
                     let input = PassInput {
                         layer: layer_view,

@@ -1,5 +1,4 @@
-//! Erosion relief (ADR-0026): gullies and ridges that run down the slope, written from
-//! runevision's "Fast and Gorgeous Erosion Filter" (2026). `render/src/relief.wgsl` ports it.
+//! Erosion relief from runevision's "Fast and Gorgeous Erosion Filter" (2026), ADR-0026.
 
 use crate::{COAST_BAND, WATER_LEVEL, rng};
 
@@ -12,7 +11,7 @@ pub const RELIEF_OCTAVES: usize = 4;
 pub const RELIEF_WAVES: f64 = 1.0;
 /// How far a gully flank turns the next octave's slope, as a share of the slope.
 pub const RELIEF_BEND: f64 = 0.7;
-/// Side of the pyramid blocks whose slope the gullies follow, about, root-space metres.
+/// Side, about, of the blocks whose slope gullies follow, so brush detail never steers them.
 pub const RELIEF_BLOCK: f64 = 160.0;
 
 /// Sum of the octave amplitudes `0.5^o`.
@@ -21,7 +20,7 @@ pub const RELIEF_AMPLITUDES: f64 = 1.875;
 pub const RELIEF_REACH2: f64 = 2.25;
 /// Softness of the flank sign that bends the next octave.
 pub const RELIEF_SIGN_SOFT2: f64 = 0.09;
-/// Height above the water level whose fade target is a peak (1); the water level is a valley (-1).
+/// Metres above the water level that fade to a peak (1); the water level fades to a valley (-1).
 pub const RELIEF_PEAK: f64 = 3000.0;
 /// `|sin|` of a gully from which later octaves are full; less is near a ridge or crease line.
 pub const RELIEF_CREASE: f64 = 0.5;
@@ -33,7 +32,7 @@ pub struct ReliefOptions {
     pub strength: f64,
     /// Slope, metres per metre, from which gullies are full.
     pub slope: f64,
-    /// Height above the water level, metres, from which gullies are full; none up to `COAST_BAND`.
+    /// Metres above the water level from which gullies are full; none up to `COAST_BAND`.
     pub height: f64,
 }
 
@@ -42,8 +41,7 @@ pub fn relief_prefixes(seed: u64) -> [u64; RELIEF_OCTAVES] {
     std::array::from_fn(|o| rng::prefix(seed, &format!("{RELIEF_STAGE}.{o}")))
 }
 
-/// The pyramid level whose slope the gullies follow at `mpp` metres per pixel: blocks of about
-/// `RELIEF_BLOCK`, at least level 1.
+/// The pyramid level of blocks of about `RELIEF_BLOCK` at `mpp`, at least 1.
 pub fn relief_level(mpp: f64) -> u32 {
     (RELIEF_BLOCK / mpp).log2().round().clamp(1.0, 16.0) as u32
 }
@@ -53,9 +51,7 @@ pub fn relief_margin(mpp: f64) -> usize {
     3 << relief_level(mpp)
 }
 
-/// Metres the relief adds to height for shading, per pixel of `heights` (`w` x `h`, row by row),
-/// whose pixel (0, 0) is global pixel `g0` at `mpp` metres per pixel. Reads past the edge take
-/// the edge pixel, so only pixels `relief_margin` inside it are the map's.
+/// Relief per pixel of `heights` from global pixel `g0`; only pixels `relief_margin` in are exact.
 pub fn relief(
     seed: u64,
     o: &ReliefOptions,
@@ -70,7 +66,6 @@ pub fn relief(
     if heights.iter().all(|&v| v <= low) {
         return out;
     }
-    // Each octave's pivots over the cells the raster's points reach.
     let pivots: Vec<Pivots> = relief_prefixes(seed)
         .iter()
         .enumerate()
@@ -96,7 +91,7 @@ pub fn relief(
         );
         heights[j as usize * w + i as usize] as f64
     };
-    // Block means of `relief_level` on the global grid, blocks `c0 - 2 ..= c1 + 2`.
+    // Two more blocks each side: the differences and the bilinear blend read them.
     let b = 1i64 << relief_level(mpp);
     let c0 = (g0.0.div_euclid(b) - 2, g0.1.div_euclid(b) - 2);
     let c1 = (
@@ -135,7 +130,6 @@ pub fn relief(
             if mask == 0.0 {
                 continue;
             }
-            // The block gradient, bilinear between block centres.
             let u = |g: i64| (g as f64 + 0.5) / b as f64 - 0.5;
             let (ux, uy) = (u(g.0), u(g.1));
             let (bx, by) = (ux.floor() as i64, uy.floor() as i64);
@@ -152,9 +146,7 @@ pub fn relief(
     out
 }
 
-/// Gullies at root point `at` (metres) on ground of slope `s` (metres per metre) and fade target
-/// `fade` (-1 valley, 1 peak): the octave amplitudes times each faded octave less `fade`, so
-/// flat ground gets 0.
+/// Σ amplitude x (faded octave - `fade`), so flat ground gets 0 and the coast never moves.
 fn filter(
     pivots: &[Pivots],
     o: &ReliefOptions,
@@ -164,7 +156,8 @@ fn filter(
     fade: f64,
 ) -> f64 {
     let mut slope = s;
-    let mut mask = ease_out(len(s) / o.slope);
+    let ground = ease_out(len(s) / o.slope);
+    let mut mask = ground;
     let mut target = fade;
     let (mut sum, mut rest) = (0.0, RELIEF_AMPLITUDES);
     let mut amp = 1.0;
@@ -176,26 +169,23 @@ fn filter(
             break;
         }
         let l = len(slope);
-        // Across the slope; gullies run along it, down toward the valley.
         let across = (-slope.1 / l, slope.0 / l);
         let (c, sn) = phacelle(p, (at.0 / cell, at.1 / cell), across);
         target += (c - target) * mask * lod;
         sum += amp * (target - fade);
         rest -= amp;
-        // The flank's own slope turns the next octave toward the gully floor.
+        // Bend the next octave toward the gully floor, so gullies branch.
         let flank = -sn / (sn * sn + RELIEF_SIGN_SOFT2).sqrt() * l * RELIEF_BEND;
         slope = (slope.0 + across.0 * flank, slope.1 + across.1 * flank);
         mask = pow_inv(mask) * ease_out(sn.abs() / RELIEF_CREASE);
         amp *= 0.5;
         cell *= 0.5;
     }
-    // The octaves left out equal the last target.
-    sum + rest * (target - fade)
+    // An octave left out is fully faded, so it adds the last target.
+    (sum + rest * (target - fade)) * ground
 }
 
-/// Phacelle-style noise at cell point `q`: stripes across `dir`, one splat per cell at a hashed
-/// pivot, blended over the 4 x 4 cells around `q`. Returns the (cos, sin) pair, its length
-/// doubled and capped at 1.
+/// Phacelle-style (cos, sin) at cell point `q`; length doubled and capped at 1, as the article.
 fn phacelle(pivots: &Pivots, q: (f64, f64), dir: (f64, f64)) -> (f64, f64) {
     let b = ((q.0 - 0.5).floor() as i64, (q.1 - 0.5).floor() as i64);
     let (mut c, mut s, mut wsum) = (0.0, 0.0, 0.0);
@@ -244,8 +234,7 @@ fn pivot(prefix: u64, x: i64, y: i64) -> (f64, f64) {
     )
 }
 
-/// cos and sin of `2 pi t`, by Taylor series on the nearest half cycle, so a port needs no
-/// `cos` or `sin` builtin.
+/// cos and sin of `2 pi t` by Taylor series, so a port needs no trigonometric builtin.
 pub(crate) fn wave(t: f64) -> (f64, f64) {
     let a = std::f64::consts::TAU * (t - (t + 0.5).floor());
     let a2 = a * a;
@@ -263,7 +252,7 @@ fn len(v: (f64, f64)) -> f64 {
     (v.0 * v.0 + v.1 * v.1).sqrt()
 }
 
-/// The article's `pow_inv(t, detail)` at detail 1.5, so the port needs only `sqrt`.
+/// The article's `pow_inv(t, detail)` at detail 1.5; below 1 f32 fails near t = 1.
 fn pow_inv(t: f64) -> f64 {
     let v = 1.0 - t.clamp(0.0, 1.0);
     1.0 - v * v.sqrt()

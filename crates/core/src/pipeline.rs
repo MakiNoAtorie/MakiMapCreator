@@ -436,8 +436,7 @@ impl Project {
         Ok(crate::OptionValues(self.store.kind_options(kind.as_str())?))
     }
 
-    /// Sets an option of map kind `kind` and rebuilds the derived layers of its maps. Options
-    /// are project settings, not edits: they have no undo step.
+    /// Rebuilds the kind's derived layers; a project setting, not an edit, so no undo step.
     pub fn set_kind_option(&mut self, kind: crate::MapKind, id: &str, value: f64) -> Result<()> {
         self.flush_writes()?;
         self.store.write(&[crate::persist::Write::KindOption {
@@ -457,8 +456,7 @@ impl Project {
         Ok(())
     }
 
-    /// True while `map`'s derived layers lag its authored ones: a stroke not written yet, or a
-    /// rebuild not collected by `poll_jobs` yet.
+    /// True while a stroke is unwritten or a rebuild is not collected by `poll_jobs`.
     pub fn derived_pending(&self, map: MapId) -> bool {
         self.strokes.unwritten(map)
             || self
@@ -491,7 +489,7 @@ impl Project {
         let stages = kind.stages();
         let mpp = m.settings.metres_per_pixel;
         let dirty = dirty(&decls(stages), layers);
-        // Neighbours rerun only the stages that read past their edge, and what those feed.
+        // Neighbours rerun only the stages that read past their edge, and the stages fed by them.
         let far: Vec<bool> = dirty
             .iter()
             .zip(stages)
@@ -511,8 +509,7 @@ impl Project {
         }
     }
 
-    /// Maps of `map`'s kind and scale within its stages' reach, each with the global pixels
-    /// `[x0, y0, x1, y1)` of it that lie in reach.
+    /// Maps of `map`'s kind and scale in its tree, with their global pixels in reach.
     fn neighbours(&self, map: MapId) -> Vec<(&crate::Map, [i64; 4])> {
         let (Ok(m), Ok(kind)) = (self.map(map), self.kind_of(map)) else {
             return vec![];

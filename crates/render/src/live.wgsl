@@ -124,7 +124,7 @@ fn fade(t: vec2f) -> vec2f {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
-// `gradient`: corner `c` (each wrapped to 32 bits) plus fraction `f`, corners hashed as `rng::lattice`.
+// `gradient`; corners wrap to 32 bits and hash as `rng::lattice`.
 fn gradient(pre: vec2u, c: vec2u, f: vec2f) -> f32 {
     var d: array<f32, 4>;
     for (var k = 0u; k < 4u; k++) {
@@ -138,9 +138,7 @@ fn gradient(pre: vec2u, c: vec2u, f: vec2f) -> f32 {
     return top + (bottom - top) * u.y;
 }
 
-// Node (kx, ky) of the tables: value and ridged noise, as `combine`. A node's lattice point is
-// its column's part plus its row's, each a whole corner and a fraction in 2^-32 units, added
-// without rounding.
+// `combine` at node (kx, ky); column and row parts add without rounding, as `noise_at`.
 fn node(kx: u32, ky: u32) -> vec2f {
     var value = 0.0;
     var ridged = 0.0;

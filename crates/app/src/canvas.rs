@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, ColorImage, Rect, TextureHandle, TextureOptions};
-use mmc_core::{Kinds, Layer, MapId, Project};
+use mmc_core::{Kinds, Layer, MapId, Project, ReliefOptions};
 use mmc_render::{Image, Renderer, ShaderPass, View};
 
 use crate::live::{Applied, LiveBrush, LiveSource};
@@ -66,6 +66,31 @@ fn renderer_for(rs: &eframe::egui_wgpu::RenderState, kinds: &Kinds, layers: &[La
         }
     }
     r
+}
+
+/// How the live copy of a map is shaded.
+struct LiveShading {
+    /// The height pass of the map's kind.
+    shader: &'static str,
+    /// `None` when the kind has no relief or its layer is hidden (ADR-0026).
+    relief: Option<ReliefOptions>,
+}
+
+fn live_shading(p: &Project, kinds: &Kinds, map: MapId, layers: &[Layer]) -> Option<LiveShading> {
+    let m = p.maps().iter().find(|m| m.id == map)?;
+    let kind = kinds.get(m.settings.kind)?;
+    let pass = kind
+        .render_passes()
+        .iter()
+        .find(|r| r.layer == Layer::HEIGHT)?;
+    let relief = pass
+        .relief
+        .filter(|r| layers.contains(r))
+        .and_then(|_| kind.relief(&p.kind_options(kind.kind()).ok()?));
+    Some(LiveShading {
+        shader: pass.shader,
+        relief,
+    })
 }
 
 /// A render: (request, epoch, complete, image, live base).
@@ -133,7 +158,7 @@ impl Canvas {
                 let renderer = &renderers[at].1;
                 // Never blocks on disk: tiles not loaded yet show a coarser level.
                 // The lock covers taking the tiles; the copy into rasters runs without it.
-                let (fetched, mark, seed, shader) =
+                let (fetched, mark, seed, shading) =
                     match lock_project(&project, "render").0.as_ref() {
                         Some(p) => {
                             let marks = applied.lock().unwrap_or_else(|e| e.into_inner());
@@ -141,28 +166,8 @@ impl Canvas {
                             let f = renderer
                                 .fetch_cached(p, req.view)
                                 .and_then(|f| f.with_summaries(p));
-                            // The height pass of the shown map's kind draws its live copy, with
-                            // its relief when the relief layer is shown (ADR-0026).
-                            let kind = p
-                                .maps()
-                                .iter()
-                                .find(|m| m.id == req.view.map)
-                                .and_then(|m| kinds.get(m.settings.kind));
-                            let pass = kind.and_then(|k| {
-                                k.render_passes().iter().find(|r| r.layer == Layer::HEIGHT)
-                            });
-                            let relief = kind
-                                .filter(|_| {
-                                    pass.and_then(|r| r.relief)
-                                        .is_some_and(|r| req.layers.contains(&r))
-                                })
-                                .and_then(|k| k.relief(&p.kind_options(k.kind()).ok()?));
-                            (
-                                f,
-                                mark,
-                                p.seed().unwrap_or(0),
-                                pass.map(|r| (r.shader, relief)),
-                            )
+                            let shading = live_shading(p, &kinds, req.view.map, &req.layers);
+                            (f, mark, p.seed().unwrap_or(0), shading)
                         }
                         None => continue,
                     };
@@ -171,22 +176,23 @@ impl Canvas {
                 let (result, base) = match scene {
                     Ok(s) => {
                         let img = renderer.render(&s, RENDER_TILE);
-                        let base = complete
-                            .then_some(shader)
-                            .flatten()
-                            .and_then(|(shader, o)| {
-                                let base = s.into_base(Layer::HEIGHT)?;
-                                let base = match o {
-                                    Some(o) => base.with_relief(seed, o),
-                                    None => base,
-                                };
-                                Some(LiveSource {
-                                    base,
-                                    shader,
-                                    mark,
-                                    seed,
-                                })
-                            });
+                        let base =
+                            complete
+                                .then_some(shading)
+                                .flatten()
+                                .and_then(|l: LiveShading| {
+                                    let base = s.into_base(Layer::HEIGHT)?;
+                                    let base = match l.relief {
+                                        Some(o) => base.with_relief(seed, o),
+                                        None => base,
+                                    };
+                                    Some(LiveSource {
+                                        base,
+                                        shader: l.shader,
+                                        mark,
+                                        seed,
+                                    })
+                                });
                         (img, base)
                     }
                     Err(e) => (Err(e), None),

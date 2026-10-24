@@ -1,5 +1,4 @@
-// Terrain shading of a height pass. Uses the pass's `u: ViewUniform`; `PALETTE`, `COAST` and
-// `SHORE` come from terrain.rs.
+// Terrain shading of a height pass; needs `u: ViewUniform`, and terrain.rs adds the constants.
 
 // Hillshade strength on land and under the sea; the darkest a slope turned away gets.
 const LAND_SHADE = 0.6;
