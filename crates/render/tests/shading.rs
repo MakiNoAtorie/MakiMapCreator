@@ -235,3 +235,33 @@ fn flat_sea_at_zero_has_no_coastline() {
             .all(|c| close(c.try_into().unwrap(), sea, 1))
     );
 }
+
+#[test]
+fn sea_floor_lowered_from_zero_has_no_coastline_and_islands_raised_from_it_have_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, map) = region(dir.path());
+    let stamp = |x: f64, strength: f32| BrushStroke {
+        layer: Layer::HEIGHT,
+        points: vec![StrokePoint {
+            at: RootPoint { x, y: 2000.0 },
+            pressure: 1.0,
+            radius: 1000.0,
+        }],
+        strength,
+        falloff: 1.0,
+        ..Default::default()
+    };
+    p.apply(map, Command::Brush(stamp(1500.0, -40.0))).unwrap();
+    p.apply(map, Command::Brush(stamp(4500.0, 40.0))).unwrap();
+    let r = renderer();
+    let img = r
+        .render(
+            &r.scene(&p, view(map, (0.0, 0.0), (6000.0, 4000.0), 600, 400))
+                .unwrap(),
+            u32::MAX,
+        )
+        .unwrap();
+    let line = coast_pixels(&img, 200);
+    assert!(line.iter().all(|&x| x > 300), "line in the sea: {line:?}");
+    assert!(line.iter().any(|&x| x > 300), "island has no coast");
+}

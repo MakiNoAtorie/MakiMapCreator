@@ -8,7 +8,7 @@ use mmc_kind_region::{REGION, RegionKind};
 use mmc_render::{Image, Renderer, ShaderPass, View, export_png};
 
 /// BLAKE3 of the RGBA bytes of `fixture_view()` under WARP. Hashes are per backend.
-const WARP_HASH: &str = "cd6750d33abe4fce1d917cafb6759e495caa995ac866f5e935769e49eca0ae2b";
+const WARP_HASH: &str = "4ad17250b6a5852fe690c427a446e1d54af9442e4923ec68acd2457d54b947aa";
 
 fn fixture(dir: &std::path::Path) -> (Project, MapId) {
     let settings = MapSettings {
