@@ -33,7 +33,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and `Layer::OUTLINES`; kind crates define the rest.
 - Land and sea come from height (ADR-0024); never add a layer named `land`. Coarse land and sea are `WATER_LEVEL ± COAST_RELIEF`. The land test uses `WATER_LEVEL`; the coastline is drawn at `mmc_render::SHORE` (2 m).
 - `BrushStroke::target` raises to or lowers to a value, never the other way; `ToolAction::Target` makes such tools.
-- Brush maths: `core/src/brush.rs` is the reference (ADR-0025); its fast paths and `detail_tables` give the same bits. Change it and `render/src/live.wgsl` together; `render/tests/live.rs` holds them within 1e-3 m. WGSL ports use arithmetic or `sqrt`, not `tanh`/`exp` (WARP is off by about 1e-4).
+- Brush maths: `core/src/brush.rs` is the reference (ADR-0025); its fast paths and `detail_tables` give the same bits. Change it and `render/src/live.wgsl` together; `render/tests/live.rs` holds them within 1e-3 m. Relief: `core/src/relief.rs` and `render/src/relief.wgsl` likewise, held within 0.01 m by `render/tests/relief.rs` (ADR-0026). WGSL uses arithmetic or `sqrt`, no trig/`tanh`/`exp` (WARP is off by about 1e-4); shared hashing lives in `render/src/hash.wgsl`.
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3, decoded only by `layer::decode*`. A missing tile is zeros. Level `l` pixels are 2x2 means of `l-1`; only level 0 is edited.
 - Write tiles through `Project::write_rows`, one call per transaction: it feeds the cache and the pyramid. Drop a layer with `Write::DropLayer`. Tests use `wait_tiles()`.
 - Every edit is a `Command` giving one `undo::Change`; `apply_part` parts are one change until `end_stroke`. Without an outline a stroke stays decoded in memory (`stroke.rs`) until pen up; edits, undo and save write it first. Undo is per map, bounded by `UNDO_LIMIT`; deleting a map goes to its parent's history, a root map to `undo_project`.
@@ -43,6 +43,7 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 
 - A kind crate implements `MapKindModule`; a new kind edits neither core nor render.
 - A layer is derived when a stage of the map's kind writes it; commands on it fail with `DerivedLayer`.
+- Kind options come from `MapKindModule::options()`, are stored per project, and change through `Project::set_kind_option`, which rebuilds derived layers. Stages copy neighbour tiles by row slices, not per-pixel lookups.
 - A generator takes a `GenRun` and returns one `Command::Generate`; core records the run with `APP_VERSION`. Runs default to the project seed.
 - Pixel centres come from global indices `((origin/mpp).round() + i + 0.5) * mpp`, so neighbours agree. Generated tiles are not edited.
 - Children are at most `MAX_CHILD_SIZE` px a side. Regeneration and re-sync: ADR-0022, through a `RegenPlan` and `apply_plan`.
