@@ -8,7 +8,7 @@
   - Opus: concurrency, state/replay/serialization, rendering backends, security-sensitive parsing, cross-module refactors, unexplained failures.
   - Sonnet: well-specified mechanical work (modules that follow existing patterns, UI screens, CLI wiring, config parsing, docs, small fixes, branch merges).
 - Never pull full logs into context. Builds: filter to `error|warning:|FAILED`, `head -40`. Tests: failures only, `tail -40`. CI: failing job's tail only.
-- Implementers do not poll CI. They run local checks, push, report. The orchestrator checks CI once at merge; if red, it sends the failing job and error back to the same implementer (continue it, do not start a new one).
+- Implementers do not poll CI. They run `ci.bat`, push, report. The orchestrator merges on a green `ci.bat` without waiting for CI, then checks the CI result the next time it touches the repo; if red, it sends the failing job and error back to the same implementer (continue it, do not start a new one).
 - Build/test/code conventions live in `docs/CONVENTIONS.md` (create with the first build; keep under ~8 KB; add only binding rules, delete stale ones). Machine-specific facts go in a notes file outside the repo.
 - Implementers do not edit shared notes. They end their report with at most 10 bullets of new conventions; the orchestrator folds them in at merge.
 - Run independent tickets in parallel worktrees in the background; do not read subagent transcripts, wait for reports.
@@ -25,7 +25,7 @@
     only by adding lines (another agent is working on <X> in parallel).
     Build test-first (Skill `tdd`). The orchestrator has agreed these seams;
     don't ask the user: <seams>.
-    Local checks before pushing: <exact commands>. Keep output filtered to
+    Local checks before pushing: `ci.bat` (plus <extra commands>). Keep output filtered to
     errors and failures. Do not poll CI.
     Commit with "Refs #<n>" and the attribution trailers. Merge the
     integration-branch tip before pushing.
