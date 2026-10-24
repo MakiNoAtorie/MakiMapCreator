@@ -56,16 +56,16 @@ struct Params {
     box0: [i32; 2],
     size: [u32; 2],
     g0: [i32; 2],
+    /// `RIDGE_HEIGHTS`.
+    ridge: [f32; 2],
     level: u32,
     count: u32,
     sub: u32,
     detail: f32,
-    total: f32,
     octaves: u32,
     first: u32,
     reach: f32,
-    /// `RIDGE_HEIGHTS`.
-    ridge: [f32; 2],
+    pad: u32,
 }
 
 /// `live.wgsl` `Stamp`; `centre` is in frame pixels.
@@ -153,7 +153,6 @@ struct Tables {
     key: (u64, u64),
     buffer: wgpu::Buffer,
     octaves: u32,
-    total: f32,
 }
 
 /// The live copy: stamps run in compute passes (`live.wgsl`), shading is the kind's height pass.
@@ -466,9 +465,9 @@ impl Live {
         if noisy {
             self.tables(seed, s.detail.scale);
         }
-        let (octaves, total) = match (&self.tables, noisy) {
-            (Some(t), true) => (t.octaves, t.total),
-            _ => (0, 1.0),
+        let octaves = match (&self.tables, noisy) {
+            (Some(t), true) => t.octaves,
+            _ => 0,
         };
         if let (FLATTEN, FlattenLevel::At(l)) = (mode, level) {
             self.queue
@@ -480,7 +479,6 @@ impl Live {
             level: a.level,
             sub: (1 << a.level).min(SUB_MAX),
             detail: s.detail.amount(),
-            total,
             octaves,
             ridge: mmc_core::RIDGE_HEIGHTS.into(),
             ..Default::default()
@@ -606,7 +604,8 @@ impl Live {
         true
     }
 
-    /// Detail tables over the copy as u32 words: per octave amp and offsets of node x, node y, cols, rows.
+    /// Detail tables over the copy as u32 words: per octave amp, prefix and offsets of the node
+    /// columns and rows, each a lattice corner and fraction.
     fn tables(&mut self, seed: u64, scale: f64) {
         let Some(copy) = &self.copy else { return };
         let key = (seed, scale.to_bits());
@@ -619,18 +618,13 @@ impl Live {
         let n = t.octaves.len();
         let mut words: Vec<u32> = vec![0; n * 8];
         for (o, oct) in t.octaves.iter().enumerate() {
-            let at = |w: &Vec<u32>| w.len() as u32;
             words[o * 8] = (oct.amp as f32).to_bits();
-            for (slot, nodes) in [(1, &oct.node_x), (2, &oct.node_y)] {
-                words[o * 8 + slot] = at(&words);
-                for &(i, f) in nodes {
-                    words.extend([i, (f as f32).to_bits()]);
-                }
-            }
-            for (slot, vals) in [(3, &oct.cols), (4, &oct.rows)] {
-                words[o * 8 + slot] = at(&words);
-                for &v in vals {
-                    words.extend([v as u32, (v >> 32) as u32]);
+            words[o * 8 + 1] = oct.prefix as u32;
+            words[o * 8 + 2] = (oct.prefix >> 32) as u32;
+            for (slot, parts) in [(3, &oct.cols), (4, &oct.rows)] {
+                words[o * 8 + slot] = words.len() as u32;
+                for &((x, y), (fx, fy)) in parts {
+                    words.extend([x as u32, y as u32, fx, fy]);
                 }
             }
         }
@@ -647,7 +641,6 @@ impl Live {
             key,
             buffer,
             octaves: n as u32,
-            total: t.total as f32,
         });
     }
 
@@ -794,8 +787,8 @@ mod tests {
         assert_eq!(
             wgsl("Params"),
             layout!(
-                Params, box0, size, g0, level, count, sub, detail, total, octaves, first, reach,
-                ridge
+                Params, box0, size, g0, ridge, level, count, sub, detail, octaves, first, reach,
+                pad
             )
         );
         assert_eq!(
@@ -814,7 +807,17 @@ mod tests {
             let line = format!("const {name} = {v}u;");
             assert!(include_str!("live.wgsl").contains(&line), "{line}");
         }
-        let gain = format!("const RIDGE_GAIN = {:?};", mmc_core::RIDGE_GAIN);
-        assert!(include_str!("live.wgsl").contains(&gain), "{gain}");
+        let consts = [
+            ("RIDGE_GAIN", mmc_core::RIDGE_GAIN),
+            ("VALUE_SPREAD", mmc_core::VALUE_SPREAD),
+            ("RIDGED_MID", mmc_core::RIDGED_MID),
+            ("RIDGED_SPREAD", mmc_core::RIDGED_SPREAD),
+            ("COAST_BAND", mmc_core::COAST_BAND as f64),
+            ("WATER_LEVEL", mmc_core::WATER_LEVEL as f64),
+        ];
+        for (name, v) in consts {
+            let line = format!("const {name} = {v:?};");
+            assert!(include_str!("live.wgsl").contains(&line), "{line}");
+        }
     }
 }

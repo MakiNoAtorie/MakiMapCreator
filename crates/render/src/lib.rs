@@ -16,7 +16,7 @@ mod pass;
 pub use pass::ShaderPass;
 mod kind;
 mod terrain;
-pub use terrain::{COAST, PALETTE};
+pub use terrain::{COAST, PALETTE, SHORE};
 mod live;
 mod summary;
 pub use live::{FlattenLevel, Live, LiveBase, LiveFrame};

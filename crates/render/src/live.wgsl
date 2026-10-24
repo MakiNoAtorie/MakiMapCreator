@@ -5,15 +5,15 @@ struct Params {
     box0: vec2i,
     size: vec2u,
     g0: vec2i,
+    ridge: vec2f,
     level: u32,
     count: u32,
     sub: u32,
     detail: f32,
-    total: f32,
     octaves: u32,
     first: u32,
     reach: f32,
-    ridge: vec2f,
+    pad: u32,
 }
 
 struct Stamp {
@@ -136,48 +136,61 @@ fn mix64(z0: vec2u) -> vec2u {
     return z ^ shr64(z, 31u);
 }
 
-// `rng::to_unit`: the top 53 bits over 2^53.
-fn unit(h: vec2u) -> f32 {
-    return f32(h.y) * 2.3283064e-10 + f32(h.x >> 11u) * 1.110223e-16;
+// `GRADIENTS`, picked by the top 3 bits of the corner hash.
+const S = 0.70710678;
+var<private> GRADIENTS: array<vec2f, 8> = array(
+    vec2f(1.0, 0.0), vec2f(-1.0, 0.0), vec2f(0.0, 1.0), vec2f(0.0, -1.0),
+    vec2f(S, S), vec2f(-S, S), vec2f(S, -S), vec2f(-S, -S),
+);
+
+// `VALUE_SPREAD`, `RIDGED_MID`, `RIDGED_SPREAD`.
+const VALUE_SPREAD = 0.45;
+const RIDGED_MID = 1.0;
+const RIDGED_SPREAD = 0.6;
+
+fn fade(t: vec2f) -> vec2f {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
-fn word64(at: u32) -> vec2u {
-    return vec2u(tables[at], tables[at + 1u]);
+// `gradient`: corner `c` (each wrapped to 32 bits) plus fraction `f`, corners hashed as `rng::lattice`.
+fn gradient(pre: vec2u, c: vec2u, f: vec2f) -> f32 {
+    var d: array<f32, 4>;
+    for (var k = 0u; k < 4u; k++) {
+        let o = vec2u(k & 1u, k >> 1u);
+        let g = GRADIENTS[mix64(pre ^ (c + o)).y >> 29u];
+        d[k] = dot(g, f - vec2f(o));
+    }
+    let u = fade(f);
+    let top = d[0] + (d[1] - d[0]) * u.x;
+    let bottom = d[2] + (d[3] - d[2]) * u.x;
+    return top + (bottom - top) * u.y;
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    return a + (b - a) * t;
-}
-
-// Node (kx, ky) of the tables: value and ridged octave sums over the total, clamped, as `combine`.
+// Node (kx, ky) of the tables: value and ridged noise, as `combine`. A node's lattice point is
+// its column's part plus its row's, each a whole corner and a fraction in 2^-32 units, added
+// without rounding.
 fn node(kx: u32, ky: u32) -> vec2f {
-    var sum = vec2f(0.0);
+    var value = 0.0;
+    var ridged = 0.0;
+    var weight = 1.0;
     for (var o = 0u; o < p.octaves; o++) {
         let h = o * 8u;
         let amp = bitcast<f32>(tables[h]);
-        let xa = tables[h + 1u] + 2u * kx;
-        let ya = tables[h + 2u] + 2u * ky;
-        let ix = tables[xa];
-        let fx = bitcast<f32>(tables[xa + 1u]);
-        let iy = tables[ya];
-        let fy = bitcast<f32>(tables[ya + 1u]);
-        let cols = tables[h + 3u];
-        let rows = tables[h + 4u];
-        let x0 = word64(cols + 2u * ix);
-        let x1 = word64(cols + 2u * ix + 2u);
-        let y0 = word64(rows + 2u * iy);
-        let y1 = word64(rows + 2u * iy + 2u);
-        let a = unit(mix64(x0 ^ y0));
-        let b = unit(mix64(x1 ^ y0));
-        let c = unit(mix64(x0 ^ y1));
-        let d = unit(mix64(x1 ^ y1));
-        let top = lerp(a, b, fx);
-        let bottom = lerp(c, d, fx);
-        let e = 2.0 * lerp(top, bottom, fy) - 1.0;
-        let q = 1.0 - abs(e);
-        sum += amp * vec2f(e, 2.0 * q * q - 1.0);
+        let pre = vec2u(tables[h + 1u], tables[h + 2u]);
+        let xa = tables[h + 3u] + 4u * kx;
+        let ya = tables[h + 4u] + 4u * ky;
+        let fc = vec2u(tables[xa + 2u], tables[xa + 3u]);
+        let fixed = fc + vec2u(tables[ya + 2u], tables[ya + 3u]);
+        let carry = select(vec2u(0u), vec2u(1u), fixed < fc);
+        let c = vec2u(tables[xa], tables[xa + 1u]) + vec2u(tables[ya], tables[ya + 1u]) + carry;
+        let n = gradient(pre, c, vec2f(fixed) * 2.3283064e-10);
+        value += amp * n;
+        let s = 1.0 - abs(n * 1.4142135);
+        let signal = s * s * weight;
+        ridged += amp * signal;
+        weight = signal * (2.0 - signal);
     }
-    return clamp(sum / p.total, vec2f(-1.0), vec2f(1.0));
+    return vec2f(value / VALUE_SPREAD, (ridged - RIDGED_MID) / RIDGED_SPREAD);
 }
 
 // `spline`.
@@ -202,10 +215,33 @@ fn detail(g: vec2i) -> vec2f {
 // `RIDGE_GAIN`.
 const RIDGE_GAIN = 2.0;
 
-// `DetailNoise::at`: ridged on high ground when the stamp raises.
-fn ridged(n: vec2f, height: f32) -> f32 {
-    let s = smoothstep(p.ridge.x, p.ridge.y, height);
-    return n.x * (1.0 - s) + RIDGE_GAIN * n.y * s;
+// `COAST_BAND`, `WATER_LEVEL`.
+const COAST_BAND = 20.0;
+const WATER_LEVEL = 0.0;
+
+// `DetailNoise::at`: ridged on high ground when the stamp raises; faded at the water level.
+fn noise_at(n: vec2f, height: f32, raise: bool) -> f32 {
+    var v = n.x;
+    if raise {
+        let s = smoothstep(p.ridge.x, p.ridge.y, height);
+        v = n.x * (1.0 - s) + RIDGE_GAIN * n.y * s;
+    }
+    return v * smoothstep(0.0, COAST_BAND, abs(height - WATER_LEVEL));
+}
+
+// `roughen`: at most the distance to the water level; a rounding that would cross it keeps `v`.
+fn roughen(v: f32, d: f32) -> f32 {
+    let a = abs(v - WATER_LEVEL);
+    if a == 0.0 {
+        return v;
+    }
+    let next = v + a * soft(d / a);
+    return select(v, next, (next > WATER_LEVEL) == (v > WATER_LEVEL));
+}
+
+// `soft`.
+fn soft(x: f32) -> f32 {
+    return x / sqrt(1.0 + x * x);
 }
 
 // `weight_in`.
@@ -214,7 +250,7 @@ fn falloff(d2: f32, core: f32) -> f32 {
         return 1.0;
     }
     let t = (1.0 - d2) / (1.0 - core);
-    return t * t;
+    return t * t * (3.0 - 2.0 * t);
 }
 
 // A texel is the mean of its level-0 pixels (ADR-0025): it takes the mean change of `sub`² of them.
@@ -244,8 +280,8 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
     var changed = false;
     for (var i = p.first; i < p.first + p.count; i++) {
         let s = stamps[i];
-        let roughen = s.mode == ROUGHEN;
-        let noisy = p.detail > 0.0 || roughen;
+        let rough = s.mode == ROUGHEN;
+        let noisy = p.detail > 0.0 || rough;
         var goal = s.goal;
         if s.mode == FLATTEN {
             goal = level[0];
@@ -268,15 +304,12 @@ fn stamp(@builtin(global_invocation_id) id: vec3u) {
                     noise[k] = detail(g);
                     have |= 1u << k;
                 }
-                n = noise[k].x;
-                if s.mode == ADD && s.amount > 0.0 {
-                    n = ridged(noise[k], u);
-                }
+                n = noise_at(noise[k], u, s.mode == ADD && s.amount > 0.0);
             }
-            let w = fall * clamp(1.0 + p.detail * n, 0.0, 2.0);
+            let w = fall * (1.0 + soft(p.detail * n));
             var next = u;
-            if roughen {
-                next = u + s.amount * fall * n;
+            if rough {
+                next = roughen(u, s.amount * fall * n);
             } else if s.mode == ADD {
                 next = u + s.amount * w;
             } else if s.mode == FLATTEN {

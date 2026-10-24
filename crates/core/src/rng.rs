@@ -62,6 +62,12 @@ pub(crate) fn at_finish(state: u64, word: u64) -> u64 {
     mix(state ^ word)
 }
 
+/// A hash of integer lattice corner (`ix`, `iy`) after `prefix`, each wrapped to 32 bits, so a
+/// u32 port computes it.
+pub(crate) fn lattice(prefix: u64, ix: i64, iy: i64) -> u64 {
+    mix(prefix ^ (ix as u32 as u64 | (iy as u32 as u64) << 32))
+}
+
 /// A uniform value in `0..1` for (seed, stage, key).
 pub fn unit(seed: u64, stage: &str, key: Key) -> f64 {
     to_unit(hash(seed, stage, key))

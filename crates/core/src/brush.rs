@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::command::{BrushStroke, EditTiles, brush_core, weight_in};
-use crate::layer::{RootPoint, TILE_SIZE};
+use crate::layer::{RootPoint, TILE_SIZE, WATER_LEVEL};
 use crate::rng::{self, Key};
 use crate::{Map, Project, Result};
 
@@ -17,14 +17,16 @@ pub enum BrushMode {
     Smooth,
     /// `v += (level - v) * min(1, strength * p * w)`, `level` read under the first stamp.
     Flatten,
-    /// `v += strength * p * falloff weight * detail_noise`: no net raise, the noise has mean 0.
+    /// `roughen(v, strength * p * falloff weight * detail_noise)`: no net raise, the noise has
+    /// mean 0, and land stays land.
     Roughen,
 }
 
 /// Root-space noise on a brush's stamp weight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Detail {
-    /// 0 is the smooth falloff; 1 scales the weight by 0 to 2. Used clamped (`amount()`).
+    /// 0 is the smooth falloff; the weight is scaled by `1 + soft(amount * n)`, 0 to 2. Used
+    /// clamped (`amount()`).
     pub amount: f32,
     /// Cell of the coarsest octave, metres.
     pub scale: f64,
@@ -50,49 +52,157 @@ impl BrushStroke {
 
 /// `rng` stage of the brush detail noise; the seed is the project seed.
 pub const DETAIL_STAGE: &str = "brush-detail";
-const OCTAVES: u32 = 6;
+const OCTAVES: i32 = 6;
+/// Each octave's cell is the one before over this; not 2, so octaves never share lattice lines.
+pub const LACUNARITY: f64 = 2.01;
+/// (cos, sin) each octave's lattice turns by from the one before: about 36.87 degrees.
+const TURN: (f64, f64) = (0.8, 0.6);
 
 /// Detail noise is evaluated every `NODE` global pixels and interpolated between.
 const NODE: i64 = 4;
 /// Octaves with a cell under this many pixels are skipped.
-const MIN_CELL: f64 = (2 * NODE) as f64;
-/// An octave sum over this, clamped to -1..1, is the noise: half the sum of all octave
-/// amplitudes, skipped ones included, so that a stroke shows its detail.
-const TOTAL: f64 = 1.96875 / 2.0;
+const MIN_CELL: f64 = 7.0;
+/// The value noise is its octave sum over this; no clamp.
+pub const VALUE_SPREAD: f64 = 0.45;
+/// The ridged noise is (octave sum - `RIDGED_MID`) / `RIDGED_SPREAD`; no clamp.
+pub const RIDGED_MID: f64 = 1.0;
+pub const RIDGED_SPREAD: f64 = 0.6;
 /// Raising adds blend from value noise to ridged noise between these heights, metres.
 pub const RIDGE_HEIGHTS: (f32, f32) = (150.0, 1200.0);
 /// Ridged noise counts this many times, so that half detail carves full ridges.
 pub const RIDGE_GAIN: f64 = 2.0;
+/// Detail fades to 0 within this many metres of `WATER_LEVEL`, so it never speckles the coast.
+pub const COAST_BAND: f32 = 20.0;
 
-/// Detail noise at a pixel, both in -1..1.
+/// Gradients of the lattice corners, picked by the top 3 bits of the corner hash.
+const S: f64 = std::f64::consts::FRAC_1_SQRT_2;
+const GRADIENTS: [(f64, f64); 8] = [
+    (1.0, 0.0),
+    (-1.0, 0.0),
+    (0.0, 1.0),
+    (0.0, -1.0),
+    (S, S),
+    (-S, S),
+    (S, -S),
+    (-S, -S),
+];
+
+/// Detail noise at a pixel, both about -1..1 with mean 0, not clamped.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetailNoise {
-    /// Value noise: lumps.
+    /// Gradient noise: lumps.
     pub value: f64,
-    /// Ridged noise: crests where the value noise crosses its middle.
+    /// Ridged multifractal: crests, with smooth valleys.
     pub ridged: f64,
+}
+
+fn smoothstep(lo: f32, hi: f32, v: f32) -> f64 {
+    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0) as f64;
+    t * t * (3.0 - 2.0 * t)
 }
 
 impl DetailNoise {
     /// The noise a stamp uses on ground at `height`: ridged, times `RIDGE_GAIN`, on high ground
-    /// when it raises.
+    /// when it raises; faded to 0 at the water level.
     pub fn at(self, height: f32, raise: bool) -> f64 {
-        if !raise {
-            return self.value;
-        }
-        let (lo, hi) = RIDGE_HEIGHTS;
-        let t = ((height - lo) / (hi - lo)).clamp(0.0, 1.0) as f64;
-        let s = t * t * (3.0 - 2.0 * t);
-        self.value * (1.0 - s) + RIDGE_GAIN * self.ridged * s
+        let n = if raise {
+            let s = smoothstep(RIDGE_HEIGHTS.0, RIDGE_HEIGHTS.1, height);
+            self.value * (1.0 - s) + RIDGE_GAIN * self.ridged * s
+        } else {
+            self.value
+        };
+        n * smoothstep(0.0, COAST_BAND, (height - WATER_LEVEL).abs())
     }
 }
 
-/// Octave amplitudes and cells, coarse first; `false` marks a skipped octave.
-fn octaves(scale: f64, mpp: f64) -> impl Iterator<Item = (f64, f64, bool)> {
-    (0..OCTAVES as i32).map(move |o| {
-        let f = 0.5f64.powi(o);
-        (f, scale * f, scale * f >= MIN_CELL * mpp)
-    })
+/// One kept octave: lattice point `q = a * p + off` of root point `p`, corners hashed after `prefix`.
+struct Octave {
+    amp: f64,
+    a: [f64; 4],
+    off: (f64, f64),
+    prefix: u64,
+}
+
+impl Octave {
+    /// The lattice point's parts from root x and from root y; their sum is the point.
+    fn parts(&self, p: RootPoint) -> ((f64, f64), (f64, f64)) {
+        let a = self.a;
+        (
+            (a[0] * p.x + self.off.0, a[2] * p.x + self.off.1),
+            (a[1] * p.y, a[3] * p.y),
+        )
+    }
+
+    fn lattice(&self, p: RootPoint) -> (f64, f64) {
+        let ((x0, y0), (x1, y1)) = self.parts(p);
+        (x0 + x1, y0 + y1)
+    }
+}
+
+/// The octaves of `scale` that are not skipped at `mpp`, coarse first.
+fn octaves(seed: u64, scale: f64, mpp: f64) -> Vec<Octave> {
+    let prefix = rng::prefix(seed, DETAIL_STAGE);
+    let (mut c, mut s) = (1.0, 0.0);
+    let mut list = vec![];
+    for o in 0..OCTAVES {
+        let cell = scale / LACUNARITY.powi(o);
+        if cell < MIN_CELL * mpp {
+            break;
+        }
+        let k = 1.0 / cell;
+        let f = (o + 1) as f64;
+        list.push(Octave {
+            amp: 0.5f64.powi(o),
+            a: [c * k, -s * k, s * k, c * k],
+            // Off the origin, where every octave would have a corner.
+            off: (0.37 * f, 0.71 * f),
+            prefix: rng::hash_from(prefix, Key::Entity(o as i64)),
+        });
+        (c, s) = (c * TURN.0 - s * TURN.1, s * TURN.0 + c * TURN.1);
+    }
+    list
+}
+
+fn fade(t: f64) -> f64 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// Gradient noise at lattice corner `c` plus fraction `f` (0..1): about -0.71..0.71.
+fn gradient((cx, cy): (i64, i64), (fx, fy): (f64, f64), prefix: u64) -> f64 {
+    let dot = |i: i64, j: i64| {
+        let g = GRADIENTS[(rng::lattice(prefix, cx + i, cy + j) >> 61) as usize];
+        g.0 * (fx - i as f64) + g.1 * (fy - j as f64)
+    };
+    rng::mix4(
+        [dot(0, 0), dot(1, 0), dot(0, 1), dot(1, 1)],
+        fade(fx),
+        fade(fy),
+    )
+}
+
+/// Value and ridged sums of the kept octaves' (amplitude, gradient noise), coarse first.
+/// Ridged is Musgrave's ridged multifractal: each octave weighted by the signal before it.
+fn combine(octaves: impl Iterator<Item = (f64, f64)>) -> (f64, f64) {
+    let (mut value, mut ridged, mut weight) = (0.0, 0.0, 1.0);
+    for (amp, n) in octaves {
+        value += amp * n;
+        let s = 1.0 - (n * std::f64::consts::SQRT_2).abs();
+        let signal = s * s * weight;
+        ridged += amp * signal;
+        // Musgrave's min(1, 2 * signal), without the crease.
+        weight = signal * (2.0 - signal);
+    }
+    (value / VALUE_SPREAD, (ridged - RIDGED_MID) / RIDGED_SPREAD)
+}
+
+/// Value and ridged noise of `octaves` at root point `p`.
+fn node_noise(octaves: &[Octave], p: RootPoint) -> (f64, f64) {
+    combine(octaves.iter().map(|o| {
+        let (x, y) = o.lattice(p);
+        let (x0, y0) = (x.floor(), y.floor());
+        let n = gradient((x0 as i64, y0 as i64), (x - x0, y - y0), o.prefix);
+        (o.amp, n)
+    }))
 }
 
 /// Detail noise at the pixel whose centre is `at`; the maths is in ADR-0025.
@@ -101,12 +211,8 @@ pub fn detail_noise(seed: u64, at: RootPoint, scale: f64, mpp: f64) -> DetailNoi
         (at.x / mpp - 0.5).round() as i64,
         (at.y / mpp - 0.5).round() as i64,
     );
-    interpolate(g, |nx, ny| {
-        let node = node_at(nx, ny, mpp);
-        fractal(scale, mpp, |_, cell| {
-            rng::noise(seed, DETAIL_STAGE, node, cell)
-        })
-    })
+    let octaves = octaves(seed, scale, mpp);
+    interpolate(g, |nx, ny| node_noise(&octaves, node_at(nx, ny, mpp)))
 }
 
 fn node_at(nx: i64, ny: i64, mpp: f64) -> RootPoint {
@@ -143,48 +249,35 @@ fn interpolate((gx, gy): (i64, i64), node: impl Fn(i64, i64) -> (f64, f64)) -> D
     }
 }
 
-/// Value and ridged sums of the kept octaves' (amplitude, noise in 0..1), over `TOTAL`, clamped.
-fn combine(octaves: impl Iterator<Item = (f64, f64)>) -> (f64, f64) {
-    let (mut value, mut ridged) = (0.0, 0.0);
-    for (amp, u) in octaves {
-        let d = 2.0 * u - 1.0;
-        let q = 1.0 - d.abs();
-        value += amp * d;
-        ridged += amp * (2.0 * q * q - 1.0);
-    }
-    let shape = |s: f64| (s / TOTAL).clamp(-1.0, 1.0);
-    (shape(value), shape(ridged))
-}
-
-fn fractal(scale: f64, mpp: f64, noise: impl Fn(usize, f64) -> f64) -> (f64, f64) {
-    combine(
-        octaves(scale, mpp)
-            .enumerate()
-            .filter(|(_, (_, _, kept))| *kept)
-            .map(|(o, (amp, cell, _))| (amp, noise(o, cell))),
-    )
-}
-
 /// `detail_noise` over a range of global pixels as tables, for a port without u64 or f64 (WGSL).
 pub struct DetailTables {
     /// Node index of column and row 0 of the node tables.
     pub nx0: i64,
     pub ny0: i64,
-    /// The octave sums are divided by this, then clamped to -1..1.
-    pub total: f64,
     pub octaves: Vec<OctaveTable>,
 }
 
 /// One octave that is not skipped.
 pub struct OctaveTable {
     pub amp: f64,
-    /// Per node column (row): lattice column (row) below the node and smoothstep weight to the next.
-    pub node_x: Vec<(u32, f64)>,
-    pub node_y: Vec<(u32, f64)>,
-    /// Per lattice column the hash state after its x; per lattice row the word its y mixes in.
-    /// A corner's value is `to_unit(splitmix64_finaliser(cols[i] ^ rows[j]))`.
-    pub cols: Vec<u64>,
-    pub rows: Vec<u64>,
+    /// The corner hash is `rng::lattice(prefix, ix, iy)`.
+    pub prefix: u64,
+    /// Per node column (row): its part of the node's lattice point as whole lattice corner and
+    /// fraction in 2^-32 units, which a port adds without rounding. A node's point is its
+    /// column's part plus its row's.
+    pub cols: Vec<((i64, i64), (u32, u32))>,
+    pub rows: Vec<((i64, i64), (u32, u32))>,
+}
+
+const FRACTION: f64 = 4294967296.0;
+
+fn split((x, y): (f64, f64)) -> ((i64, i64), (u32, u32)) {
+    let part = |v: f64| {
+        let w = v.floor();
+        (w as i64, ((v - w) * FRACTION) as u32)
+    };
+    let ((x0, fx), (y0, fy)) = (part(x), part(y));
+    ((x0, y0), (fx, fy))
 }
 
 /// Tables for global pixels `xs` x `ys` (inclusive).
@@ -195,38 +288,23 @@ pub fn detail_tables(
     xs: (i64, i64),
     ys: (i64, i64),
 ) -> DetailTables {
-    let prefix = rng::prefix(seed, DETAIL_STAGE);
     // Node column 0 is the one before the node of `xs.0` rounded down, wherever `xs.0` lies.
     let (nx0, nx1) = (xs.0.div_euclid(NODE) - 1, spline_at(xs.1).0 + 1);
     let (ny0, ny1) = (ys.0.div_euclid(NODE) - 1, spline_at(ys.1).0 + 1);
-    let mut tables = vec![];
-    for (amp, cell, kept) in octaves(scale, mpp) {
-        if kept {
-            let axis = |n0: i64, n1: i64, at: &dyn Fn(i64) -> f64| {
-                let v: Vec<(f64, f64)> = (n0..=n1).map(|n| rng::axis(at(n), cell)).collect();
-                let i0 = v[0].0;
-                let nodes = v.iter().map(|&(g, f)| ((g - i0) as u32, f)).collect();
-                (nodes, i0 as i64, v[v.len() - 1].0 as i64 + 1)
-            };
-            let (node_x, ix0, ix1) = axis(nx0, nx1, &|n| node_at(n, 0, mpp).x);
-            let (node_y, iy0, iy1) = axis(ny0, ny1, &|n| node_at(0, n, mpp).y);
-            tables.push(OctaveTable {
-                amp,
-                node_x,
-                node_y,
-                cols: (ix0..=ix1)
-                    .map(|i| rng::at_x(prefix, i as f64 * cell))
-                    .collect(),
-                rows: (iy0..=iy1).map(|j| rng::at_y(j as f64 * cell)).collect(),
-            });
-        }
-    }
-    DetailTables {
-        nx0,
-        ny0,
-        total: TOTAL,
-        octaves: tables,
-    }
+    let octaves = octaves(seed, scale, mpp)
+        .into_iter()
+        .map(|o| OctaveTable {
+            amp: o.amp,
+            prefix: o.prefix,
+            cols: (nx0..=nx1)
+                .map(|n| split(o.parts(node_at(n, 0, mpp)).0))
+                .collect(),
+            rows: (ny0..=ny1)
+                .map(|n| split(o.parts(node_at(0, n, mpp)).1))
+                .collect(),
+        })
+        .collect();
+    DetailTables { nx0, ny0, octaves }
 }
 
 impl DetailTables {
@@ -235,15 +313,12 @@ impl DetailTables {
         interpolate((gx, gy), |nx, ny| {
             let (kx, ky) = ((nx - self.nx0) as usize, (ny - self.ny0) as usize);
             combine(self.octaves.iter().map(|o| {
-                let ((ix, fx), (iy, fy)) = (o.node_x[kx], o.node_y[ky]);
-                let (ix, iy) = (ix as usize, iy as usize);
-                let c = |i: usize, j: usize| rng::to_unit(rng::at_finish(o.cols[i], o.rows[j]));
-                let n = rng::mix4(
-                    [c(ix, iy), c(ix + 1, iy), c(ix, iy + 1), c(ix + 1, iy + 1)],
-                    fx,
-                    fy,
-                );
-                (o.amp, n)
+                let ((cx, cy), (fx, fy)) = o.cols[kx];
+                let ((rx, ry), (gx, gy)) = o.rows[ky];
+                let (fx, fy) = (fx as u64 + gx as u64, fy as u64 + gy as u64);
+                let corner = (cx + rx + (fx >> 32) as i64, cy + ry + (fy >> 32) as i64);
+                let f = |v: u64| (v as u32) as f64 / FRACTION;
+                (o.amp, gradient(corner, (f(fx), f(fy)), o.prefix))
             }))
         })
     }
@@ -255,9 +330,30 @@ fn dist2(at: RootPoint, centre: RootPoint, radius: f64) -> f64 {
     (dx * dx + dy * dy) * (1.0 / (radius * radius))
 }
 
-/// `w = falloff(d²) * clamp(1 + amount * n, 0, 2)` in f64, then to f32.
+/// `x / sqrt(1 + x²)`: about x when small, never past ±1, smooth. Not tanh: WARP's exp and tanh
+/// are too coarse for the GPU port's 1e-3 m.
+fn soft(x: f64) -> f64 {
+    x / (1.0 + x * x).sqrt()
+}
+
+/// `w = falloff(d²) * (1 + soft(amount * n))` in f64, then to f32.
 fn modulate(w: f32, d: Detail, n: f64) -> f32 {
-    (w as f64 * (1.0 + d.amount() as f64 * n).clamp(0.0, 2.0)) as f32
+    (w as f64 * (1.0 + soft(d.amount() as f64 * n))) as f32
+}
+
+/// Roughen's change `d` to height `v`: at most the distance to the water level, so land stays
+/// land and sea stays sea; a rounding that would cross it keeps `v`.
+fn roughen(v: f32, d: f64) -> f32 {
+    let a = (v - WATER_LEVEL).abs() as f64;
+    if a == 0.0 {
+        return v;
+    }
+    let next = v + (a * soft(d / a)) as f32;
+    if (next > WATER_LEVEL) == (v > WATER_LEVEL) {
+        next
+    } else {
+        v
+    }
 }
 
 /// Weight of a stamp at the pixel centre `at` with detail noise `n` there (`DetailNoise::at`),
@@ -275,72 +371,6 @@ pub fn stamp_weight(
         return 0.0;
     }
     modulate(weight_in(d2, brush_core(falloff)), detail, n)
-}
-
-/// One octave's hashed lattice corners over a stamp, rows of `w` from (`ix0`, `iy0`).
-struct LatticeOctave {
-    cell: f64,
-    ix0: i64,
-    iy0: i64,
-    w: usize,
-    corners: Vec<f64>,
-}
-
-/// The detail noise's lattice corners over one stamp; same bits as `detail_noise`.
-struct Lattice {
-    octaves: Vec<LatticeOctave>,
-}
-
-impl Lattice {
-    fn new(seed: u64, scale: f64, mpp: f64, lo: RootPoint, hi: RootPoint) -> Lattice {
-        let prefix = rng::prefix(seed, DETAIL_STAGE);
-        let mut list = vec![];
-        for (_, cell, kept) in octaves(scale, mpp) {
-            let (ix0, iy0) = (
-                (lo.x / cell).floor() as i64 - 1,
-                (lo.y / cell).floor() as i64 - 1,
-            );
-            let (ix1, iy1) = (
-                (hi.x / cell).floor() as i64 + 2,
-                (hi.y / cell).floor() as i64 + 2,
-            );
-            let w = (ix1 - ix0 + 1).max(0) as usize;
-            let h = (iy1 - iy0 + 1).max(0) as usize;
-            let mut corners = vec![];
-            if kept && w > 0 && h > 0 {
-                corners = vec![0.0; w * h];
-                par_rows(&mut corners, w, |r, out| {
-                    let iy = iy0 + r as i64;
-                    for (ix, o) in (ix0..).zip(out) {
-                        let p = RootPoint {
-                            x: ix as f64 * cell,
-                            y: iy as f64 * cell,
-                        };
-                        *o = rng::to_unit(rng::hash_from(prefix, Key::At(p)));
-                    }
-                });
-            }
-            list.push(LatticeOctave {
-                cell,
-                ix0,
-                iy0,
-                w,
-                corners,
-            });
-        }
-        Lattice { octaves: list }
-    }
-
-    /// Per coordinate in `vs`, octave `o`'s corner offset and smoothstep weight along x or y.
-    fn axis(&self, o: usize, y: bool, vs: impl Iterator<Item = f64>) -> Vec<(usize, f64)> {
-        let oct = &self.octaves[o];
-        let i0 = if y { oct.iy0 } else { oct.ix0 };
-        vs.map(|v| {
-            let (g0, f) = rng::axis(v, oct.cell);
-            ((g0 as i64 - i0) as usize, f)
-        })
-        .collect()
-    }
 }
 
 /// Detail noise under one stamp, node values mixed in y per pixel row; same bits as `detail_noise`.
@@ -364,32 +394,13 @@ impl Nodes {
     ) -> Nodes {
         let (nx0, ny0) = (spline_at(gx0).0 - 1, spline_at(gy0).0 - 1);
         let (nx1, ny1) = (spline_at(gx1).0 + 1, spline_at(gy1).0 + 1);
-        let lattice = Lattice::new(
-            seed,
-            d.scale,
-            mpp,
-            node_at(nx0, ny0, mpp),
-            node_at(nx1, ny1, mpp),
-        );
-        let w = (nx1 - nx0 + 1) as usize;
-        let axes: Vec<_> = (0..OCTAVES as usize)
-            .map(|o| {
-                let xs = (nx0..=nx1).map(|n| node_at(n, 0, mpp).x);
-                let ys = (ny0..=ny1).map(|n| node_at(0, n, mpp).y);
-                (lattice.axis(o, false, xs), lattice.axis(o, true, ys))
-            })
-            .collect();
-        let w = 2 * w;
+        let octaves = octaves(seed, d.scale, mpp);
+        let w = 2 * (nx1 - nx0 + 1) as usize;
         let mut v = vec![0.0; w * (ny1 - ny0 + 1) as usize];
         par_rows(&mut v, w, |r, out| {
             for (col, o) in out.chunks_mut(2).enumerate() {
-                // Same operations as `rng::noise` at the node, with corners from the lattice.
-                (o[0], o[1]) = fractal(d.scale, mpp, |oct, _| {
-                    let (lw, lv) = (lattice.octaves[oct].w, &lattice.octaves[oct].corners);
-                    let ((ix, fx), (iy, fy)) = (axes[oct].0[col], axes[oct].1[r]);
-                    let at = iy * lw + ix;
-                    rng::mix4([lv[at], lv[at + 1], lv[at + lw], lv[at + lw + 1]], fx, fy)
-                });
+                let p = node_at(nx0 + col as i64, ny0 + r as i64, mpp);
+                (o[0], o[1]) = node_noise(&octaves, p);
             }
         });
         let mut rows = vec![0.0; w * (gy1 - gy0 + 1) as usize];
@@ -622,7 +633,7 @@ impl Project {
                             *v += (m - *v) * (amount * wt).min(1.0)
                         }
                         BrushMode::Flatten => *v += (lvl - *v) * (amount * wt).min(1.0),
-                        BrushMode::Roughen => *v += amount * fall * n as f32,
+                        BrushMode::Roughen => *v = roughen(*v, amount as f64 * fall as f64 * n),
                     }
                     *v != old
                 },

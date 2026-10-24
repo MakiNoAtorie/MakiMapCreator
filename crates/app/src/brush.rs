@@ -430,7 +430,7 @@ mod tests {
     fn half_radius_follows_falloff() {
         let mut o = Options::for_map(1.0);
         o.falloff = 1.0;
-        assert!((o.half_radius() - 0.541).abs() < 0.01);
+        assert!((o.half_radius() - 0.707).abs() < 0.01);
         o.falloff = 0.0;
         assert!(o.half_radius() > 0.99);
     }

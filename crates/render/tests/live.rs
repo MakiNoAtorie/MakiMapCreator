@@ -1,14 +1,18 @@
 //! Live brush (ADR-0025): stamps on a GPU height copy equal the CPU brush within `TOLERANCE`.
 
 use mmc_core::{
-    BrushMode, BrushStroke, Command, Detail, Layer, MapId, MapSettings, Project, RootPoint,
-    StrokePoint,
+    BrushMode, BrushStroke, COAST_BAND, Command, Detail, Layer, MapId, MapSettings, Project,
+    RootPoint, StrokePoint,
 };
 use mmc_kind_region::{REGION, RegionKind};
 use mmc_render::{FlattenLevel, Live, Renderer, ShaderPass, TARGET_FORMAT, View};
 
-/// Metres. f32 maths and noise on the GPU against f64 on the CPU; measured 2.5e-4 at 800 m.
+/// Metres. f32 maths and noise on the GPU against f64 on the CPU; measured up to 8.5e-4 (7 f32
+/// steps) at 1150 m over 200 seeds.
 const TOLERANCE: f32 = 0.001;
+/// Metres, zoomed out, outside the coast band; measured up to 0.11 m (flatten's level) over 40
+/// seeds.
+const BOUND: f32 = 0.2;
 const MPP: f64 = 10.0;
 
 fn fixture(dir: &std::path::Path) -> (Project, MapId) {
@@ -144,19 +148,32 @@ fn gpu_stamps_equal_the_cpu_brush_within_the_tolerance() {
     let before = live.heights().unwrap();
     let seed = p.seed().unwrap();
     for s in strokes() {
+        // As in the app, each stroke starts from the CPU's heights (ADR-0025).
+        live.set_base(r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap());
         assert!(live.stamp(seed, &s, FlattenLevel::Sample), "{:?}", s.mode);
         p.apply(map, Command::Brush(s.clone())).unwrap();
+        let gpu = live.heights().unwrap();
+        let cpu = r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap();
+        assert_eq!(gpu.len(), cpu.values().len());
+        let worst = gpu
+            .iter()
+            .zip(cpu.values())
+            .map(|(g, c)| (g - c).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst <= TOLERANCE,
+            "{:?}: worst difference {worst} m",
+            s.mode
+        );
     }
-    let gpu = live.heights().unwrap();
     let cpu = r.scene(&p, v).unwrap().into_base(Layer::HEIGHT).unwrap();
-    assert_eq!(gpu.len(), cpu.values().len());
-    let (mut worst, mut changed) = (0.0f32, 0);
-    for ((g, c), b) in gpu.iter().zip(cpu.values()).zip(&before) {
-        worst = worst.max((g - c).abs());
-        changed += (b != c) as usize;
-    }
+    let changed = cpu
+        .values()
+        .iter()
+        .zip(&before)
+        .filter(|(c, b)| c != b)
+        .count();
     assert!(changed > 10_000, "the strokes change {changed} pixels");
-    assert!(worst <= TOLERANCE, "worst difference {worst} m");
 }
 
 #[test]
@@ -355,6 +372,7 @@ fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
         );
         let base = drawn(&r, &p, v).into_base(Layer::HEIGHT).unwrap();
         assert_eq!(base.values().len(), 150 * 100, "the map at level 2");
+        let start = base.values().to_vec();
         live.set_base(base);
         assert!(live.stamp(p.seed().unwrap(), &s, FlattenLevel::Sample));
         p.apply(map, Command::Brush(s.clone())).unwrap();
@@ -362,37 +380,49 @@ fn zoomed_out_the_copy_hands_over_to_the_cpu_render_without_a_jump() {
         let cpu = drawn(&r, &p, v);
         let rgba = r.render(&cpu, u32::MAX).unwrap().rgba;
         let cpu = cpu.into_base(Layer::HEIGHT).unwrap();
-        let worst = gpu
-            .iter()
-            .zip(cpu.values())
-            .map(|(g, c)| (g - c).abs())
-            .fold(0.0f32, f32::max);
         let img = live.render(v).unwrap().rgba;
-        // Image pixels are texels here. Off the coast: a centimetre moves a 0 m coastline.
-        let h = cpu.values();
-        let off_coast = |i: usize| {
+        // Image pixels are texels here. Texel `i` and its neighbours in `h` are more than `m` from
+        // 0 m.
+        let beyond = |h: &[f32], i: usize, m: f32| {
             let (x, y) = ((i % 150) as i64, (i / 150) as i64);
             (-1..=1).all(|dy| {
                 (-1..=1).all(|dx| {
                     let (x, y) = ((x + dx).clamp(0, 149), (y + dy).clamp(0, 99));
-                    h[(y * 150 + x) as usize].abs() > 0.5
+                    h[(y * 150 + x) as usize].abs() > m
                 })
             })
         };
+        let h = cpu.values();
+        // Each pixel starts on the texel's slope, and the detail depends on the height: ridges
+        // on high ground, the fade in the coast band. Where a texel was in the band, and the
+        // slope changes within it, that is off by up to about 0.6 m (measured 0.57 m), which
+        // moves the coastline and its shading by a texel. Elsewhere it is not.
+        let settled = |i: usize| {
+            beyond(h, i, COAST_BAND)
+                && beyond(&start, i, COAST_BAND)
+                && (h[i] > 0.0) == (start[i] > 0.0)
+        };
+        let worst = gpu
+            .iter()
+            .zip(h)
+            .enumerate()
+            .filter(|(i, _)| settled(*i))
+            .map(|(_, (g, c))| (g - c).abs())
+            .fold(0.0f32, f32::max);
         let colour = img
             .chunks(4)
             .zip(rgba.chunks(4))
             .enumerate()
-            .filter(|(i, _)| off_coast(*i))
+            .filter(|(i, _)| settled(*i))
             .flat_map(|(_, (a, b))| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)))
             .max()
             .unwrap();
-        // Lowering adds and roughen are linear, so a texel's mean change is exact. The others
-        // start each pixel on the texel's slope; a raising add's ridges depend on the height
-        // (measured under 0.11 m on the 800 m hill).
+        // Lowering adds without detail are linear, so a texel's mean change is exact.
         let linear = s.target.is_none()
-            && (s.mode == BrushMode::Roughen || s.mode == BrushMode::Add && s.strength < 0.0);
-        let bound = if linear { TOLERANCE } else { 0.2 };
+            && s.mode == BrushMode::Add
+            && s.strength < 0.0
+            && s.detail.amount == 0.0;
+        let bound = if linear { TOLERANCE } else { BOUND };
         assert!(worst <= bound, "{:?}: worst difference {worst} m", s.mode);
         assert!(
             colour <= 1,

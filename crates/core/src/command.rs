@@ -88,7 +88,8 @@ pub(crate) fn weight_in(d2: f64, core: f64) -> f32 {
     }
     // A reciprocal, so a loop computes it once.
     let t = (1.0 - d2) * (1.0 / (1.0 - core));
-    (t * t) as f32
+    // Smoothstep: no crease at the core edge, where a texel's plane would miss it (ADR-0025).
+    (t * t * (3.0 - 2.0 * t)) as f32
 }
 
 impl Project {

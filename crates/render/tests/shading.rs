@@ -4,7 +4,7 @@ use mmc_core::{
     BrushStroke, Command, Layer, MapId, MapSettings, PaintStroke, Project, RootPoint, StrokePoint,
 };
 use mmc_kind_region::{REGION, RegionKind};
-use mmc_render::{COAST, Image, PALETTE, Renderer, View};
+use mmc_render::{COAST, Image, PALETTE, Renderer, SHORE, View};
 
 fn region(dir: &std::path::Path) -> (Project, MapId) {
     let settings = MapSettings {
@@ -105,9 +105,10 @@ fn flat_ground_takes_the_palette_colour_of_its_height() {
 #[test]
 fn the_palette_is_keyed_in_metres_and_sea_is_at_or_below_zero() {
     assert!(PALETTE.windows(2).all(|w| w[0].0 <= w[1].0));
-    let zero: Vec<_> = PALETTE.iter().filter(|s| s.0 == 0.0).collect();
-    assert_eq!(zero.len(), 2, "one sea stop and one land stop at 0 m");
-    let (sea, land) = (zero[0].1, zero[1].1);
+    let at = |h: f32| PALETTE.iter().find(|s| s.0 == h).unwrap().1;
+    // Shallows from 0 m to the shore, land from there.
+    let (sea, land) = (at(0.0), at(SHORE));
+    assert!(PALETTE.iter().all(|s| s.0 <= 0.0 || s.0 >= SHORE));
     assert!(sea[2] > sea[0] && land[1] > land[2], "{sea:?} {land:?}");
 }
 
@@ -190,11 +191,11 @@ fn the_coastline_is_about_one_screen_pixel_wide_at_every_zoom() {
     paint(&mut p, map, 3000.0, 2000.0, 9000.0, -500.0);
     hill(&mut p, map);
     let r = renderer();
-    // Row through the hill top; its lit west coast crosses 0 m near x = 2025 m.
+    // Row through the hill top; its lit west coast crosses 0 m near x = 1825 m.
     for (min, max, w) in [
         ((2.0, 1900.0), (3002.0, 2100.0), 300),
-        ((1825.0, 1990.0), (2225.0, 2010.0), 400),
-        ((1975.0, 1997.5), (2075.0, 2002.5), 800),
+        ((1625.0, 1990.0), (2025.0, 2010.0), 400),
+        ((1775.0, 1997.5), (1875.0, 2002.5), 800),
     ] {
         let img = r
             .render(&r.scene(&p, view(map, min, max, w, 20)).unwrap(), 64)
@@ -264,4 +265,41 @@ fn sea_floor_lowered_from_zero_has_no_coastline_and_islands_raised_from_it_have_
     let line = coast_pixels(&img, 200);
     assert!(line.iter().all(|&x| x > 300), "line in the sea: {line:?}");
     assert!(line.iter().any(|&x| x > 300), "island has no coast");
+}
+
+#[test]
+fn a_stroke_that_ends_just_above_zero_draws_no_coastline() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut p, map) = region(dir.path());
+    let film = BrushStroke {
+        layer: Layer::HEIGHT,
+        points: vec![StrokePoint {
+            at: RootPoint {
+                x: 3000.0,
+                y: 2000.0,
+            },
+            pressure: 1.0,
+            radius: 1500.0,
+        }],
+        strength: 1.5,
+        falloff: 0.0,
+        ..Default::default()
+    };
+    p.apply(map, Command::Brush(film)).unwrap();
+    let r = renderer();
+    let img = r
+        .render(
+            &r.scene(&p, view(map, (0.0, 0.0), (6000.0, 4000.0), 600, 400))
+                .unwrap(),
+            u32::MAX,
+        )
+        .unwrap();
+    // The lit west edge: the east edge is dark from the hillshade alone.
+    for y in [150, 200, 250] {
+        let line: Vec<_> = coast_pixels(&img, y)
+            .into_iter()
+            .filter(|&x| x < 300)
+            .collect();
+        assert!(line.is_empty(), "row {y}: {line:?}");
+    }
 }

@@ -8,3 +8,4 @@ We rejected the separate land mask. With two layers the coast ignored the ground
 
 - Files with the old `land` layer migrate once, on open, in core: land at or below 0 m goes to +200 m, sea at or above 0 m goes to -200 m, other heights stay. The land tiles and the land parent context are deleted, so a second open finds nothing to do.
 - Lakes and a painted water level are later work; the derived land test is the only place that changes then.
+- Shading draws the coastline on the 2 m contour (`mmc_render::SHORE`) and tints land below it as shallows, so land a stroke leaves just above 0 m draws no stray coastline. The land test stays at the water level.

@@ -1,5 +1,6 @@
-//! The owner's first painting test (#28) as a fixture: sea strokes on 0 m ground, a tall ridge,
-//! a roughen patch and lowland of many soft strokes. `MMC_LOOK_DIR=<dir> cargo test -p mmc-render
+//! The owner's painting tests (#28, #29) as a fixture: sea strokes on 0 m ground, a tall ridge,
+//! roughen on lowland and across the shore, soft strokes just above 0 m and lowland of many soft
+//! strokes. `MMC_LOOK_DIR=<dir> cargo test -p mmc-render
 //! --test look -- --ignored` writes `<MMC_LOOK_PREFIX>-*.png` there.
 
 use mmc_core::{
@@ -123,6 +124,25 @@ pub fn build(dir: &std::path::Path) -> (Project, MapId) {
     for _ in 0..3 {
         cmds.push(pass(&zig, 900.0, 60.0, BrushMode::Roughen));
     }
+    // Roughen scribbled across the east shore.
+    let shore: Vec<_> = (0..8)
+        .map(|i| {
+            (
+                7600.0 + 250.0 * i as f64,
+                if i % 2 == 0 { 4400.0 } else { 5600.0 },
+            )
+        })
+        .collect();
+    for _ in 0..3 {
+        cmds.push(pass(&shore, 600.0, 60.0, BrushMode::Roughen));
+    }
+    // Soft strokes on the 0 m sea floor that end just above it: 1.5 m and 3 m.
+    for (path, s) in [
+        ([(400.0, 700.0), (1500.0, 1300.0)], 1.5),
+        ([(500.0, 2000.0), (1600.0, 2500.0)], 3.0),
+    ] {
+        cmds.push(pass(&path, 500.0, s, BrushMode::Add));
+    }
     for c in cmds {
         p.apply(map, c).unwrap();
     }
@@ -154,6 +174,10 @@ fn renders_the_owner_fixture() {
         ("ridge", (1200.0, 1000.0), (4800.0, 4600.0), 900),
         ("roughen", (5000.0, 2200.0), (8200.0, 5400.0), 800),
         ("lowland", (3500.0, 4500.0), (7500.0, 8500.0), 800),
+        // Close up, 8 image pixels per map pixel: the shapes of the detail itself.
+        ("closeup", (2900.0, 2300.0), (3900.0, 3300.0), 800),
+        ("shore", (7000.0, 3500.0), (10000.0, 6500.0), 800),
+        ("film", (0.0, 0.0), (3000.0, 3000.0), 800),
     ] {
         let img = r
             .render(&r.scene(&p, view(map, min, max, w)).unwrap(), 256)

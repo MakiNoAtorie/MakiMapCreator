@@ -338,7 +338,7 @@ fn each_point_has_its_own_radius_and_falloff_shapes_the_stamp() {
         .unwrap();
     assert_eq!(height(&p, map, 1085.0, 2005.0), 10.0);
     let soft = height(&p, map, 4085.0, 2005.0);
-    assert!(soft > 0.0 && soft < 2.0, "{soft}");
+    assert!(soft > 0.0 && soft < 4.0, "{soft}");
 }
 
 #[test]
