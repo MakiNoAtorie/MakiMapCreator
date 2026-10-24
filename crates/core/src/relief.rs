@@ -21,6 +21,10 @@ pub const RELIEF_AMPLITUDES: f64 = 1.875;
 pub const RELIEF_REACH2: f64 = 2.25;
 /// Softness of the flank sign that bends the next octave.
 pub const RELIEF_SIGN_SOFT2: f64 = 0.09;
+/// Height above the water level whose fade target is a peak (1); the water level is a valley (-1).
+pub const RELIEF_PEAK: f64 = 3000.0;
+/// `|sin|` of a gully from which later octaves are full; less is near a ridge or crease line.
+pub const RELIEF_CREASE: f64 = 0.5;
 
 /// The map kind's relief options.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,19 +144,29 @@ pub fn relief(
             let bottom = lerp(grad(bx, by + 1), grad(bx + 1, by + 1), fx);
             let s = lerp(top, bottom, fy);
             let at = ((g.0 as f64 + 0.5) * mpp, (g.1 as f64 + 0.5) * mpp);
-            let d = filter(&pivots, o, mpp, at, s);
+            let fade = ((v - WATER_LEVEL as f64) / RELIEF_PEAK).clamp(0.0, 1.0) * 2.0 - 1.0;
+            let d = filter(&pivots, o, mpp, at, s, fade);
             out[j * w + i] = (o.strength * mask * d / RELIEF_AMPLITUDES) as f32;
         }
     }
     out
 }
 
-/// Gullies at root point `at` (metres) on ground of slope `s` (metres per metre): about -1..1
-/// per octave, times the octave amplitude; 0 on flat ground.
-fn filter(pivots: &[Pivots], o: &ReliefOptions, mpp: f64, at: (f64, f64), s: (f64, f64)) -> f64 {
+/// Gullies at root point `at` (metres) on ground of slope `s` (metres per metre) and fade target
+/// `fade` (-1 valley, 1 peak): the octave amplitudes times each faded octave less `fade`, so
+/// flat ground gets 0.
+fn filter(
+    pivots: &[Pivots],
+    o: &ReliefOptions,
+    mpp: f64,
+    at: (f64, f64),
+    s: (f64, f64),
+    fade: f64,
+) -> f64 {
     let mut slope = s;
     let mut mask = ease_out(len(s) / o.slope);
-    let mut sum = 0.0;
+    let mut target = fade;
+    let (mut sum, mut rest) = (0.0, RELIEF_AMPLITUDES);
     let mut amp = 1.0;
     let mut cell = RELIEF_CELL;
     for p in pivots {
@@ -165,15 +179,18 @@ fn filter(pivots: &[Pivots], o: &ReliefOptions, mpp: f64, at: (f64, f64), s: (f6
         // Across the slope; gullies run along it, down toward the valley.
         let across = (-slope.1 / l, slope.0 / l);
         let (c, sn) = phacelle(p, (at.0 / cell, at.1 / cell), across);
-        sum += amp * lod * mask * c;
+        target += (c - target) * mask * lod;
+        sum += amp * (target - fade);
+        rest -= amp;
         // The flank's own slope turns the next octave toward the gully floor.
         let flank = -sn / (sn * sn + RELIEF_SIGN_SOFT2).sqrt() * l * RELIEF_BEND;
         slope = (slope.0 + across.0 * flank, slope.1 + across.1 * flank);
-        mask *= ease_out(len(slope) / o.slope);
+        mask = pow_inv(mask) * ease_out(sn.abs() / RELIEF_CREASE);
         amp *= 0.5;
         cell *= 0.5;
     }
-    sum
+    // The octaves left out equal the last target.
+    sum + rest * (target - fade)
 }
 
 /// Phacelle-style noise at cell point `q`: stripes across `dir`, one splat per cell at a hashed
@@ -246,6 +263,12 @@ fn len(v: (f64, f64)) -> f64 {
     (v.0 * v.0 + v.1 * v.1).sqrt()
 }
 
+/// The article's `pow_inv(t, detail)` at detail 1.5, so the port needs only `sqrt`.
+fn pow_inv(t: f64) -> f64 {
+    let v = 1.0 - t.clamp(0.0, 1.0);
+    1.0 - v * v.sqrt()
+}
+
 fn ease_out(t: f64) -> f64 {
     let v = 1.0 - t.clamp(0.0, 1.0);
     1.0 - v * v
@@ -258,6 +281,39 @@ fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Relief of a plane rising 0.6 m per metre along x from `base` metres, 64 x 64 at 10 m.
+    fn plane(base: f32) -> Vec<f32> {
+        let o = ReliefOptions {
+            strength: 200.0,
+            slope: 0.4,
+            height: 1200.0,
+        };
+        let n = 64 + 2 * relief_margin(10.0);
+        let h: Vec<f32> = (0..n * n).map(|i| base + (i % n) as f32 * 6.0).collect();
+        let r = relief(7, &o, 10.0, (0, 0), n, n, &h);
+        let m = relief_margin(10.0);
+        (m..m + 64)
+            .flat_map(|y| (m..m + 64).map(move |x| y * n + x))
+            .map(|i| r[i])
+            .collect()
+    }
+
+    #[test]
+    fn peaks_only_cut_gullies_and_mid_slopes_cut_and_raise() {
+        let high = plane(RELIEF_PEAK as f32 + 500.0);
+        let (lo, hi) = high
+            .iter()
+            .fold((0f32, 0f32), |a, &v| (a.0.min(v), a.1.max(v)));
+        assert!(hi <= 1e-3 && lo < -20.0, "{lo} {hi}");
+        let mid = plane(RELIEF_PEAK as f32 / 2.0 - 200.0);
+        let (lo, hi) = mid
+            .iter()
+            .fold((0f32, 0f32), |a, &v| (a.0.min(v), a.1.max(v)));
+        assert!(hi > 20.0 && lo < -20.0, "{lo} {hi}");
+    }
+
     #[test]
     fn wave_is_cos_and_sin() {
         for i in -200..200 {

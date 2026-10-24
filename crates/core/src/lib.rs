@@ -12,9 +12,9 @@ mod beyond;
 mod cache;
 mod relief;
 pub use relief::{
-    RELIEF_AMPLITUDES, RELIEF_BEND, RELIEF_BLOCK, RELIEF_CELL, RELIEF_OCTAVES, RELIEF_REACH2,
-    RELIEF_SIGN_SOFT2, RELIEF_STAGE, RELIEF_WAVES, ReliefOptions, relief, relief_level,
-    relief_margin, relief_prefixes,
+    RELIEF_AMPLITUDES, RELIEF_BEND, RELIEF_BLOCK, RELIEF_CELL, RELIEF_CREASE, RELIEF_OCTAVES,
+    RELIEF_PEAK, RELIEF_REACH2, RELIEF_SIGN_SOFT2, RELIEF_STAGE, RELIEF_WAVES, ReliefOptions,
+    relief, relief_level, relief_margin, relief_prefixes,
 };
 mod command;
 mod jobs;

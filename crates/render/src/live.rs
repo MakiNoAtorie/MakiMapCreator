@@ -1123,6 +1123,8 @@ mod tests {
             ("RELIEF_AMPLITUDES", mmc_core::RELIEF_AMPLITUDES),
             ("RELIEF_REACH2", mmc_core::RELIEF_REACH2),
             ("RELIEF_SIGN_SOFT2", mmc_core::RELIEF_SIGN_SOFT2),
+            ("RELIEF_PEAK", mmc_core::RELIEF_PEAK),
+            ("RELIEF_CREASE", mmc_core::RELIEF_CREASE),
         ];
         for (name, v) in consts {
             let line = format!("const {name} = {v:?};");

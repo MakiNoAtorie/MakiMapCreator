@@ -39,6 +39,8 @@ const RELIEF_BEND = 0.7;
 const RELIEF_AMPLITUDES = 1.875;
 const RELIEF_REACH2 = 2.25;
 const RELIEF_SIGN_SOFT2 = 0.09;
+const RELIEF_PEAK = 3000.0;
+const RELIEF_CREASE = 0.5;
 const TAU = 6.283185307179586;
 
 @group(0) @binding(0) var<uniform> r: Params;
@@ -84,6 +86,11 @@ fn grad(c: vec2i) -> vec2f {
 fn ease_out(t: f32) -> f32 {
     let v = 1.0 - clamp(t, 0.0, 1.0);
     return 1.0 - v * v;
+}
+
+fn pow_inv(t: f32) -> f32 {
+    let v = 1.0 - clamp(t, 0.0, 1.0);
+    return 1.0 - v * sqrt(v);
 }
 
 fn ramp(a: f32, b: f32, x: f32) -> f32 {
@@ -133,11 +140,13 @@ fn phacelle(o: Octave, q: vec2f, dir: vec2f) -> vec2f {
     return cs * (min(2.0 * l, 1.0) / l);
 }
 
-// `filter` (CPU) at texel `t` on ground of slope `s`.
-fn gullies(t: vec2i, s: vec2f) -> f32 {
+// `filter` (CPU) at texel `t` on ground of slope `s` and fade target `fade`.
+fn gullies(t: vec2i, s: vec2f, fade: f32) -> f32 {
     var slope = s;
     var mask = ease_out(length(s) / r.slope);
+    var aim = fade;
     var sum = 0.0;
+    var rest = RELIEF_AMPLITUDES;
     var amp = 1.0;
     for (var k = 0; k < 4; k++) {
         let o = r.octaves[k];
@@ -148,13 +157,15 @@ fn gullies(t: vec2i, s: vec2f) -> f32 {
         let across = vec2f(-slope.y, slope.x) / l;
         let q = o.frac + vec2f(t) * o.step;
         let cs = phacelle(o, q, across);
-        sum += amp * o.lod * mask * cs.x;
+        aim += (cs.x - aim) * mask * o.lod;
+        sum += amp * (aim - fade);
+        rest -= amp;
         let flank = -cs.y / sqrt(cs.y * cs.y + RELIEF_SIGN_SOFT2) * l * RELIEF_BEND;
         slope += across * flank;
-        mask *= ease_out(length(slope) / r.slope);
+        mask = pow_inv(mask) * ease_out(abs(cs.y) / RELIEF_CREASE);
         amp *= 0.5;
     }
-    return sum;
+    return sum + rest * (aim - fade);
 }
 
 @compute @workgroup_size(8, 8)
@@ -173,7 +184,8 @@ fn relief(@builtin(global_invocation_id) id: vec3u) {
         let f = u - floor(u);
         let top = mix(grad(b), grad(b + vec2i(1, 0)), f.x);
         let bottom = mix(grad(b + vec2i(0, 1)), grad(b + vec2i(1, 1)), f.x);
-        d = r.strength * mask * gullies(t, mix(top, bottom, f.y)) / RELIEF_AMPLITUDES;
+        let fade = clamp((v - WATER_LEVEL) / RELIEF_PEAK, 0.0, 1.0) * 2.0 - 1.0;
+        d = r.strength * mask * gullies(t, mix(top, bottom, f.y), fade) / RELIEF_AMPLITUDES;
     }
     textureStore(shaded, t, vec4f(v + d, 0.0, 0.0, 0.0));
 }

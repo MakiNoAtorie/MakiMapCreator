@@ -7,8 +7,7 @@ use mmc_core::{
 use mmc_kind_region::{REGION, RELIEF, RegionKind};
 use mmc_render::{FlattenLevel, Live, Renderer, TARGET_FORMAT, View};
 
-/// Metres. f32 on the GPU against f64 on the CPU on the same f32 heights; measured up to
-/// 1.8e-3 m (15 f32 steps at 1400 m) over 13 seeds.
+/// Metres. f32 on the GPU against f64 on the CPU on the same f32 heights; measured 1.8e-3 m.
 const TOLERANCE: f32 = 0.01;
 const MPP: f64 = 10.0;
 /// The copy's width: the view's 300 pixels and 2 of margin each side.
