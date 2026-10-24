@@ -20,7 +20,7 @@ Each kind has a generate mode and an edit mode, can be a root map, and defines w
 - Children: select a settlement point to create a settlement map.
 - Summary to parent: dominant biome, refined coastline (display only).
 - Explore later: an Erode brush that runs stream-power, hillslope and talus erosion on the GPU over the brushed area and saves it as one undoable edit (Schott et al. 2023; step 3 in `doc-research/terrain-mountains.md`). Worth it only if the erosion relief stage (#30) is not enough.
-- Explore later: simulate the travel routes people take between settlements and points of interest. Agents walk weighted shortest paths over a biome and terrain cost field, and frequently used paths become roads. The idea came from a friend; the app they described is unidentified. References: Azgaar's Fantasy Map Generator (generated roads between burgs, no agents), Foundation (desire paths from walkers), Scientific Reports 2022 model of co-evolving cities and roads (PubMed 35710781).
+- Explore later: generate travel routes between settlements and points of interest as weighted shortest paths over a biome and terrain cost field; the most used paths become roads. References: Azgaar's Fantasy Map Generator (roads between burgs), Scientific Reports 2022 model of co-evolving cities and roads (PubMed 35710781).
 
 ### World map (v2)
 - Generate: coarse geography (land and sea, elevation, climate zone, biome class, major rivers), then regions and nations over it (cost-based expansion).
