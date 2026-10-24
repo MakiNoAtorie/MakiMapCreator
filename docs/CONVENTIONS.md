@@ -31,9 +31,9 @@ Binding build, test and code rules. Keep this file under about 8 KB.
 ## Layers, commands and undo
 
 - `Layer` and `MapKind` are open ids. Core defines `Layer::HEIGHT`, `Layer::LOCK` and `Layer::OUTLINES`; kind crates define the rest.
-- Land and sea come from height (ADR-0024); never add a layer named `land`. Coarse land and sea are `WATER_LEVEL ± COAST_RELIEF`.
+- Land and sea come from height (ADR-0024); never add a layer named `land`. Coarse land and sea are `WATER_LEVEL ± COAST_RELIEF`. The land test uses `WATER_LEVEL`; the coastline is drawn at `mmc_render::SHORE` (2 m).
 - `BrushStroke::target` raises to or lowers to a value, never the other way; `ToolAction::Target` makes such tools.
-- Brush maths: `core/src/brush.rs` is the reference (ADR-0025); its fast paths and `detail_tables` give the same bits. Change it and `render/src/live.wgsl` together; `render/tests/live.rs` holds them within 1e-3 m.
+- Brush maths: `core/src/brush.rs` is the reference (ADR-0025); its fast paths and `detail_tables` give the same bits. Change it and `render/src/live.wgsl` together; `render/tests/live.rs` holds them within 1e-3 m. WGSL ports use arithmetic or `sqrt`, not `tanh`/`exp` (WARP is off by about 1e-4).
 - Raster tiles: 256 px, key (map, layer, level, tx, ty), f32 LE zstd 3, decoded only by `layer::decode*`. A missing tile is zeros. Level `l` pixels are 2x2 means of `l-1`; only level 0 is edited.
 - Write tiles through `Project::write_rows`, one call per transaction: it feeds the cache and the pyramid. Drop a layer with `Write::DropLayer`. Tests use `wait_tiles()`.
 - Every edit is a `Command` giving one `undo::Change`; `apply_part` parts are one change until `end_stroke`. Without an outline a stroke stays decoded in memory (`stroke.rs`) until pen up; edits, undo and save write it first. Undo is per map, bounded by `UNDO_LIMIT`; deleting a map goes to its parent's history, a root map to `undo_project`.
