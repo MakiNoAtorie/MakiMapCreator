@@ -8,6 +8,7 @@ pub use brush::{
     OctaveTable, RIDGE_GAIN, RIDGE_HEIGHTS, RIDGED_MID, RIDGED_SPREAD, VALUE_SPREAD, detail_noise,
     detail_tables, stamp_weight,
 };
+mod beyond;
 mod cache;
 mod relief;
 pub use relief::{

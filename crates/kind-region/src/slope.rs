@@ -11,6 +11,7 @@ pub(crate) const STAGE: Stage = Stage {
     reads: &[Layer::HEIGHT],
     writes: &[SLOPE],
     run: slope,
+    reach: |_| 0,
 };
 
 const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;

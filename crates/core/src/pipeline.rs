@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::persist::{TileKey, TileOpener, TileRecord, TileStore};
 
+use crate::beyond::Neighbour;
 use crate::jobs::{Cancelled, Jobs};
-use crate::layer::{Layer, decode, encode};
+use crate::layer::{Layer, TILE_SIZE, decode, encode};
 use crate::pyramid::{Level, levels_above};
 use crate::undo::Change;
 use crate::{Error, MapId, Project, Result};
@@ -47,6 +48,10 @@ pub struct StageInput<'a> {
     /// True once a newer rebuild replaced this one; the stage then returns `None`.
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
     pub layers: HashMap<Layer, Raster>,
+    /// The ground the map owns (ADR-0019); `None` for a root map.
+    pub(crate) outline: Option<Vec<crate::RootPoint>>,
+    /// Maps of the same kind and scale within reach; `StageInput::padded` reads them.
+    pub(crate) neighbours: Vec<Neighbour>,
 }
 
 /// A pipeline stage a map kind declares (ADR-0018).
@@ -55,6 +60,13 @@ pub struct Stage {
     pub writes: &'static [Layer],
     /// One raster per `writes` entry; `None` when cancelled.
     pub run: fn(&StageInput) -> Option<Vec<Raster>>,
+    /// Pixels it reads past the map edge, at a metres per pixel; edits of maps that near rerun it.
+    pub reach: fn(f64) -> usize,
+}
+
+/// The largest reach of `stages` at `mpp`.
+fn reach(stages: &[Stage], mpp: f64) -> i64 {
+    stages.iter().map(|s| (s.reach)(mpp)).max().unwrap_or(0) as i64
 }
 
 pub(crate) fn writes(stages: &[Stage], layer: Layer) -> bool {
@@ -139,6 +151,9 @@ struct MapJob {
     seed: u64,
     options: crate::OptionValues,
     open: TileOpener,
+    outline: Option<Vec<crate::RootPoint>>,
+    /// Each map in reach by id, its layers still empty.
+    neighbours: Vec<(i64, Neighbour)>,
     dirty: Vec<bool>,
     threads: usize,
     /// Top pyramid level; derived layers are written with all levels.
@@ -196,7 +211,41 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
         threads: job.threads,
         cancelled,
         layers: HashMap::new(),
+        outline: job.outline,
+        neighbours: vec![],
     };
+    let far: BTreeSet<Layer> = job
+        .stages
+        .iter()
+        .filter(|s| (s.reach)(job.metres_per_pixel) > 0)
+        .flat_map(|s| s.reads.iter().copied())
+        .collect();
+    let ts = TILE_SIZE as i64;
+    let tiles = |a: i64, b: i64, o: i64| (a - o).div_euclid(ts)..=(b - 1 - o).div_euclid(ts);
+    for (id, mut n) in job.neighbours {
+        let (g, o) = (n.given, n.origin);
+        for &l in &far {
+            let mut raster = Raster::new();
+            for ty in tiles(g[1], g[3], o.1) {
+                for tx in tiles(g[0], g[2], o.0) {
+                    if cancelled() {
+                        return None;
+                    }
+                    let t = (tx as u32, ty as u32);
+                    match reader.tile(&tile_key(id, l, t)) {
+                        Ok(None) => {}
+                        Ok(Some(r)) => match decode(Some(&r)) {
+                            Ok(v) => drop(raster.insert(t, v)),
+                            Err(e) => return Some(Err(e)),
+                        },
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+            }
+            n.layers.insert(l, raster);
+        }
+        cx.neighbours.push(n);
+    }
     let mut written = vec![];
     for i in order(&decls(job.stages))
         .into_iter()
@@ -436,11 +485,80 @@ impl Project {
     }
 
     pub(crate) fn layers_written(&mut self, map: MapId, layers: &[Layer]) {
-        let Ok(kind) = self.kind_of(map) else {
+        let (Ok(kind), Ok(m)) = (self.kind_of(map), self.map(map)) else {
             return;
         };
-        let dirty = dirty(&decls(kind.stages()), layers);
+        let stages = kind.stages();
+        let mpp = m.settings.metres_per_pixel;
+        let dirty = dirty(&decls(stages), layers);
+        // Neighbours rerun only the stages that read past their edge, and what those feed.
+        let far: Vec<bool> = dirty
+            .iter()
+            .zip(stages)
+            .map(|(&d, s)| d && (s.reach)(mpp) > 0)
+            .collect();
+        let fed: Vec<Layer> = (stages.iter().zip(&far))
+            .filter(|p| *p.1)
+            .flat_map(|p| p.0.writes.iter().copied())
+            .collect();
+        let down = self::dirty(&decls(stages), &fed);
+        let near: Vec<bool> = far.iter().zip(down).map(|(&a, b)| a || b).collect();
+        let around: Vec<MapId> = self.neighbours(map).iter().map(|(n, _)| n.id).collect();
         self.request(map, dirty);
+        // ponytail: reruns the whole neighbour; pass the tiles in reach if edits near a seam lag.
+        for n in around {
+            self.request(n, near.clone());
+        }
+    }
+
+    /// Maps of `map`'s kind and scale within its stages' reach, each with the global pixels
+    /// `[x0, y0, x1, y1)` of it that lie in reach.
+    fn neighbours(&self, map: MapId) -> Vec<(&crate::Map, [i64; 4])> {
+        let (Ok(m), Ok(kind)) = (self.map(map), self.kind_of(map)) else {
+            return vec![];
+        };
+        let s = m.settings;
+        let r = reach(kind.stages(), s.metres_per_pixel);
+        if r == 0 {
+            return vec![];
+        }
+        let rect = |m: &crate::Map| {
+            let o = global_origin(m);
+            let s = m.settings;
+            [o.0, o.1, o.0 + s.width as i64, o.1 + s.height as i64]
+        };
+        let own = rect(m);
+        let root = |m: &crate::Map| {
+            let mut id = m.id;
+            while let Some(p) = self.map(id).ok().and_then(|m| m.parent) {
+                id = p;
+            }
+            id
+        };
+        // Root maps are separate worlds; child maps neighbour only in the same tree.
+        if m.parent.is_none() {
+            return vec![];
+        }
+        self.maps()
+            .iter()
+            .filter(|n| {
+                n.id != map
+                    && n.parent.is_some()
+                    && root(n) == root(m)
+                    && n.settings.kind == s.kind
+                    && n.settings.metres_per_pixel == s.metres_per_pixel
+            })
+            .filter_map(|n| {
+                let b = rect(n);
+                let g = [
+                    b[0].max(own[0] - r),
+                    b[1].max(own[1] - r),
+                    b[2].min(own[2] + r),
+                    b[3].min(own[3] + r),
+                ];
+                (g[0] < g[2] && g[1] < g[3]).then_some((n, g))
+            })
+            .collect()
     }
 
     fn request(&mut self, map: MapId, dirty: Vec<bool>) {
@@ -451,10 +569,26 @@ impl Project {
             return;
         };
         let s = m.settings;
-        let origin = (
-            (m.origin.x / s.metres_per_pixel).round() as i64,
-            (m.origin.y / s.metres_per_pixel).round() as i64,
-        );
+        let origin = global_origin(m);
+        let outline = m.outline.clone();
+        let neighbours = self
+            .neighbours(map)
+            .into_iter()
+            .map(|(n, given)| {
+                let origin = global_origin(n);
+                let outline = n.outline.clone();
+                let layers = HashMap::new();
+                (
+                    n.id.0,
+                    Neighbour {
+                        origin,
+                        given,
+                        outline,
+                        layers,
+                    },
+                )
+            })
+            .collect();
         let seed = self.store.seed().unwrap_or_default();
         let options = self.kind_options(s.kind).unwrap_or_default();
         let stages = kind.stages();
@@ -474,6 +608,8 @@ impl Project {
             seed,
             options,
             open,
+            outline,
+            neighbours,
             dirty: st.dirty.clone(),
             threads: self.pipeline.threads,
             top: crate::pyramid::top_level(&s),
@@ -484,6 +620,15 @@ impl Project {
             move |out| commit(&committed, out),
         );
     }
+}
+
+/// Global pixel of `m`'s pixel (0, 0).
+fn global_origin(m: &crate::Map) -> (i64, i64) {
+    let mpp = m.settings.metres_per_pixel;
+    (
+        (m.origin.x / mpp).round() as i64,
+        (m.origin.y / mpp).round() as i64,
+    )
 }
 
 impl Pipeline {

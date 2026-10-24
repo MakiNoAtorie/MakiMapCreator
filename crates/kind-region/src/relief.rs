@@ -46,12 +46,13 @@ pub(crate) const STAGE: Stage = Stage {
     reads: &[Layer::HEIGHT],
     writes: &[RELIEF],
     run,
+    reach: relief_margin,
 };
 
 const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
-/// The relief of every tile with height, from the tile and `relief_margin` pixels around it,
-/// read past the map edge as the edge pixel.
+/// The relief of every tile with height, from the tile and `relief_margin` pixels around it;
+/// past the map edge the pixels come from the neighbour maps, so both agree at a seam.
 // ponytail: recomputes the whole map after each edit; pass the changed tiles if large maps lag.
 fn run(cx: &StageInput) -> Option<Vec<Raster>> {
     let h = &cx.layers[&Layer::HEIGHT];
@@ -71,37 +72,11 @@ fn run(cx: &StageInput) -> Option<Vec<Raster>> {
         }
     }
     let want: Vec<(u32, u32)> = want.into_iter().collect();
-    let at = |x: i64, y: i64| {
-        let (x, y) = (x.clamp(0, w - 1) as u32, y.clamp(0, hh - 1) as u32);
-        let i = ((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize;
-        h.get(&(x / TILE_SIZE, y / TILE_SIZE)).map_or(0.0, |v| v[i])
-    };
     let (m, ts) = (relief_margin(cx.metres_per_pixel) as i64, TILE_SIZE as i64);
     let n = (ts + 2 * m) as usize;
     let tiles = par_map(cx.threads, &want, cx.cancelled, |&(tx, ty)| {
         let (x0, y0) = (tx as i64 * ts - m, ty as i64 * ts - m);
-        let mut pad = Vec::with_capacity(n * n);
-        for y in y0..y0 + n as i64 {
-            let gy = y.clamp(0, hh - 1);
-            let mut x = x0;
-            while x < x0 + n as i64 {
-                if x < 0 || x >= w {
-                    pad.push(at(x, y));
-                    x += 1;
-                    continue;
-                }
-                // The rest of this row inside one tile, as one slice.
-                let t = x / ts;
-                let end = ((t + 1) * ts).min(w).min(x0 + n as i64);
-                let row = (gy % ts * ts) as usize;
-                let (a, b) = (row + (x % ts) as usize, row + (end - t * ts) as usize);
-                match h.get(&(t as u32, (gy / ts) as u32)) {
-                    Some(v) => pad.extend_from_slice(&v[a..b]),
-                    None => pad.resize(pad.len() + b - a, 0.0),
-                }
-                x = end;
-            }
-        }
+        let pad = cx.padded(Layer::HEIGHT, x0, y0, n, n);
         let g0 = (cx.origin.0 + x0, cx.origin.1 + y0);
         let r = relief(cx.seed, &o, cx.metres_per_pixel, g0, n, n, &pad);
         let mut out = vec![0.0f32; TILE_LEN];
