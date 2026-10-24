@@ -303,13 +303,18 @@ impl Worker {
             }
             Op::Undo(map) | Op::Redo(map) => {
                 let forward = matches!(op, Op::Redo(_));
-                let (mut guard, _) = lock_project(&self.project, "edit");
+                let (mut guard, wait) = lock_project(&self.project, "edit");
+                let t = Instant::now();
                 let Some(p) = guard.as_mut() else { return };
                 let result = if forward { p.redo(map) } else { p.undo(map) };
+                let tiles = p.step_tiles(map, !forward);
                 drop(guard);
+                let ms = |d: Duration| d.as_secs_f64() * 1000.0;
                 log::info!(
-                    "{} on map {map:?}: {result:?}",
-                    if forward { "redo" } else { "undo" }
+                    "{} on map {map:?}: {result:?}, {tiles} tiles, lock wait {:.0} ms, under lock {:.0} ms",
+                    if forward { "redo" } else { "undo" },
+                    ms(wait),
+                    ms(t.elapsed())
                 );
                 if matches!(result, Ok(true)) {
                     self.watch = Some(Instant::now() + JOBS_WAIT);

@@ -64,6 +64,8 @@ pub struct Painter {
     hover: Option<(RootPoint, bool)>,
     /// Bumped when an undo or redo changed the project; the app reloads what it shows.
     pub version: u64,
+    /// Undo and redo keys in order, for the log: name, press time, canvas epoch once applied.
+    steps: Vec<(&'static str, Instant, Option<u64>)>,
 }
 
 impl Painter {
@@ -84,6 +86,7 @@ impl Painter {
             cursor: None,
             hover: None,
             version: 0,
+            steps: vec![],
         }
     }
 
@@ -99,8 +102,14 @@ impl Painter {
 
     pub fn edit(&mut self, e: Edit) {
         match e {
-            Edit::Undo => self.outbox.push(Op::Undo(self.map)),
-            Edit::Redo => self.outbox.push(Op::Redo(self.map)),
+            Edit::Undo => {
+                self.steps.push(("undo", Instant::now(), None));
+                self.outbox.push(Op::Undo(self.map));
+            }
+            Edit::Redo => {
+                self.steps.push(("redo", Instant::now(), None));
+                self.outbox.push(Op::Redo(self.map));
+            }
             Edit::SizeDown => self.options.step_size(-1, self.mpp),
             Edit::SizeUp => self.options.step_size(1, self.mpp),
             Edit::Direction(d) => self.dir = d,
@@ -225,6 +234,16 @@ impl Painter {
             }
             !shown
         });
+        self.steps.retain(|&(name, at, epoch)| {
+            let shown = epoch.is_some_and(|e| canvas.fresh(e));
+            if shown {
+                log::info!(
+                    "{name}: drawn {:.0} ms after the key",
+                    at.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            !shown
+        });
     }
 
     /// Takes one result of the edit worker for this map; gives an error text.
@@ -260,16 +279,25 @@ impl Painter {
                 }
             }
             Done::Ended { result, .. } => result.err().and_then(|e| error(&e)),
-            Done::Stepped { result, .. } => match result {
-                Ok(changed) => {
-                    if changed {
+            Done::Stepped { result, .. } => {
+                let step = self.steps.iter().position(|s| s.2.is_none());
+                match result {
+                    Ok(true) => {
                         self.version += 1;
-                        canvas.invalidate();
+                        let epoch = canvas.invalidate();
+                        if let Some(i) = step {
+                            self.steps[i].2 = Some(epoch);
+                        }
+                        None
                     }
-                    None
+                    other => {
+                        if let Some(i) = step {
+                            self.steps.remove(i);
+                        }
+                        other.err().and_then(|e| error(&e))
+                    }
                 }
-                Err(e) => error(&e),
-            },
+            }
             Done::Rebuilt(r) => {
                 canvas.invalidate();
                 r.err().and_then(|e| error(&e))

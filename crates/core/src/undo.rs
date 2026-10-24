@@ -153,6 +153,23 @@ impl Project {
         self.step(map, true)
     }
 
+    /// Tiles that the next redo (`forward`) or undo on `map` writes, so after an undo `step_tiles(map, true)`
+    /// gives the tiles it wrote; 0 when the change has none.
+    pub fn step_tiles(&self, map: MapId, forward: bool) -> usize {
+        let h = self.history.get(&map);
+        let next = h.and_then(|h| {
+            if forward {
+                h.undone.last()
+            } else {
+                h.done.back()
+            }
+        });
+        match next {
+            Some(Change::Tiles(t)) => t.len(),
+            _ => 0,
+        }
+    }
+
     /// Redoes (`forward`) or undoes one change of the history `key`.
     pub(crate) fn step(&mut self, key: MapId, forward: bool) -> Result<bool> {
         self.finish_strokes()?;
@@ -167,6 +184,10 @@ impl Project {
         };
         let res = self.write(&changes, forward);
         if res.is_ok() {
+            // Before the rebuild of derived layers takes the CPUs: the next render then shows the step at every level.
+            if matches!(changes, Change::Tiles(_)) {
+                self.wait_pyramid_shown();
+            }
             self.after_write(key, &changes);
         }
         let h = self.history.get_mut(&key).unwrap();

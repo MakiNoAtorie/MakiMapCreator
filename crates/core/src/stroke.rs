@@ -227,7 +227,7 @@ impl Project {
             return Err(e);
         }
         // The cache holds these tiles from the parts already.
-        self.tiles().mark_dirty(keys, top);
+        self.tiles().mark_dirty(keys.into_iter().map(|k| (k, top)));
         let change = Change::Tiles(changes);
         self.mark_out_of_date(&change)?;
         self.after_write(s.map, &change);

@@ -320,6 +320,103 @@ mod tests {
         project.lock().unwrap().take().unwrap().close().unwrap();
     }
 
+    /// Undo and redo of one 512 px stroke over about 400 tiles: key to applied and to drawn.
+    #[test]
+    #[ignore = "timing harness"]
+    fn undo_large_brush_stroke() {
+        let _ = log::set_logger(&Print);
+        log::set_max_level(log::LevelFilter::Info);
+        let dir = tempfile::tempdir().unwrap();
+        let project = new_project(dir.path());
+        let map = project.lock().unwrap().as_ref().unwrap().maps()[0].id;
+        let (req_tx, req_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let wp = project.clone();
+        let worker = std::thread::spawn(move || render_worker(wp, req_rx, done_tx));
+        let editor = Editor::new(
+            project.clone(),
+            eframe::egui::Context::default(),
+            Default::default(),
+        );
+        let mut opts = Options::for_map(10.0);
+        opts.size = 5120.0;
+        let at = |x, y| Sample {
+            at: RootPoint { x, y },
+            pressure: 0.5,
+        };
+        let cmd = brush::plan(
+            ToolAction::Brush,
+            Layer::HEIGHT,
+            Direction::Raise,
+            &opts,
+            10.0,
+            &[at(10000.0, 60000.0), at(70000.0, 30000.0)],
+        )
+        .unwrap();
+        let sent = Instant::now();
+        editor.send(Op::Part {
+            map,
+            stroke: 1,
+            part: 1,
+            cmd,
+            sent,
+        });
+        editor.send(Op::End {
+            map,
+            stroke: 1,
+            up: sent,
+        });
+        let (mut epoch, mut fresh) = (0u64, 0u64);
+        // Waits for the result of the last op, then for a complete render after it; (applied, drawn) ms.
+        let mut wait = |t0: Instant, settle: bool| {
+            let mut wait_for = None;
+            let mut applied = 0.0;
+            if settle {
+                let g = lock_project(&project, "test").0;
+                g.as_ref().unwrap().wait_tiles();
+                drop(g);
+                editor.sync();
+                epoch += 1;
+                req_tx.send(epoch).unwrap();
+                wait_for = Some(epoch);
+            }
+            loop {
+                for d in editor.done() {
+                    epoch += 1;
+                    req_tx.send(epoch).unwrap();
+                    if matches!(d, Done::Stepped { .. } | Done::Ended { .. }) && wait_for.is_none()
+                    {
+                        applied = t0.elapsed().as_secs_f64() * 1000.0;
+                        wait_for = Some(epoch);
+                    }
+                }
+                while let Ok((e, complete)) = done_rx.try_recv() {
+                    if complete {
+                        fresh = fresh.max(e);
+                    }
+                }
+                if wait_for.is_some_and(|w| fresh >= w) {
+                    return (applied, t0.elapsed().as_secs_f64() * 1000.0);
+                }
+                assert!(t0.elapsed() < Duration::from_secs(60));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let (applied, drawn) = wait(sent, false);
+        println!("stroke: applied {applied:.0} ms, drawn {drawn:.0} ms");
+        for (name, op) in [("undo", Op::Undo(map)), ("redo", Op::Redo(map))] {
+            wait(Instant::now(), true);
+            let t0 = Instant::now();
+            editor.send(op);
+            let (applied, drawn) = wait(t0, false);
+            println!("{name}: applied {applied:.0} ms, drawn {drawn:.0} ms");
+        }
+        drop(editor);
+        drop(req_tx);
+        worker.join().unwrap();
+        project.lock().unwrap().take().unwrap().close().unwrap();
+    }
+
     #[test]
     #[ignore = "timing harness"]
     fn export_8192_while_editing() {

@@ -6,7 +6,8 @@ use std::thread::JoinHandle;
 
 use crate::persist::{TileKey, TileOpener};
 
-use crate::layer::{TILE_LEN, decode};
+use crate::layer::{TILE_LEN, decode, encode};
+use crate::persist::TileRecord;
 use crate::pyramid::upper_levels;
 
 /// Default memory limit of the tile cache.
@@ -30,6 +31,8 @@ struct State {
     /// Level-0 tiles whose pyramid levels are out of date, with their map's top level.
     dirty: HashMap<TileKey, u32>,
     building: bool,
+    /// The batch being built is not in `tiles` yet.
+    computing: bool,
     stop: bool,
 }
 
@@ -103,10 +106,10 @@ impl TileCache {
         }
     }
 
-    /// Queues the pyramid levels above level-0 `keys` for update; `top` is their map's top level.
-    pub(crate) fn mark_dirty(&self, keys: impl IntoIterator<Item = TileKey>, top: u32) {
+    /// Queues the pyramid levels above level-0 keys for update, each with its map's top level.
+    pub(crate) fn mark_dirty(&self, keys: impl IntoIterator<Item = (TileKey, u32)>) {
         let mut s = self.shared.lock();
-        s.dirty.extend(keys.into_iter().map(|k| (k, top)));
+        s.dirty.extend(keys);
         self.shared.work.notify_all();
     }
 
@@ -126,16 +129,33 @@ impl TileCache {
         s.tiles.retain(|k, _| !matches(k));
     }
 
-    /// Pyramid levels of `map_id` wait for an update after an edit.
+    /// Cached pyramid levels of `map_id` wait for an update after an edit.
     pub(crate) fn pyramid_pending(&self, map_id: i64) -> bool {
         let s = self.shared.lock();
-        s.building || s.dirty.keys().any(|k| k.map_id == map_id)
+        s.computing || s.dirty.keys().any(|k| k.map_id == map_id)
     }
 
     pub(crate) fn wait_idle(&self) {
         let mut s = self.shared.lock();
         while !s.idle() {
             s = self.shared.idle.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Blocks until cached pyramid levels show every queued edit, or `limit` passed; their writes may still run.
+    pub(crate) fn wait_shown(&self, limit: std::time::Duration) {
+        let until = std::time::Instant::now() + limit;
+        let mut s = self.shared.lock();
+        while s.computing || !s.dirty.is_empty() {
+            let Some(left) = until.checked_duration_since(std::time::Instant::now()) else {
+                return;
+            };
+            s = self
+                .shared
+                .idle
+                .wait_timeout(s, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
     }
 
@@ -206,6 +226,8 @@ fn work(shared: &Shared, open: TileOpener) {
         s.loading -= 1;
         s.queued.remove(&key);
         match tile {
+            // A tile put meanwhile is newer than the read: upper tiles are put before they are written.
+            Some(_) if s.tiles.contains_key(&key) => {}
             Some(t) if s.epoch == epoch => insert(&mut s, key, t.into()),
             Some(_) if !s.tiles.contains_key(&key) => {
                 s.queued.insert(key.clone());
@@ -240,7 +262,7 @@ fn build(shared: &Shared, open: TileOpener) {
                         .collect();
                     let top = keys.iter().map(|k| s.dirty[k]).max().unwrap_or(0);
                     s.dirty.retain(|k, _| k.map_id != map);
-                    s.building = true;
+                    (s.building, s.computing) = (true, true);
                     break (keys, top);
                 }
                 s = shared.work.wait(s).unwrap_or_else(|e| e.into_inner());
@@ -250,36 +272,57 @@ fn build(shared: &Shared, open: TileOpener) {
             conn = open().ok();
         }
         // ponytail: a failed rebuild is dropped; the next edit nearby rebuilds those levels.
-        // Cached level-0 tiles equal the stored ones: every write puts its tiles.
-        let cached: Vec<Option<Tile>> = {
-            let s = shared.lock();
-            batch
-                .iter()
-                .map(|k| s.tiles.get(k).map(|t| t.0.clone()))
-                .collect()
-        };
+        // Cached tiles are at least as new as stored ones: every write puts its tiles, and this
+        // worker puts the upper tiles of a batch before it writes them.
         let built = conn.as_ref().and_then(|c| {
+            // ponytail: an upper tile evicted and reloaded between its put and its write stays stale until the next edit there.
+            let read = |k: &TileKey| {
+                let cached = shared.lock().tiles.get(k).map(|t| t.0.clone());
+                match cached {
+                    Some(t) => Ok(t),
+                    None => Ok(Tile::from(decode(c.tile(k)?.as_ref())?)),
+                }
+            };
             let changed = batch
                 .iter()
-                .zip(cached)
-                .map(|(k, t)| match t {
-                    Some(t) => Ok((k.clone(), t.to_vec())),
-                    None => Ok((k.clone(), decode(c.tile(k)?.as_ref())?)),
-                })
+                .map(|k| Ok((k.clone(), read(k)?)))
                 .collect::<crate::Result<Vec<_>>>()
                 .ok()?;
-            let (writes, put) = upper_levels(changed, top, |k| c.tile(k)).ok()?;
-            crate::jobs::holding_write_lock(|| c.write_tiles(&writes)).ok()?;
-            Some(put)
+            upper_levels(changed, top, |k| read(k).map(|t| t.to_vec())).ok()
+        });
+        {
+            // The screen shows the new levels now; their write can take a while.
+            let mut s = shared.lock();
+            s.computing = false;
+            if let Some(put) = &built {
+                s.epoch += 1;
+                for (k, t) in put {
+                    insert(&mut s, k.clone(), t.clone());
+                }
+            }
+            shared.idle.notify_all();
+        }
+        let written = built.zip(conn.as_ref()).and_then(|(put, c)| {
+            let threads = crate::cpus().saturating_sub(1).max(1);
+            let data = crate::par_map(threads, &put, &|| false, |(_, t)| encode(t))?;
+            let writes: Vec<_> = put
+                .into_iter()
+                .zip(data)
+                .map(|((k, _), data)| {
+                    let rec = TileRecord {
+                        data,
+                        edited: false,
+                    };
+                    (k, Some(rec))
+                })
+                .collect();
+            crate::jobs::holding_write_lock(|| c.write_tiles(&writes)).ok()
         });
         let mut s = shared.lock();
         s.building = false;
-        if let Some(put) = built {
+        if written.is_some() {
             // Loads that started before this write may hold older upper tiles.
             s.epoch += 1;
-            for (k, t) in put {
-                insert(&mut s, k, t);
-            }
         }
         if s.idle() {
             shared.idle.notify_all();

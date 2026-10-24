@@ -7,8 +7,11 @@ use std::sync::Arc;
 use crate::persist::{ProjectReader, TileKey, TileRecord, Write};
 
 use crate::cache::{Tile, TileCache};
-use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode, encode};
+use crate::layer::{Layer, TILE_LEN, TILE_SIZE, decode};
 use crate::{Map, MapId, MapSettings, Project, Result};
+
+/// Longest wait of an undo or redo for the cached upper levels; about 1000 tiles take it.
+const PYRAMID_SHOWN_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// One tile of one pyramid level of a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,13 +35,28 @@ pub struct Overview {
 
 /// Writes the 2x2 means of `child` (tile `tx`, `ty`) into its quadrant of `parent`.
 fn downsample(parent: &mut [f32], child: &[f32], tx: u32, ty: u32) {
+    place(parent, &halve(child), tx, ty);
+}
+
+/// The 2x2 means of `child`, `TILE_SIZE / 2` pixels a side.
+fn halve(child: &[f32]) -> Vec<f32> {
     let (t, half) = (TILE_SIZE as usize, TILE_SIZE as usize / 2);
-    let (ox, oy) = ((tx % 2) as usize * half, (ty % 2) as usize * half);
+    let mut out = Vec::with_capacity(half * half);
     for y in 0..half {
         for x in 0..half {
             let c = |dx: usize, dy: usize| child[(2 * y + dy) * t + 2 * x + dx];
-            parent[(oy + y) * t + ox + x] = (c(0, 0) + c(1, 0) + c(0, 1) + c(1, 1)) * 0.25;
+            out.push((c(0, 0) + c(1, 0) + c(0, 1) + c(1, 1)) * 0.25);
         }
+    }
+    out
+}
+
+/// Copies `half`, from `halve`, into the quadrant of `parent` that child tile `tx`, `ty` covers.
+fn place(parent: &mut [f32], half: &[f32], tx: u32, ty: u32) {
+    let (t, h) = (TILE_SIZE as usize, TILE_SIZE as usize / 2);
+    let (ox, oy) = ((tx % 2) as usize * h, (ty % 2) as usize * h);
+    for (y, row) in half.chunks_exact(h).enumerate() {
+        parent[(oy + y) * t + ox..][..h].copy_from_slice(row);
     }
 }
 
@@ -193,14 +211,21 @@ impl Project {
     /// Writes `rows`: tile-only rows on the edit writer, others in one transaction after it;
     /// a worker then updates pyramid levels above level-0 tiles.
     pub(crate) fn write_rows(&self, rows: &[Write]) -> Result<()> {
-        let put = rows
+        let tile_rows: Vec<_> = rows
             .iter()
             .filter_map(|w| match w {
                 Write::Tile(k, rec) => Some((k, rec)),
                 _ => None,
             })
-            .map(|(k, rec)| Ok((k.clone(), decode(rec.as_ref())?.into())))
-            .collect::<Result<Vec<(TileKey, Tile)>>>()?;
+            .collect();
+        // Decoding runs on several threads: undo of a large stroke decodes hundreds of tiles under the project lock.
+        let threads = crate::cpus().saturating_sub(1).max(1);
+        let put = crate::par_map(threads, &tile_rows, &|| false, |(k, rec)| {
+            Ok(((*k).clone(), decode(rec.as_ref())?.into()))
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<Result<Vec<(TileKey, Tile)>>>()?;
         if !put.is_empty() && put.len() == rows.len() {
             let tiles = rows
                 .iter()
@@ -230,9 +255,8 @@ impl Project {
             .collect::<Result<Vec<_>>>()?;
         // The pyramid worker reads level 0 from the cache, so the cache gets the tiles first.
         cache.put(put);
-        for (k, top) in dirty {
-            cache.mark_dirty([k], top);
-        }
+        // One call, so the pyramid worker takes the whole write as one batch.
+        cache.mark_dirty(dirty);
         Ok(())
     }
 
@@ -263,10 +287,17 @@ impl Project {
                     ty,
                 })
             });
-            cache.mark_dirty(keys, top);
+            cache.mark_dirty(keys.map(|k| (k, top)));
         }
         self.pipeline.forget(map);
         self.rebuild_derived(map)
+    }
+
+    /// Blocks until cached pyramid levels show past edits, at most `PYRAMID_SHOWN_WAIT`; their writes go on after.
+    pub(crate) fn wait_pyramid_shown(&self) {
+        if let Some(cache) = self.cache.get() {
+            cache.wait_shown(PYRAMID_SHOWN_WAIT);
+        }
     }
 
     /// Blocks until pyramid levels above past edits are written; no-op before any edit.
@@ -277,19 +308,21 @@ impl Project {
     }
 }
 
-/// Pyramid tiles above `changed` level-0 tiles: records to write and decoded tiles.
-pub(crate) type Upper = (Vec<(TileKey, Option<TileRecord>)>, Vec<(TileKey, Tile)>);
-
+/// Decoded pyramid tiles above `changed` level-0 tiles; `read` gives a parent tile before the change.
 pub(crate) fn upper_levels(
-    changed: Vec<(TileKey, Vec<f32>)>,
+    changed: Vec<(TileKey, Tile)>,
     top: u32,
-    read: impl Fn(&TileKey) -> Result<Option<TileRecord>>,
-) -> Result<Upper> {
-    let (mut writes, mut put) = (Vec::new(), Vec::new());
-    let mut cur: HashMap<TileKey, Vec<f32>> = changed.into_iter().collect();
+    read: impl Fn(&TileKey) -> Result<Vec<f32>>,
+) -> Result<Vec<(TileKey, Tile)>> {
+    // Halving runs on several threads: the screen waits for these levels after an undo.
+    let threads = crate::cpus().saturating_sub(1).max(1);
+    let mut put = Vec::new();
+    let mut cur = changed;
     for level in 1..=top {
+        let halves =
+            crate::par_map(threads, &cur, &|| false, |(_, t)| halve(t)).unwrap_or_default();
         let mut next: HashMap<TileKey, Vec<f32>> = HashMap::new();
-        for (k, child) in &cur {
+        for ((k, _), half) in cur.iter().zip(halves) {
             let pk = TileKey {
                 level,
                 tx: k.tx / 2,
@@ -299,24 +332,14 @@ pub(crate) fn upper_levels(
             let parent = match next.entry(pk) {
                 Entry::Occupied(e) => e.into_mut(),
                 Entry::Vacant(e) => {
-                    let rec = read(e.key())?;
-                    e.insert(decode(rec.as_ref())?)
+                    let v = read(e.key())?;
+                    e.insert(v)
                 }
             };
-            downsample(parent, child, k.tx, k.ty);
+            place(parent, &half, k.tx, k.ty);
         }
-        for (k, values) in &next {
-            let rec = TileRecord {
-                data: encode(values),
-                edited: false,
-            };
-            writes.push((k.clone(), Some(rec)));
-        }
-        cur = next;
-        put.extend(
-            cur.iter()
-                .map(|(k, v)| (k.clone(), Tile::from(v.as_slice()))),
-        );
+        cur = next.into_iter().map(|(k, v)| (k, Tile::from(v))).collect();
+        put.extend(cur.iter().cloned());
     }
-    Ok((writes, put))
+    Ok(put)
 }

@@ -340,3 +340,38 @@ fn each_point_has_its_own_radius_and_falloff_shapes_the_stamp() {
     let soft = height(&p, map, 4085.0, 2005.0);
     assert!(soft > 0.0 && soft < 2.0, "{soft}");
 }
+
+#[test]
+fn undo_and_redo_show_at_upper_levels_when_they_return() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = mmc_fixtures::create(&dir.path().join("wc.sqlite"), settings()).unwrap();
+    let map = p.maps()[0].id;
+    let id = TileId {
+        map,
+        layer: Layer::HEIGHT,
+        level: 1,
+        tx: 0,
+        ty: 0,
+    };
+    // Level-1 pixel (5, 5) covers the stroke centre at level-0 pixel (10, 10).
+    let at = |p: &Project| {
+        p.cached_tile(id)
+            .unwrap()
+            .filter(|t| t.0 == 1)
+            .map(|t| t.1[5 * TILE_SIZE as usize + 5])
+    };
+    at(&p);
+    p.wait_tiles();
+    let before = at(&p).unwrap();
+    p.apply(map, stroke(105.0, 105.0, 10.0)).unwrap();
+    p.wait_tiles();
+    let after = at(&p).unwrap();
+    assert!(after > before + 1.0);
+    // The screen reads cached levels once the pyramid is not pending, without waiting for its write.
+    assert!(p.undo(map).unwrap());
+    assert!(!p.pyramid_pending(map));
+    assert_eq!(at(&p), Some(before));
+    assert!(p.redo(map).unwrap());
+    assert!(!p.pyramid_pending(map));
+    assert_eq!(at(&p), Some(after));
+}
