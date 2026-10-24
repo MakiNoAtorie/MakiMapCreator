@@ -2,11 +2,13 @@
 
 use mmc_core::{
     COAST_RELIEF, Command, Error, GenRun, Generation, GeneratorDecl, Layer, MapId, MapKind,
-    MapKindModule, MapSettings, Param, Project, RenderPass, Result, RootPoint, Stage, Summary,
-    TILE_SIZE, Tool, ToolAction, WATER_LEVEL, par_map, rng,
+    MapKindModule, MapSettings, OptionValues, Param, Project, ReliefOptions, RenderPass, Result,
+    RootPoint, Stage, Summary, TILE_SIZE, Tool, ToolAction, WATER_LEVEL, par_map, rng,
 };
 
+mod relief;
 mod slope;
+pub use relief::{RELIEF, RELIEF_HEIGHT, RELIEF_SLOPE, RELIEF_STRENGTH};
 pub use slope::SLOPE;
 
 pub const REGION: MapKind = MapKind::new("region");
@@ -37,18 +39,27 @@ impl MapKindModule for RegionKind {
     }
 
     fn layers(&self) -> &'static [Layer] {
-        &[Layer::HEIGHT, SLOPE, Layer::LOCK]
+        &[Layer::HEIGHT, RELIEF, SLOPE, Layer::LOCK]
     }
 
     fn stages(&self) -> &'static [Stage] {
-        slope::STAGES
+        &[slope::STAGE, relief::STAGE]
     }
 
     fn render_passes(&self) -> &'static [RenderPass] {
         &[RenderPass {
             layer: Layer::HEIGHT,
             shader: include_str!("height.wgsl"),
+            relief: Some(RELIEF),
         }]
+    }
+
+    fn options(&self) -> &'static [Param] {
+        relief::OPTIONS
+    }
+
+    fn relief(&self, values: &OptionValues) -> Option<ReliefOptions> {
+        Some(relief::options(values))
     }
 
     fn tools(&self) -> &'static [Tool] {

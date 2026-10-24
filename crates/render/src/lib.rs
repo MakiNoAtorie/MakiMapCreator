@@ -134,7 +134,8 @@ struct ViewUniform {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    passes: Vec<(Layer, Box<dyn DrawPass>)>,
+    /// (layer, relief layer added to it, pass).
+    passes: Vec<(Layer, Option<Layer>, Box<dyn DrawPass>)>,
 }
 
 impl Renderer {
@@ -194,7 +195,17 @@ impl Renderer {
 
     /// Adds a pass for `layer`. Passes draw in the order they were registered.
     pub fn register(&mut self, layer: Layer, pass: Box<dyn DrawPass>) {
-        self.passes.push((layer, pass));
+        self.passes.push((layer, None, pass));
+    }
+
+    /// Adds a pass that draws `layer` plus the derived `relief` layer (ADR-0026).
+    pub fn register_relief(&mut self, layer: Layer, relief: Layer, pass: Box<dyn DrawPass>) {
+        self.passes.push((layer, Some(relief), pass));
+    }
+
+    /// True when a pass adds a relief layer.
+    fn draws_relief(&self) -> bool {
+        self.passes.iter().any(|p| p.1.is_some())
     }
 
     /// Reads full-resolution tiles for `view`; blocks on disk, so only export uses it.
@@ -317,9 +328,14 @@ impl Renderer {
         });
         let target_view = target.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        // Upload each layer's texels that this tile can read, then draw.
+        // Upload each pass's texels that this tile can read, then draw.
+        let raster = |l: Layer| scene.rasters.iter().find(|r| r.0 == l).map(|r| &r.1);
         let mut inputs = Vec::new();
-        for (layer, r) in &scene.rasters {
+        for (i, (layer, relief, _)) in self.passes.iter().enumerate() {
+            let Some(r) = raster(*layer) else {
+                continue;
+            };
+            let relief = relief.and_then(raster);
             let texels = |g0: u32, g1: u32, o: f64, s: f64, r0: u32, rn: u32| {
                 let lo = ((o + g0 as f64 * s).floor() - 2.0).max(r0 as f64) as u32;
                 let hi = ((o + g1 as f64 * s).floor() + 3.0).min((r0 + rn) as f64) as u32;
@@ -334,7 +350,8 @@ impl Renderer {
             let mut bytes = Vec::with_capacity((tw * th * 4) as usize);
             for y in ty0..ty1 {
                 let start = ((y - r.y0) * r.w + tx0 - r.x0) as usize;
-                for v in &r.values[start..start + tw as usize] {
+                for (k, v) in r.values[start..start + tw as usize].iter().enumerate() {
+                    let v = v + relief.map_or(0.0, |d| d.values[start + k]);
                     bytes.extend_from_slice(&v.to_le_bytes());
                 }
             }
@@ -383,7 +400,7 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             self.queue.write_buffer(&buffer, 0, &u);
-            inputs.push((*layer, texture.create_view(&Default::default()), buffer));
+            inputs.push((i, texture.create_view(&Default::default()), buffer));
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -399,8 +416,8 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            for (layer, draw) in &self.passes {
-                if let Some((_, layer_view, view)) = inputs.iter().find(|i| i.0 == *layer) {
+            for (i, (_, _, draw)) in self.passes.iter().enumerate() {
+                if let Some((_, layer_view, view)) = inputs.iter().find(|x| x.0 == i) {
                     let input = PassInput {
                         layer: layer_view,
                         view,

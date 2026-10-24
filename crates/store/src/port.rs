@@ -47,6 +47,10 @@ impl Storage for Store {
         Ok(Store::seed(self)? as u64)
     }
 
+    fn kind_options(&self, kind: &str) -> R<Vec<(String, f64)>> {
+        Ok(Store::kind_options(self, kind)?)
+    }
+
     fn tile(&self, key: &TileKey) -> R<Option<TileRecord>> {
         Ok(Store::tile(self, key)?)
     }

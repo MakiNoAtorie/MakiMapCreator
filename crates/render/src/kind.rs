@@ -8,8 +8,11 @@ impl Renderer {
     /// Registers `kind`'s draw passes, bottom first.
     pub fn register_kind(&mut self, kind: &dyn MapKindModule) {
         for p in kind.render_passes() {
-            let pass = ShaderPass::new(&self.device, p.shader);
-            self.register(p.layer, Box::new(pass));
+            let pass = Box::new(ShaderPass::new(&self.device, p.shader));
+            match p.relief {
+                Some(r) => self.register_relief(p.layer, r, pass),
+                None => self.register(p.layer, pass),
+            }
         }
     }
 }

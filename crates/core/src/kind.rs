@@ -81,11 +81,29 @@ impl GenRun {
     }
 }
 
+/// Option values by id; a missing one takes the declared default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OptionValues(pub Vec<(String, f64)>);
+
+impl OptionValues {
+    /// The value of `p`, clamped to its range.
+    pub fn get(&self, p: &Param) -> f64 {
+        self.0
+            .iter()
+            .find(|(id, _)| id == p.id)
+            .map_or(p.default, |v| v.1)
+            .clamp(p.min, p.max)
+    }
+}
+
 /// A draw pass: a WGSL fragment shader over one layer (the renderer's bindings and `VIEW_WGSL`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderPass {
     pub layer: Layer,
     pub shader: &'static str,
+    /// A derived layer of metres added to `layer` before shading (ADR-0026); the live brush
+    /// computes it with the GPU port of `relief`.
+    pub relief: Option<Layer>,
 }
 
 /// How a kind makes child maps from an outline on one of its maps.
@@ -127,6 +145,17 @@ pub trait MapKindModule: Send + Sync {
     /// Draw passes, bottom first.
     fn render_passes(&self) -> &'static [RenderPass] {
         &[]
+    }
+
+    /// Options of the kind's stages; one set of values per project (`Project::kind_options`).
+    fn options(&self) -> &'static [Param] {
+        &[]
+    }
+
+    /// The relief a pass's `relief` layer holds, for `values`; `None` when the kind has none.
+    fn relief(&self, values: &OptionValues) -> Option<crate::ReliefOptions> {
+        let _ = values;
+        None
     }
 
     fn tools(&self) -> &'static [Tool] {

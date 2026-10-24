@@ -36,6 +36,12 @@ pub struct StageInput<'a> {
     pub width: u32,
     pub height: u32,
     pub metres_per_pixel: f64,
+    /// Global pixel of map pixel (0, 0): the root-space origin over `metres_per_pixel`.
+    pub origin: (i64, i64),
+    /// The project seed (ADR-0021).
+    pub seed: u64,
+    /// The map kind's option values.
+    pub options: crate::OptionValues,
     /// Threads for `par_map`.
     pub threads: usize,
     /// True once a newer rebuild replaced this one; the stage then returns `None`.
@@ -129,6 +135,9 @@ struct MapJob {
     width: u32,
     height: u32,
     metres_per_pixel: f64,
+    origin: (i64, i64),
+    seed: u64,
+    options: crate::OptionValues,
     open: TileOpener,
     dirty: Vec<bool>,
     threads: usize,
@@ -181,6 +190,9 @@ fn rebuild(job: MapJob, cancelled: Cancelled) -> Option<Result<Output>> {
         width: job.width,
         height: job.height,
         metres_per_pixel: job.metres_per_pixel,
+        origin: job.origin,
+        seed: job.seed,
+        options: job.options,
         threads: job.threads,
         cancelled,
         layers: HashMap::new(),
@@ -370,6 +382,43 @@ impl Project {
         Ok(())
     }
 
+    /// The option values of map kind `kind` in this project.
+    pub fn kind_options(&self, kind: crate::MapKind) -> Result<crate::OptionValues> {
+        Ok(crate::OptionValues(self.store.kind_options(kind.as_str())?))
+    }
+
+    /// Sets an option of map kind `kind` and rebuilds the derived layers of its maps. Options
+    /// are project settings, not edits: they have no undo step.
+    pub fn set_kind_option(&mut self, kind: crate::MapKind, id: &str, value: f64) -> Result<()> {
+        self.flush_writes()?;
+        self.store.write(&[crate::persist::Write::KindOption {
+            kind: kind.as_str().into(),
+            id: id.into(),
+            value,
+        }])?;
+        let maps: Vec<MapId> = self
+            .maps()
+            .iter()
+            .filter(|m| m.settings.kind == kind)
+            .map(|m| m.id)
+            .collect();
+        for m in maps {
+            self.rebuild_derived(m)?;
+        }
+        Ok(())
+    }
+
+    /// True while `map`'s derived layers lag its authored ones: a stroke not written yet, or a
+    /// rebuild not collected by `poll_jobs` yet.
+    pub fn derived_pending(&self, map: MapId) -> bool {
+        self.strokes.unwritten(map)
+            || self
+                .pipeline
+                .maps
+                .get(&map)
+                .is_some_and(|st| st.dirty.contains(&true))
+    }
+
     pub(crate) fn refuse_derived(&self, map: MapId, change: &Change) -> Result<()> {
         let stages = self.kind_of(map)?.stages();
         match changed_layers(change)
@@ -398,9 +447,16 @@ impl Project {
         if !dirty.contains(&true) {
             return;
         }
-        let (Ok(s), Ok(kind)) = (self.map(map).map(|m| m.settings), self.kind_of(map)) else {
+        let (Ok(m), Ok(kind)) = (self.map(map), self.kind_of(map)) else {
             return;
         };
+        let s = m.settings;
+        let origin = (
+            (m.origin.x / s.metres_per_pixel).round() as i64,
+            (m.origin.y / s.metres_per_pixel).round() as i64,
+        );
+        let seed = self.store.seed().unwrap_or_default();
+        let options = self.kind_options(s.kind).unwrap_or_default();
         let stages = kind.stages();
         let open = self.tile_opener();
         let st = self.pipeline.maps.entry(map).or_default();
@@ -414,6 +470,9 @@ impl Project {
             width: s.width,
             height: s.height,
             metres_per_pixel: s.metres_per_pixel,
+            origin,
+            seed,
+            options,
             open,
             dirty: st.dirty.clone(),
             threads: self.pipeline.threads,

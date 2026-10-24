@@ -58,7 +58,11 @@ fn renderer_for(rs: &eframe::egui_wgpu::RenderState, kinds: &Kinds, layers: &[La
             .flat_map(|k| k.render_passes())
             .find(|p| p.layer == l);
         if let Some(p) = pass {
-            r.register(l, Box::new(ShaderPass::new(&rs.device, p.shader)));
+            let pass = Box::new(ShaderPass::new(&rs.device, p.shader));
+            match p.relief.filter(|r| layers.contains(r)) {
+                Some(relief) => r.register_relief(l, relief, pass),
+                None => r.register(l, pass),
+            }
         }
     }
     r
@@ -137,17 +141,28 @@ impl Canvas {
                             let f = renderer
                                 .fetch_cached(p, req.view)
                                 .and_then(|f| f.with_summaries(p));
-                            // The height pass of the shown map's kind draws its live copy.
-                            let shader = p
+                            // The height pass of the shown map's kind draws its live copy, with
+                            // its relief when the relief layer is shown (ADR-0026).
+                            let kind = p
                                 .maps()
                                 .iter()
                                 .find(|m| m.id == req.view.map)
-                                .and_then(|m| kinds.get(m.settings.kind))
-                                .and_then(|k| {
-                                    k.render_passes().iter().find(|r| r.layer == Layer::HEIGHT)
+                                .and_then(|m| kinds.get(m.settings.kind));
+                            let pass = kind.and_then(|k| {
+                                k.render_passes().iter().find(|r| r.layer == Layer::HEIGHT)
+                            });
+                            let relief = kind
+                                .filter(|_| {
+                                    pass.and_then(|r| r.relief)
+                                        .is_some_and(|r| req.layers.contains(&r))
                                 })
-                                .map(|r| r.shader);
-                            (f, mark, p.seed().unwrap_or(0), shader)
+                                .and_then(|k| k.relief(&p.kind_options(k.kind()).ok()?));
+                            (
+                                f,
+                                mark,
+                                p.seed().unwrap_or(0),
+                                pass.map(|r| (r.shader, relief)),
+                            )
                         }
                         None => continue,
                     };
@@ -156,15 +171,22 @@ impl Canvas {
                 let (result, base) = match scene {
                     Ok(s) => {
                         let img = renderer.render(&s, RENDER_TILE);
-                        let base = complete.then_some(shader).flatten().and_then(|shader| {
-                            let base = s.into_base(Layer::HEIGHT)?;
-                            Some(LiveSource {
-                                base,
-                                shader,
-                                mark,
-                                seed,
-                            })
-                        });
+                        let base = complete
+                            .then_some(shader)
+                            .flatten()
+                            .and_then(|(shader, o)| {
+                                let base = s.into_base(Layer::HEIGHT)?;
+                                let base = match o {
+                                    Some(o) => base.with_relief(seed, o),
+                                    None => base,
+                                };
+                                Some(LiveSource {
+                                    base,
+                                    shader,
+                                    mark,
+                                    seed,
+                                })
+                            });
                         (img, base)
                     }
                     Err(e) => (Err(e), None),

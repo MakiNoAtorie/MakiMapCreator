@@ -6,7 +6,7 @@ use mmc_core::{
     MapKindModule, MapSettings, NewEntity, Project, RootPoint, StrokePoint,
 };
 use mmc_core::{BrushMode, Detail};
-use mmc_kind_region::{REGION, RegionKind};
+use mmc_kind_region::{REGION, RELIEF, RegionKind};
 use mmc_kind_world::{WORLD, WorldKind};
 
 const KM: f64 = 1000.0;
@@ -361,4 +361,21 @@ fn a_detailed_stroke_gives_neighbouring_children_the_same_ground_where_both_own_
         }
     }
     assert!(n == 2400 && changed > 500, "{n} {changed}");
+
+    // The derived relief (ADR-0026) agrees there too, at least its margin inside both maps.
+    p.wait_for_jobs().unwrap();
+    let (mut n, mut gullies) = (0, 0);
+    for i in 0..40 {
+        for j in 0..60 {
+            let (x, y) = (11.53 + i as f64 * 0.025, 5.0 + j as f64 * 0.075);
+            let r = |m| p.layer_value(m, RELIEF, at(x, y)).unwrap();
+            let (Some(a), Some(b)) = (r(west), r(east)) else {
+                continue;
+            };
+            assert_eq!(a, b, "at ({x}, {y}) km");
+            n += 1;
+            gullies += (a != 0.0) as usize;
+        }
+    }
+    assert!(n == 2400 && gullies > 300, "{n} {gullies}");
 }

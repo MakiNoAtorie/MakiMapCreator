@@ -9,6 +9,12 @@ pub use brush::{
     detail_tables, stamp_weight,
 };
 mod cache;
+mod relief;
+pub use relief::{
+    RELIEF_AMPLITUDES, RELIEF_BEND, RELIEF_BLOCK, RELIEF_CELL, RELIEF_OCTAVES, RELIEF_REACH2,
+    RELIEF_SIGN_SOFT2, RELIEF_STAGE, RELIEF_WAVES, ReliefOptions, relief, relief_level,
+    relief_margin, relief_prefixes,
+};
 mod command;
 mod jobs;
 pub use jobs::cpus;
@@ -43,8 +49,8 @@ mod generation;
 pub use generation::{APP_VERSION, Generation, GenerationInfo, NewEntity};
 mod kind;
 pub use kind::{
-    ChildDecl, GenRun, GeneratorDecl, Kinds, MapKindModule, Param, RenderPass, Summary, Tool,
-    ToolAction,
+    ChildDecl, GenRun, GeneratorDecl, Kinds, MapKindModule, OptionValues, Param, RenderPass,
+    Summary, Tool, ToolAction,
 };
 mod child;
 pub use child::{CHILD_MARGIN, MAX_CHILD_SIZE, ParentContext};

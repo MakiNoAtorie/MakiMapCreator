@@ -90,7 +90,9 @@ impl App {
             .map(|k| {
                 k.render_passes()
                     .iter()
-                    .map(|p| p.layer)
+                    .filter(|p| !self.hidden.contains(&p.layer))
+                    .flat_map(|p| [Some(p.layer), p.relief])
+                    .flatten()
                     .filter(|l| !self.hidden.contains(l))
                     .collect()
             })

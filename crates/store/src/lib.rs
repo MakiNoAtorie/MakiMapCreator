@@ -25,6 +25,7 @@ mod save;
 pub use save::save_snapshot;
 mod delete;
 mod objects;
+mod options;
 mod port;
 mod resync;
 
@@ -57,6 +58,7 @@ pub const MIGRATIONS: &[&str] = &[
     "CREATE TABLE project (seed INTEGER NOT NULL);
      INSERT INTO project (seed) VALUES (random());",
     entities::LABEL_KEYS,
+    options::MIGRATION,
 ];
 
 pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
@@ -305,6 +307,9 @@ impl Store {
                     Write::ChildLink(id, link) => delete::write_child_link(tx, *id, link.as_ref())?,
                     Write::ChildState(id, s) => resync::write_child_state(tx, *id, s)?,
                     Write::OutOfDate(id, o) => resync::write_out_of_date(tx, *id, *o)?,
+                    Write::KindOption { kind, id, value } => {
+                        options::write_kind_option(tx, kind, id, *value)?
+                    }
                     Write::MapRect {
                         id,
                         origin_x,

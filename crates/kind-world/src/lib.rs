@@ -44,6 +44,7 @@ impl MapKindModule for WorldKind {
         &[RenderPass {
             layer: Layer::HEIGHT,
             shader: include_str!("height.wgsl"),
+            relief: None,
         }]
     }
 

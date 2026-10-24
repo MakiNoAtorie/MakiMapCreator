@@ -54,6 +54,20 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_layer_and_option_has_a_string() {
+        use mmc_core::MapKindModule;
+        let kinds: [&dyn MapKindModule; 2] =
+            [&mmc_kind_region::RegionKind, &mmc_kind_world::WorldKind];
+        for k in kinds {
+            let layers = k.layers().iter().map(|l| format!("layer-{}", l.as_str()));
+            let options = k.options().iter().map(|p| format!("option-{}", p.id));
+            for id in layers.chain(options) {
+                assert_ne!(tr(&id), id);
+            }
+        }
+    }
+
+    #[test]
     fn missing_id_returns_the_id() {
         assert_eq!(tr("no-such-string"), "no-such-string");
     }

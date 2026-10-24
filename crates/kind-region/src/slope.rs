@@ -7,11 +7,11 @@ use mmc_core::{Layer, Raster, Stage, StageInput, TILE_SIZE, par_map};
 /// Derived: gradient magnitude of height, metres per metre.
 pub const SLOPE: Layer = Layer::new("slope");
 
-pub(crate) const STAGES: &[Stage] = &[Stage {
+pub(crate) const STAGE: Stage = Stage {
     reads: &[Layer::HEIGHT],
     writes: &[SLOPE],
     run: slope,
-}];
+};
 
 const TILE_LEN: usize = (TILE_SIZE * TILE_SIZE) as usize;
 

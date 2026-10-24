@@ -77,6 +77,10 @@ A layer the user edits and the project stores as truth, such as height or biome 
 A layer recomputed from authored layers after each edit, such as drainage rivers or climate. It is never edited directly.
 _Avoid_: Generated layer (generation also writes authored layers)
 
+**Relief**:
+The derived layer of erosion gullies and ridges that the height shading adds to height. It never changes the stored height or the land test.
+_Avoid_: Erosion (no material moves), detail (that is the brush noise)
+
 **Water level**:
 The height that splits land (above) from sea (at or below). It is 0 m on every map for now; there is no separate land layer.
 _Avoid_: Sea mask, land layer

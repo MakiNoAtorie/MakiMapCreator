@@ -102,6 +102,12 @@ impl App {
                     }
                 }
                 Intent::SetMode(m) => self.mode = m.coerce(self.has_generators()),
+                Intent::SetKindOption { kind, id, value } => {
+                    self.spawn("error-edit", move |p| {
+                        p.set_kind_option(kind, id, value)?;
+                        Ok(Done::Generated(map))
+                    });
+                }
             }
         }
         if let Some(c) = self.open_after

@@ -203,6 +203,12 @@ pub enum Write {
     /// Replaces the outline, parent context and flag of a child map.
     ChildState(i64, ChildState),
     OutOfDate(i64, bool),
+    /// Sets one option value of a map kind.
+    KindOption {
+        kind: String,
+        id: String,
+        value: f64,
+    },
     /// Sets a map's rectangle: root-space origin and size in pixels.
     MapRect {
         id: i64,
@@ -253,6 +259,8 @@ pub trait Storage: Send {
     fn maps(&self) -> Result<Vec<MapRecord>>;
     /// The project seed, set once when the project is made.
     fn seed(&self) -> Result<u64>;
+    /// The stored option values of map kind `kind` by id.
+    fn kind_options(&self, kind: &str) -> Result<Vec<(String, f64)>>;
     fn tile(&self, key: &TileKey) -> Result<Option<TileRecord>>;
     /// The stored level-0 tiles of a layer with `tx` in `x` and `ty` in `y`, in one query.
     fn tile_range(

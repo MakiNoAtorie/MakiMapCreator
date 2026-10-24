@@ -1,6 +1,6 @@
 //! Live brush (ADR-0025): a display-only GPU copy of the drawn heights that stamps change at once.
 
-use mmc_core::{BrushMode, BrushStroke, Layer, MapId};
+use mmc_core::{BrushMode, BrushStroke, Layer, MapId, RELIEF_CELL, ReliefOptions};
 use wgpu::util::DeviceExt;
 
 use crate::{Image, Result, Scene, ShaderPass, TARGET_FORMAT, View, read_texture};
@@ -44,6 +44,11 @@ impl Area {
         (x.div_euclid(4) * 4, y.div_euclid(4) * 4)
     }
 }
+
+/// The stamp shader: `hash.wgsl` then `live.wgsl`.
+const LIVE_WGSL: &str = concat!(include_str!("hash.wgsl"), include_str!("live.wgsl"));
+/// The relief shader: `hash.wgsl` then `relief.wgsl`.
+const RELIEF_WGSL: &str = concat!(include_str!("hash.wgsl"), include_str!("relief.wgsl"));
 
 /// Level-0 pixels per axis a texel averages a stamp over; all of them up to level 2.
 // ponytail: 4 of 2^level from level 3 on; more if zoomed-out hand-overs show texture.
@@ -89,6 +94,84 @@ const ROUGHEN: u32 = 3;
 const FLATTEN: u32 = 4;
 const SMOOTH: u32 = 5;
 
+/// `relief.wgsl` `Octave`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct ReliefOctave {
+    prefix: [u32; 2],
+    base: [i32; 2],
+    frac: [f32; 2],
+    step: f32,
+    lod: f32,
+}
+
+/// `relief.wgsl` `Params`, one per dispatch.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct ReliefParams {
+    box0: [i32; 2],
+    size: [u32; 2],
+    g0: [i32; 2],
+    b0: [i32; 2],
+    mpp: f32,
+    strength: f32,
+    slope: f32,
+    height: f32,
+    block: i32,
+    pad0: u32,
+    pad1: [u32; 2],
+    octaves: [ReliefOctave; mmc_core::RELIEF_OCTAVES],
+}
+
+impl ReliefParams {
+    /// Block texels of the copy's `w` x `h` texels: 2 blocks past each side.
+    fn blocks(&self, w: u32, h: u32) -> [u32; 2] {
+        let b = self.block;
+        let n = |g0: i32, b0: i32, w: u32| ((g0 + w as i32 - 1).div_euclid(b) + 2 - b0 + 1) as u32;
+        [n(self.g0[0], self.b0[0], w), n(self.g0[1], self.b0[1], h)]
+    }
+
+    /// Texels a relief texel reads on each side: 3 blocks.
+    fn reach(&self) -> i64 {
+        3 * self.block as i64
+    }
+
+    /// The relief of `seed` and `o` over area `a`, at its level (ADR-0026).
+    fn new(a: &Area, seed: u64, o: &ReliefOptions) -> ReliefParams {
+        let side = 1i64 << a.level;
+        let mpp = a.mpp * side as f64;
+        let first = a.block(a.x0, a.y0);
+        let g0 = (first.0.div_euclid(side), first.1.div_euclid(side));
+        // The level's blocks in texels of the copy's level.
+        let block = 1i64 << mmc_core::relief_level(a.mpp).saturating_sub(a.level);
+        let b0 = (g0.0.div_euclid(block) - 2, g0.1.div_euclid(block) - 2);
+        let prefixes = mmc_core::relief_prefixes(seed);
+        let octaves = std::array::from_fn(|i| {
+            let cell = RELIEF_CELL / (1u64 << i) as f64;
+            let q = |g: i64| (g as f64 + 0.5) * mpp / cell;
+            let (qx, qy) = (q(g0.0), q(g0.1));
+            ReliefOctave {
+                prefix: [prefixes[i] as u32, (prefixes[i] >> 32) as u32],
+                base: [qx.floor() as i32, qy.floor() as i32],
+                frac: [(qx - qx.floor()) as f32, (qy - qy.floor()) as f32],
+                step: (mpp / cell) as f32,
+                lod: (cell / mpp / 2.0 - 1.0).clamp(0.0, 1.0) as f32,
+            }
+        });
+        ReliefParams {
+            g0: [g0.0 as i32, g0.1 as i32],
+            b0: [b0.0 as i32, b0.1 as i32],
+            block: block as i32,
+            mpp: mpp as f32,
+            strength: o.strength as f32,
+            slope: o.slope as f32,
+            height: o.height as f32,
+            octaves,
+            ..Default::default()
+        }
+    }
+}
+
 /// Where a flatten part's level comes from; other modes ignore it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FlattenLevel {
@@ -104,9 +187,17 @@ pub enum FlattenLevel {
 pub struct LiveBase {
     area: Area,
     values: Vec<f32>,
+    /// The seed and options of the relief the shading adds; `None` shades the heights.
+    relief: Option<(u64, ReliefOptions)>,
 }
 
 impl LiveBase {
+    /// The copy is shaded with the relief of `seed` and `o` added (ADR-0026).
+    pub fn with_relief(mut self, seed: u64, o: ReliefOptions) -> LiveBase {
+        self.relief = Some((seed, o));
+        self
+    }
+
     pub fn map(&self) -> MapId {
         self.area.map
     }
@@ -134,8 +225,18 @@ impl Scene {
                 h: r.h,
             },
             values: r.values,
+            relief: None,
         })
     }
+}
+
+/// The relief of a copy (ADR-0026).
+struct ReliefCopy {
+    /// Heights plus relief, which the shading reads.
+    shaded: wgpu::Texture,
+    /// The block means whose slope the gullies follow.
+    blocks: wgpu::Texture,
+    params: ReliefParams,
 }
 
 struct Copy {
@@ -146,6 +247,7 @@ struct Copy {
     /// Smooth's row means.
     rows: wgpu::Texture,
     shade: wgpu::BindGroup,
+    relief: Option<ReliefCopy>,
 }
 
 /// Detail tables for (seed, scale bits) over the copy's area, as `live.wgsl` reads them.
@@ -161,6 +263,8 @@ pub struct Live {
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     stamp: wgpu::ComputePipeline,
+    relief: wgpu::ComputePipeline,
+    relief_blocks: wgpu::ComputePipeline,
     sample: wgpu::ComputePipeline,
     smooth_rows: wgpu::ComputePipeline,
     shading: ShaderPass,
@@ -229,7 +333,7 @@ impl Live {
     ) -> Live {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("live stamp"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("live.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(LIVE_WGSL.into()),
         });
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -287,6 +391,22 @@ impl Live {
             pipeline("sample"),
             pipeline("smooth_rows"),
         );
+        let relief_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("live relief"),
+            source: wgpu::ShaderSource::Wgsl(RELIEF_WGSL.into()),
+        });
+        // Auto layouts: each entry point binds only what it uses.
+        let relief_pipeline = |name| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(name),
+                layout: None,
+                module: &relief_module,
+                entry_point: Some(name),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (relief, relief_blocks) = (relief_pipeline("relief"), relief_pipeline("blocks"));
         let view = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("live view"),
             size: 64,
@@ -312,6 +432,8 @@ impl Live {
             queue,
             layout,
             stamp,
+            relief,
+            relief_blocks,
             sample,
             smooth_rows,
             shading,
@@ -373,6 +495,32 @@ impl Live {
                 make("live rows", U::STORAGE_BINDING),
             ),
         };
+        let relief = base.relief.map(|(seed, o)| {
+            let params = ReliefParams::new(&a, seed, &o);
+            let [bw, bh] = params.blocks(a.w, a.h);
+            let blocks = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("live relief blocks"),
+                size: wgpu::Extent3d {
+                    width: bw,
+                    height: bh,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: U::TEXTURE_BINDING | U::STORAGE_BINDING,
+                view_formats: &[],
+            });
+            ReliefCopy {
+                shaded: make(
+                    "live relief",
+                    U::TEXTURE_BINDING | U::STORAGE_BINDING | U::COPY_SRC,
+                ),
+                blocks,
+                params,
+            }
+        });
         self.queue.write_texture(
             texture.as_image_copy(),
             bytemuck::cast_slice(&base.values),
@@ -383,7 +531,10 @@ impl Live {
             },
             size,
         );
-        let view = texture.create_view(&Default::default());
+        let view = match &relief {
+            Some(r) => r.shaded.create_view(&Default::default()),
+            None => texture.create_view(&Default::default()),
+        };
         let shade = self.shading.bind_group(&self.device, &self.view, &view);
         self.copy = Some(Copy {
             area: a,
@@ -391,7 +542,86 @@ impl Live {
             before,
             rows,
             shade,
+            relief,
         });
+        self.shade_relief(Texels {
+            lo: (0, 0),
+            hi: (a.w as i64, a.h as i64),
+        });
+    }
+
+    /// Recomputes heights plus relief for the texels whose relief reads texels in `b`, after
+    /// the heights there changed.
+    fn shade_relief(&self, b: Texels) {
+        let Some(copy) = &self.copy else { return };
+        let Some(rc) = &copy.relief else {
+            return;
+        };
+        let (a, p) = (copy.area, rc.params);
+        let [bw, bh] = p.blocks(a.w, a.h);
+        let blk = p.block as i64;
+        let to_block = |t: i64, g0: i32, b0: i32| (t + g0 as i64).div_euclid(blk) - b0 as i64;
+        let blocks = Texels {
+            lo: (
+                to_block(b.lo.0, p.g0[0], p.b0[0]).max(0),
+                to_block(b.lo.1, p.g0[1], p.b0[1]).max(0),
+            ),
+            hi: (
+                (to_block(b.hi.0 - 1, p.g0[0], p.b0[0]) + 1).min(bw as i64),
+                (to_block(b.hi.1 - 1, p.g0[1], p.b0[1]) + 1).min(bh as i64),
+            ),
+        };
+        let texels = b.grow(p.reach() + 1, a.w, a.h);
+        let d = &self.device;
+        let views = (
+            copy.texture.create_view(&Default::default()),
+            rc.shaded.create_view(&Default::default()),
+            rc.blocks.create_view(&Default::default()),
+        );
+        let mut encoder = d.create_command_encoder(&Default::default());
+        for (pipeline, t, bind) in [
+            (&self.relief_blocks, blocks, [(1, &views.0), (3, &views.2)]),
+            (&self.relief, texels, [(1, &views.0), (2, &views.1)]),
+        ] {
+            if t.hi.0 <= t.lo.0 || t.hi.1 <= t.lo.1 {
+                continue;
+            }
+            let [w, h] = t.size();
+            let params = ReliefParams {
+                box0: [t.lo.0 as i32, t.lo.1 as i32],
+                size: [w, h],
+                ..p
+            };
+            let uniform = d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("live relief params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let mut entries = vec![wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            }];
+            entries.extend(bind.iter().map(|&(binding, v)| wgpu::BindGroupEntry {
+                binding,
+                resource: wgpu::BindingResource::TextureView(v),
+            }));
+            if std::ptr::eq(pipeline, &self.relief) {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&views.2),
+                });
+            }
+            let group = d.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("live relief"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+        }
+        self.queue.submit([encoder.finish()]);
     }
 
     /// Stamps `s` inside the copy; false with no copy, or a `Sample` level off the copy.
@@ -601,6 +831,9 @@ impl Live {
             dispatch(&mut pass, &self.stamp, params);
         }
         self.queue.submit([encoder.finish()]);
+        if let Some(all) = boxes.iter().map(|b| b.0).reduce(Texels::union) {
+            self.shade_relief(all);
+        }
         true
     }
 
@@ -742,6 +975,18 @@ impl Live {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// The heights plus relief the copy is shaded with, as `heights`. For tests.
+    pub fn shaded(&self) -> Result<Vec<f32>> {
+        let Some(c) = &self.copy else {
+            return Ok(vec![]);
+        };
+        let Some(r) = &c.relief else {
+            return self.heights();
+        };
+        let bytes = read_texture(&self.device, &self.queue, &r.shaded, c.area.w, c.area.h)?;
+        Ok(bytemuck::pod_collect_to_vec(&bytes))
+    }
+
     /// The copy's values, level pixels row by row; waits for the GPU. For tests.
     pub fn heights(&self) -> Result<Vec<f32>> {
         let Some(c) = &self.copy else {
@@ -759,7 +1004,7 @@ mod tests {
     /// `Params` and `Stamp` have the offsets and sizes of their `live.wgsl` structs.
     #[test]
     fn rust_structs_match_the_shader_layout() {
-        let module = naga::front::wgsl::parse_str(include_str!("live.wgsl")).unwrap();
+        let module = naga::front::wgsl::parse_str(LIVE_WGSL).unwrap();
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(module.to_ctx()).unwrap();
         let wgsl = |name: &str| {
@@ -819,5 +1064,71 @@ mod tests {
             let line = format!("const {name} = {v:?};");
             assert!(include_str!("live.wgsl").contains(&line), "{line}");
         }
+    }
+
+    /// `ReliefParams` and `ReliefOctave` match `relief.wgsl`, and so do its constants.
+    #[test]
+    fn relief_structs_and_constants_match_the_shader() {
+        let module = naga::front::wgsl::parse_str(RELIEF_WGSL).unwrap();
+        let mut layouter = naga::proc::Layouter::default();
+        layouter.update(module.to_ctx()).unwrap();
+        let wgsl = |name: &str| {
+            let (h, ty) = module
+                .types
+                .iter()
+                .find(|(_, t)| t.name.as_deref() == Some(name))
+                .unwrap();
+            let naga::TypeInner::Struct { members, .. } = &ty.inner else {
+                panic!("{name} is a struct")
+            };
+            let m: Vec<(String, u32)> = members
+                .iter()
+                .map(|m| (m.name.clone().unwrap(), m.offset))
+                .collect();
+            (m, layouter[h].size as usize)
+        };
+        macro_rules! layout {
+            ($t:ty, $($f:ident),*) => {
+                (vec![$((stringify!($f).to_string(), std::mem::offset_of!($t, $f) as u32)),*],
+                 std::mem::size_of::<$t>())
+            };
+        }
+        assert_eq!(
+            wgsl("Octave"),
+            layout!(ReliefOctave, prefix, base, frac, step, lod)
+        );
+        assert_eq!(
+            wgsl("Params"),
+            layout!(
+                ReliefParams,
+                box0,
+                size,
+                g0,
+                b0,
+                mpp,
+                strength,
+                slope,
+                height,
+                block,
+                pad0,
+                pad1,
+                octaves
+            )
+        );
+        let consts = [
+            ("COAST_BAND", mmc_core::COAST_BAND as f64),
+            ("WATER_LEVEL", mmc_core::WATER_LEVEL as f64),
+            ("RELIEF_WAVES", mmc_core::RELIEF_WAVES),
+            ("RELIEF_BEND", mmc_core::RELIEF_BEND),
+            ("RELIEF_AMPLITUDES", mmc_core::RELIEF_AMPLITUDES),
+            ("RELIEF_REACH2", mmc_core::RELIEF_REACH2),
+            ("RELIEF_SIGN_SOFT2", mmc_core::RELIEF_SIGN_SOFT2),
+        ];
+        for (name, v) in consts {
+            let line = format!("const {name} = {v:?};");
+            assert!(include_str!("relief.wgsl").contains(&line), "{line}");
+        }
+        assert!(include_str!("relief.wgsl").contains("array<Octave, 4>"));
+        assert_eq!(mmc_core::RELIEF_OCTAVES, 4);
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use mmc_core::{Entity, EntityId, FieldDef, Map, MapId, Project, RootPoint};
+use mmc_core::{Entity, EntityId, FieldDef, Map, MapId, OptionValues, Project, RootPoint};
 
 use crate::i18n::tr_args;
 use crate::workspace::{self, Tab};
@@ -17,6 +17,8 @@ pub struct Snapshot {
     pub outlines: Vec<(EntityId, Vec<RootPoint>)>,
     pub rows: Vec<workspace::Row>,
     pub last_run: Option<String>,
+    /// The option values of the shown map's kind.
+    pub options: OptionValues,
 }
 
 impl Snapshot {
@@ -38,7 +40,12 @@ impl Snapshot {
                 ],
             )
         });
+        let options = match p.maps().iter().find(|m| m.id == map) {
+            Some(m) => p.kind_options(m.settings.kind)?,
+            None => OptionValues::default(),
+        };
         Ok(Snapshot {
+            options,
             maps: p.maps().to_vec(),
             rows: workspace::outliner_rows(&entities, &relations, &kinds),
             outlines: p.outlines(map)?,

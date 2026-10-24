@@ -263,7 +263,7 @@ impl App {
         });
         panels::properties(ui, input, &mut self.field_edit, t, intents);
         ui.separator();
-        panels::layers(ui, kind, &self.hidden, t, intents);
+        panels::layers(ui, kind, &self.hidden, &mut self.snap.options, t, intents);
     }
 
     fn page_view(&self, ui: &mut egui::Ui) {

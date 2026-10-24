@@ -39,6 +39,8 @@ impl Renderer {
         let level = fit_level(map, view, project.top_level(map.id)?);
         // Upper levels lag an edit until the pyramid worker has rebuilt them.
         let settled = level == 0 || !project.pyramid_pending(map.id);
+        // A relief that lags the heights is not the map's either (ADR-0026).
+        let settled = settled && !(self.draws_relief() && project.derived_pending(map.id));
         let mut f = self.fetch(map, view, level, |layer, tx, ty| {
             Ok(project.cached_tile(TileId {
                 map: map.id,
@@ -88,7 +90,12 @@ impl Renderer {
         if x0 >= x1 || y0 >= y1 || view.width == 0 || view.height == 0 {
             return Err(Error::OutsideMap);
         }
-        let mut layers: Vec<Layer> = self.passes.iter().map(|p| p.0).collect();
+        let mut layers: Vec<Layer> = self
+            .passes
+            .iter()
+            .flat_map(|p| [Some(p.0), p.1])
+            .flatten()
+            .collect();
         layers.sort();
         layers.dedup();
         let t = TILE_SIZE;

@@ -1,15 +1,17 @@
 //! The owner's painting tests (#28, #29) as a fixture: sea strokes on 0 m ground, a tall ridge,
 //! roughen on lowland and across the shore, soft strokes just above 0 m and lowland of many soft
 //! strokes. `MMC_LOOK_DIR=<dir> cargo test -p mmc-render
-//! --test look -- --ignored` writes `<MMC_LOOK_PREFIX>-*.png` there.
+//! --test look -- --ignored` writes `<MMC_LOOK_PREFIX>-*.png` there, and `*-flat.png` without
+//! the erosion relief (ADR-0026).
 
+use mmc_core::MapKindModule;
 use mmc_core::{
     BrushMode, BrushStroke, Command, Detail, Layer, MapId, MapSettings, Project, RootPoint,
     StrokePoint,
 };
 use mmc_fixtures::Rng;
 use mmc_kind_region::{REGION, RegionKind};
-use mmc_render::{Renderer, View};
+use mmc_render::{Renderer, ShaderPass, View};
 
 const MPP: f64 = 10.0;
 const SIZE: u32 = 1000;
@@ -146,6 +148,7 @@ pub fn build(dir: &std::path::Path) -> (Project, MapId) {
     for c in cmds {
         p.apply(map, c).unwrap();
     }
+    p.wait_for_jobs().unwrap();
     (p, map)
 }
 
@@ -168,6 +171,9 @@ fn renders_the_owner_fixture() {
     let (p, map) = build(dir.path());
     let mut r = Renderer::warp().unwrap();
     r.register_kind(&RegionKind);
+    let mut flat = Renderer::warp().unwrap();
+    let pass = ShaderPass::new(flat.device(), RegionKind.render_passes()[0].shader);
+    flat.register(Layer::HEIGHT, Box::new(pass));
     let full = SIZE as f64 * MPP;
     for (name, min, max, w) in [
         ("overview", (0.0, 0.0), (full, full), 800),
@@ -179,22 +185,26 @@ fn renders_the_owner_fixture() {
         ("shore", (7000.0, 3500.0), (10000.0, 6500.0), 800),
         ("film", (0.0, 0.0), (3000.0, 3000.0), 800),
     ] {
-        let img = r
-            .render(&r.scene(&p, view(map, min, max, w)).unwrap(), 256)
-            .unwrap();
-        img.write_png(&out.join(format!("{prefix}-{name}.png")))
-            .unwrap();
+        for (r, suffix) in [(&r, ""), (&flat, "-flat")] {
+            let img = r
+                .render(&r.scene(&p, view(map, min, max, w)).unwrap(), 256)
+                .unwrap();
+            img.write_png(&out.join(format!("{prefix}-{name}{suffix}.png")))
+                .unwrap();
+        }
     }
     // Zoomed out as on the owner's screen: drawn from pyramid level 2.
     let v = view(map, (0.0, 0.0), (full, full), 250);
-    let scene = loop {
-        let s = r.scene_cached(&p, v).unwrap();
-        if s.is_complete() {
-            break s;
-        }
-        p.wait_tiles();
-    };
-    let img = r.render(&scene, 256).unwrap();
-    img.write_png(&out.join(format!("{prefix}-far.png")))
-        .unwrap();
+    for (r, suffix) in [(&r, ""), (&flat, "-flat")] {
+        let scene = loop {
+            let s = r.scene_cached(&p, v).unwrap();
+            if s.is_complete() {
+                break s;
+            }
+            p.wait_tiles();
+        };
+        let img = r.render(&scene, 256).unwrap();
+        img.write_png(&out.join(format!("{prefix}-far{suffix}.png")))
+            .unwrap();
+    }
 }

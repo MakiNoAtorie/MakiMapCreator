@@ -4,8 +4,8 @@ use std::collections::HashSet;
 
 use eframe::egui::{self, RichText};
 use mmc_core::{
-    Entity, EntityId, FieldDef, FieldType, GenRun, GeneratorDecl, Layer, Map, MapId, MapKindModule,
-    RegenPlan, RootPoint,
+    Entity, EntityId, FieldDef, FieldType, GenRun, GeneratorDecl, Layer, Map, MapId, MapKind,
+    MapKindModule, OptionValues, RegenPlan, RootPoint,
 };
 use serde_json::Value;
 
@@ -37,6 +37,12 @@ pub enum Intent {
     /// Applies (`true`) or drops the previewed regeneration.
     ApplyRegeneration(bool),
     ToggleLayer(Layer),
+    /// Sets an option of a map kind for the whole project.
+    SetKindOption {
+        kind: MapKind,
+        id: &'static str,
+        value: f64,
+    },
     SetMode(Mode),
 }
 
@@ -332,6 +338,7 @@ pub fn layers(
     ui: &mut egui::Ui,
     kind: Option<&dyn MapKindModule>,
     hidden: &HashSet<Layer>,
+    options: &mut OptionValues,
     t: &Theme,
     out: &mut Vec<Intent>,
 ) {
@@ -340,7 +347,10 @@ pub fn layers(
         return;
     };
     for &l in k.layers() {
-        let drawn = k.render_passes().iter().any(|p| p.layer == l);
+        let drawn = k
+            .render_passes()
+            .iter()
+            .any(|p| p.layer == l || p.relief == Some(l));
         let derived = k.stages().iter().any(|s| s.writes.contains(&l));
         let mut on = !hidden.contains(&l);
         let name = tr(&format!("layer-{}", l.as_str()))
@@ -353,6 +363,29 @@ pub fn layers(
         if r.changed() {
             out.push(Intent::ToggleLayer(l));
         }
+    }
+    for p in k.options() {
+        let at = match options.0.iter().position(|(id, _)| id == p.id) {
+            Some(i) => i,
+            None => {
+                options.0.push((p.id.into(), p.default));
+                options.0.len() - 1
+            }
+        };
+        ui.horizontal(|ui| {
+            ui.label(tr(&format!("option-{}", p.id)));
+            let v = &mut options.0[at].1;
+            let speed = (p.max - p.min) / 500.0;
+            let r = ui.add(egui::DragValue::new(v).range(p.min..=p.max).speed(speed));
+            // A drag sets the option once, when it ends: each set rebuilds the relief.
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                out.push(Intent::SetKindOption {
+                    kind: k.kind(),
+                    id: p.id,
+                    value: *v,
+                });
+            }
+        });
     }
 }
 
